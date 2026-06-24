@@ -1,0 +1,142 @@
+"""小学语文业务逻辑 —— 工具、提示词、拆分、校对、钩子。"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.config_loader import load_config
+from core.defaults import (
+    default_split_lecture,
+    default_split_exam,
+    default_generate_knowledge,
+    default_proofread_one,
+    default_collect_paper_dirs,
+    default_convert_file_to_md,
+    get_supported_extensions,
+)
+from core.logging_utils import log
+
+LEVEL = "小学"
+SUBJECT = "语文"
+
+
+class SubjectApp:
+    name = "小学语文"
+    version = "v1.1"
+
+    def __init__(self, subject_dir):
+        self.subject_dir = subject_dir
+        self.config = load_config(subject_dir)
+        self.tools = self.build_tools()
+
+    def build_tools(self):
+        """构建小学语文专用工具集。语文以文字校对为主。"""
+        return []
+
+    def get_max_tool_loops(self):
+        """工具调用最大循环次数。"""
+        return 0
+
+    def get_tool_instructions(self, tools):
+        """生成工具使用指令。"""
+        if not tools:
+            return ""
+        return "\n".join([f"- {t.name}" for t in tools])
+
+    def get_question_prompt(self):
+        """获取题目校对提示词。"""
+        return "\n".join(self.config.get("question_prompt_lines", []))
+
+    def get_knowledge_prompt(self):
+        """获取知识提取提示词。"""
+        return "\n".join(self.config.get("knowledge_prompt_lines", []))
+
+    def get_supported_file_types(self):
+        """返回支持的文件类型列表。"""
+        return [
+            ("支持的文件", "*.docx;*.doc;*.idml;*.zip"),
+            ("Word 文档", "*.docx;*.doc"),
+            ("InDesign IDML", "*.idml"),
+            ("ZIP 压缩包", "*.zip"),
+            ("所有文件", "*.*"),
+        ]
+
+    def get_supported_extensions(self):
+        """返回支持的文件扩展名集合。"""
+        exts = get_supported_extensions()
+        exts.add(".idml")
+        return exts
+
+    def convert_file_to_md(self, file_path, output_md, img_dir, use_mathjax=False):
+        """文件转 Markdown。支持 Word 和 IDML 格式。
+        
+        Returns:
+            dict: {success: bool, needs_post_process: bool}
+                  needs_post_process=False 表示不需要 Pandoc 后处理（表格清理、LaTeX转义等）
+        """
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == ".idml":
+            try:
+                from core.idml_extractor import extract_idml_to_markdown
+                log("   📖 检测到 IDML 文件，使用 IDML 提取器...")
+                result = extract_idml_to_markdown(file_path, output_md)
+                log(f"   ✅ IDML 提取完成：{result['paragraph_count']} 段，"
+                    f"涉及 {result['page_count']} 页")
+                return {"success": True, "needs_post_process": False}
+            except Exception as e:
+                log(f"   ❌ IDML 提取失败: {e}")
+                return {"success": False, "needs_post_process": False}
+
+        return default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax)
+
+    def split_lecture(self, md_file, output_root, base_name, options):
+        do_clean = options.get("do_clean", True)
+        return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
+
+    def split_exam(self, md_file, output_root, base_name):
+        return default_split_exam(md_file, output_root, base_name, self.config)
+
+    def generate_knowledge(self, md_file, output_root, base_name):
+        return default_generate_knowledge(md_file, output_root, base_name, self.config)
+
+    def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf):
+        if is_knowledge:
+            prompt = self.get_knowledge_prompt()
+        else:
+            prompt = self.get_question_prompt()
+        return default_proofread_one(
+            api_url, api_key, model, q_dir, q_name, is_knowledge,
+            prompt, self.tools, self.get_max_tool_loops(), generate_pdf
+        )
+
+    def collect_paper_dirs(self, base_dir):
+        return default_collect_paper_dirs(base_dir)
+
+    def pre_proofread_hook(self, md):
+        return md
+
+    def post_proofread_hook(self, result, question_data):
+        return result
+
+    def get_ui_features(self):
+        """UI 功能开关配置。"""
+        return {
+            "show_clean_table_option": True,
+            "show_knowledge_option": True,
+            "show_pdf_option": True,
+            "show_parallel_option": True,
+            "show_source_modes": ["讲义", "试卷"],
+            "show_exec_modes": ["完整流程", "仅转换", "仅拆分", "仅校对", "仅生成PDF"],
+            "add_file_title": "添加文件",
+            "add_folder_title": "添加文件夹",
+        }
+
+    def post_convert_hook(self, md_path, source="讲义"):
+        """转换后钩子，在所有后处理完成后、拆分前调用。
+        
+        Args:
+            md_path: Markdown 文件路径
+            source: 来源模式（"讲义"或"试卷"）
+        """
+        pass

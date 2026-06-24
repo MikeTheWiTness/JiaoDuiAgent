@@ -1,0 +1,5 @@
+requests>=2.31
+pydantic>=2.0
+langchain-core>=0.3
+sympy>=1.12
+ddgs>=4.0

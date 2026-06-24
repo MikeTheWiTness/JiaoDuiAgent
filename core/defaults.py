@@ -1,0 +1,612 @@
+import os, re, base64, shutil
+from pathlib import Path
+from core.parsing import save_proofread_json
+from core.api_client import call_api, MAX_FILE_SIZE
+from core.logging_utils import log
+from core import config_loader
+
+
+def fix_latex_escapes(md_file):
+    with open(md_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+    special_chars = r'[\[\]\(\)\$_<>{}$]'
+    content = re.sub(r'\\{2,}(?=' + special_chars + r')', r'\\', content)
+    content = re.sub(r'\\{2,}([a-zA-Z]+)', r'\\\1', content)
+    content = re.sub(r'\\{2,}([^a-zA-Z0-9])', r'\\\1', content)
+    content = content.replace(r'\$', r'$')
+    content = content.replace(r'\_', '_')
+    content = content.replace(r'\<', '<')
+    content = content.replace(r'\>', '>')
+    content = content.replace(r'\{', '{')
+    content = content.replace(r'\}', '}')
+    content = content.replace(r'\left\(', r'\left(')
+    content = content.replace(r'\right\)', r'\right)')
+    content = content.replace(r'\left\[', r'\left[')
+    content = content.replace(r'\right\]', r'\right]')
+    def _fix_escaped_brackets(content):
+        def _repl(m):
+            inner = m.group(1)
+            if re.search(r'[\$\\\^_]', inner):
+                return m.group(0)
+            return '[' + inner + ']'
+        return re.sub(r'\\\[([^\]]*?)\\\]', _repl, content)
+    content = _fix_escaped_brackets(content)
+    for esc, orig in [(r'\^','^'), (r'\#','#'), (r'\~','~'), (r'\&','&'),
+                       (r'\%','%'), (r'\*','*'), (r'\+','+'), (r'\-','-'),
+                       (r'\=','='), (r'\|','|'), (r'\!','!'), (r"\'","'")]:
+        content = content.replace(esc, orig)
+    with open(md_file, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+
+def comprehensive_clean(md_content):
+    lines = md_content.splitlines()
+    cleaned = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if re.match(r'^[\|\+\-=\:\.\s\t]*$', stripped) and len(stripped) > 2:
+            i += 1; continue
+        line = re.sub(r'\|', '', line)
+        if '答案:' in line:
+            line = re.sub(r'[-=]+', '', line)
+            if i + 1 < len(lines):
+                nxt = lines[i+1].strip()
+                if re.match(r'^[A-Z\s]+$', nxt):
+                    line = line.rstrip() + ' ' + nxt
+                    i += 1
+        cleaned.append(line)
+        i += 1
+    text = '\n'.join(cleaned)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = '\n'.join(l.strip() for l in text.split('\n'))
+    return text.strip()
+
+
+def fix_floating_images(md_file):
+    with open(md_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    lines = content.split("\n")
+    fixed = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^A\.\s*!\[test\]\(([^)]+)\)\s*(\{[^}]*\})?\s*(.*)", line)
+        if not m:
+            i += 1
+            continue
+
+        img_path = m.group(1)
+        img_attrs = m.group(2) or ""
+        option_text = m.group(3)
+
+        has_img_in_options = False
+        for j in range(i, min(i + 10, len(lines))):
+            if re.match(r"^[B-D]\.\s*!\[", lines[j]):
+                has_img_in_options = True
+                break
+
+        if has_img_in_options:
+            i += 1
+            continue
+
+        img_line = f"![]({img_path}){img_attrs}"
+        if option_text:
+            lines[i] = f"A.                                  {option_text}"
+        else:
+            lines[i] = f"A.                                  "
+        lines.insert(i, img_line)
+        i += 2
+        fixed = True
+
+    if fixed:
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        return True
+    return False
+
+
+def normalize_option_spacing(md_file):
+    import re as _re
+    with open(md_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    new_content = _re.sub(r" {4,}", "  ", content)
+    if new_content != content:
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return True
+    return False
+
+
+def clean_md_file(md_file):
+    try:
+        with open(md_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        cleaned = comprehensive_clean(content)
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write(cleaned)
+        return True
+    except Exception as e:
+        log(f"   清洗失败: {e}")
+        return False
+
+
+def default_split_lecture(md_file, output_root, base_name, do_clean, config):
+    with open(md_file, 'r', encoding='utf-8') as f:
+        md_content = f.read()
+
+    split_mode = "title"
+    section_pat = None
+    if config:
+        split_mode = config_loader.get_lecture_split_mode(config)
+        if split_mode == "section":
+            section_pat = config_loader.get_section_pattern(config)
+
+    lines = md_content.splitlines()
+    questions = []
+
+    if split_mode == "section" and section_pat:
+        current_title = "引言"
+        current_content = []
+        for line in lines:
+            stripped = line.strip()
+            if section_pat.match(stripped):
+                if current_content:
+                    questions.append((current_title, '\n'.join(current_content)))
+                current_title = stripped
+                current_content = [line]
+            else:
+                current_content.append(line)
+        if current_content:
+            questions.append((current_title, '\n'.join(current_content)))
+    else:
+        title_compiled = config_loader.get_compiled_title_patterns(config)
+        current_title = None
+        current_content = []
+        in_question = False
+        for line in lines:
+            stripped = line.strip()
+            is_title = any(p.match(stripped) for p in title_compiled)
+            is_section = stripped.startswith('#') and not stripped.startswith('**')
+            if is_title:
+                if current_title is not None:
+                    questions.append((current_title, '\n'.join(current_content)))
+                current_title = stripped
+                current_content = [line]
+                in_question = True
+            elif is_section and in_question:
+                questions.append((current_title, '\n'.join(current_content)))
+                current_title = None; current_content = []; in_question = False
+            else:
+                if in_question:
+                    current_content.append(line)
+        if current_title is not None:
+            questions.append((current_title, '\n'.join(current_content)))
+
+    if not questions:
+        log("   ⚠️ 未识别到任何题目，跳过分割")
+        return False
+
+    md_dir = Path(md_file).parent
+    src_media = md_dir / f"{base_name}_images" / "media"
+    log(f"   🔍 图片源目录: {src_media}")
+    if not src_media.exists():
+        log(f"   ❌ 图片源目录不存在")
+
+    target_root = Path(output_root) / base_name
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    def find_img(fname, sdir):
+        if not sdir or not sdir.exists(): return None
+        c = sdir / fname; return c if c.exists() else None
+
+    unit_prefix = "板块" if split_mode == "section" else "第"
+    unit_suffix = "" if split_mode == "section" else "题"
+
+    total_copied = [0]; total_missing = [0]
+    img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
+    for idx, (title, content) in enumerate(questions, start=1):
+        q_dir_name = f"{unit_prefix}{idx}{unit_suffix}"
+        q_dir = target_root / q_dir_name
+        q_dir.mkdir(exist_ok=True)
+        img_dir = q_dir / "images"; img_dir.mkdir(exist_ok=True)
+        def repl(m):
+            alt, src = m.group(1), m.group(2).strip()
+            img_name = Path(src).name
+            sp = find_img(img_name, src_media)
+            if sp:
+                dest = img_dir / img_name
+                if not dest.exists():
+                    shutil.copy2(sp, dest)
+                total_copied[0] += 1
+                return f"![{alt}](./images/{img_name})"
+            else:
+                log(f"      ⚠️ 未找到图片: {img_name}")
+                total_missing[0] += 1
+                return m.group(0)
+        new_content = img_pat.sub(repl, content)
+        (q_dir / f"{q_dir_name}.md").write_text(new_content, encoding='utf-8')
+
+    log(f"   📂 拆分完成: {len(questions)} 题, 图片 {total_copied[0]} 张")
+    return True
+
+
+def default_generate_knowledge(cleaned_md, output_root, base_name, config):
+    with open(cleaned_md, 'r', encoding='utf-8') as f:
+        content = f.read()
+    lines = content.splitlines()
+    compiled = config_loader.get_compiled_title_patterns(config)
+    filtered = []
+    in_question = False
+    for line in lines:
+        stripped = line.strip()
+        is_title = any(p.match(stripped) for p in compiled)
+        is_section = stripped.startswith('#') and not stripped.startswith('**')
+        if is_title:
+            in_question = True; continue
+        elif is_section:
+            in_question = False; filtered.append(line)
+        else:
+            if not in_question:
+                filtered.append(line)
+
+    knowledge_text = '\n'.join(filtered)
+    md_dir = Path(cleaned_md).parent
+    src_media = md_dir / f"{base_name}_images" / "media"
+    target_root = Path(output_root) / base_name / "知识"
+    target_root.mkdir(parents=True, exist_ok=True)
+    img_dest = target_root / "images"; img_dest.mkdir(exist_ok=True)
+
+    img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
+    def repl(m):
+        alt, src = m.group(1), m.group(2).strip()
+        img_name = Path(src).name
+        sp = None
+        if src_media.exists():
+            c = src_media / img_name
+            if c.exists(): sp = c
+        if sp:
+            dest = img_dest / img_name
+            if not dest.exists():
+                shutil.copy2(sp, dest)
+            return f"![{alt}](./images/{img_name})"
+        return m.group(0)
+    new_text = img_pat.sub(repl, knowledge_text)
+    (target_root / f"{base_name}_知识.md").write_text(new_text, encoding='utf-8')
+    log(f"   📘 知识文件已生成")
+
+
+def fix_pandoc_comment_anomaly(content):
+    return content.replace('`<!-- -->`{=html}', '')
+
+
+def fix_tilde_in_math(content):
+    def repl(m):
+        return m.group(0).replace(r'\~', r'\sim')
+    content = re.sub(r'\$\$.*?\$\$', repl, content, flags=re.DOTALL)
+    content = re.sub(r'\$[^$]+\$', repl, content)
+    return content
+
+
+def fix_tilde_in_text(content):
+    return content.replace(r'\~', '~')
+
+
+def convert_italics_to_math(content):
+    math_blocks = []
+    def save(m):
+        math_blocks.append(m.group(0))
+        return f'<<<MATHBLOCK{len(math_blocks)-1}>>>'
+    content = re.sub(r'\$\$.*?\$\$', save, content, flags=re.DOTALL)
+    content = re.sub(r'\$[^$]*\$', save, content)
+    def italic_repl(m):
+        inner = m.group(1)
+        inner = re.sub(r'~(.+?)~', r'_{\1}', inner)
+        return f'${inner}$'
+    content = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', italic_repl, content)
+    for i, block in enumerate(math_blocks):
+        content = content.replace(f'<<<MATHBLOCK{i}>>>', block)
+    return content
+
+
+def convert_display_to_inline(content):
+    def repl(m):
+        formula = m.group(1)
+        if '\n' in formula: return m.group(0)
+        return f'${formula}$'
+    return re.sub(r'\$\$(.+?)\$\$', repl, content, flags=re.DOTALL)
+
+
+def post_process_md_zw(md_path):
+    try:
+        with open(md_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        log(f"   ❌ 后处理读取失败: {e}")
+        return
+    original = content
+    content = fix_pandoc_comment_anomaly(content)
+    content = fix_tilde_in_math(content)
+    content = fix_tilde_in_text(content)
+    content = convert_italics_to_math(content)
+    content = convert_display_to_inline(content)
+    if content != original:
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        log("   ✅ 后处理完成")
+
+
+def find_answer_section(lines):
+    ref_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('**') and '参考答案' in stripped:
+            ref_idx = i; break
+        if '参考答案' in stripped and ('《' in stripped or not stripped.startswith('**')):
+            ref_idx = i; break
+    if ref_idx is None:
+        return None, []
+    return ref_idx, lines[ref_idx:]
+
+
+def detect_answer_mode(lines):
+    qs = re.compile(r'^(\d+)．')
+    _, ans_lines = find_answer_section(lines)
+    search = lines[:lines.index(ans_lines[0])] if ans_lines else lines
+    blocks = []
+    i = 0
+    while i < len(search):
+        line = search[i].strip()
+        if qs.match(line) and not line.startswith('**'):
+            start = i; j = i + 1
+            while j < len(search):
+                nxt = search[j].strip()
+                if qs.match(nxt) and not nxt.startswith('**'): break
+                j += 1
+            blocks.append(search[start:j]); i = j
+        else:
+            i += 1
+    if not blocks: return "end"
+    inline_count = sum(1 for blk in blocks if any('【答案】' in l for l in blk))
+    return "inline" if inline_count > len(blocks) / 2 else "end"
+
+
+def parse_end_answers(answer_lines):
+    if not answer_lines: return {}
+    qa = re.compile(r'^(\d+)[.．]\s*(.*)')
+    start = 0
+    while start < len(answer_lines) and not qa.match(answer_lines[start].strip()):
+        start += 1
+    if start >= len(answer_lines): return {}
+    result = {}
+    i = start
+    while i < len(answer_lines):
+        m = qa.match(answer_lines[i].strip())
+        if not m: i += 1; continue
+        qnum = int(m.group(1))
+        ans = m.group(2).strip()
+        i += 1
+        exp_lines = []
+        while i < len(answer_lines):
+            if qa.match(answer_lines[i].strip()): break
+            exp_lines.append(answer_lines[i]); i += 1
+        if not any('【答案】' in l for l in exp_lines):
+            exp_lines.insert(0, f'【答案】{ans}')
+        result[qnum] = {'answer': ans, 'explanation': exp_lines}
+    return result
+
+
+def default_split_exam(md_file, output_root, base_name, config):
+    with open(md_file, 'r', encoding='utf-8') as f:
+        md_content = f.read()
+    lines = md_content.splitlines()
+    qs = config_loader.get_exam_question_pattern(config)
+    answer_mode = detect_answer_mode(lines)
+    log(f"   📋 答案模式: {'随题' if answer_mode == 'inline' else '末尾'}")
+    ans_start, ans_lines = find_answer_section(lines)
+    main_lines = lines[:ans_start] if ans_start is not None else lines
+
+    blocks = []
+    i = 0
+    while i < len(main_lines):
+        line = main_lines[i].strip()
+        if qs.match(line) and not line.startswith('**'):
+            start = i; j = i + 1
+            while j < len(main_lines):
+                nxt = main_lines[j].strip()
+                if qs.match(nxt) and not nxt.startswith('**'): break
+                j += 1
+            blocks.append(main_lines[start:j]); i = j
+        else:
+            i += 1
+
+    if not blocks:
+        log("   ⚠️ 未识别到任何题目"); return False
+
+    end_answers = parse_end_answers(ans_lines) if answer_mode == "end" else None
+    md_dir = Path(md_file).parent
+    src_media = md_dir / f"{base_name}_images" / "media"
+    log(f"   🔍 图片源目录: {src_media}")
+    target_root = Path(output_root) / base_name
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    def find_img(fname, sdir):
+        if not sdir or not sdir.exists(): return None
+        c = sdir / fname; return c if c.exists() else None
+
+    total_copied = [0]; total_missing = [0]
+
+    def is_title(l):
+        return bool(re.match(r'^\*\*.*\*\*$', l.strip()))
+
+    for idx, block in enumerate(blocks, start=1):
+        if answer_mode == "inline":
+            start_ans = start_exp = None
+            for k, ln in enumerate(block):
+                if ln.strip() == '【答案】': start_ans = k
+                if ln.strip() == '【详解】': start_exp = k
+            if start_ans is not None:
+                stem = block[:start_ans]
+                ans = block[start_ans:start_exp] if start_exp is not None else block[start_ans:]
+                exp = block[start_exp:] if start_exp is not None else []
+            else:
+                stem = block; ans = []; exp = []
+            stem = [l for l in stem if not is_title(l)]
+            final_lines = stem + ans + exp
+        else:
+            stem = block
+            stem = [l for l in stem if not is_title(l)]
+            if end_answers and idx in end_answers:
+                final_lines = stem + end_answers[idx]['explanation']
+            else:
+                final_lines = stem
+
+        content_str = '\n'.join(final_lines)
+        q_dir = target_root / f"第{idx}题"; q_dir.mkdir(exist_ok=True)
+        img_dir = q_dir / "images"; img_dir.mkdir(exist_ok=True)
+
+        img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
+        def repl(m):
+            alt, src = m.group(1), m.group(2).strip()
+            img_name = Path(src).name
+            sp = find_img(img_name, src_media)
+            if sp:
+                dest = img_dir / img_name
+                if not dest.exists():
+                    try:
+                        shutil.copy2(sp, dest)
+                    except Exception as e:
+                        log(f"      ❌ 图片复制失败: {img_name}, {e}")
+                total_copied[0] += 1
+                return f"![{alt}](./images/{img_name})"
+            else:
+                log(f"      ⚠️ 未找到图片: {img_name}")
+                total_missing[0] += 1
+                return m.group(0)
+
+        new_content = img_pat.sub(repl, content_str)
+        (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
+
+    log(f"   📂 拆分完成: {len(blocks)} 题, 图片 {total_copied[0]} 张")
+    return True
+
+
+def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf):
+    md_content = ""
+    for f in os.listdir(q_dir):
+        if f.endswith(".md"):
+            with open(os.path.join(q_dir, f), 'r', encoding='utf-8') as fm:
+                md_content = fm.read()
+            break
+    if not md_content:
+        return {"success": False, "result": "", "error": "未找到 md 文件"}
+
+    images_b64 = []
+    img_dir = os.path.join(q_dir, "images")
+    if os.path.exists(img_dir):
+        for img_file in os.listdir(img_dir):
+            if not img_file.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                continue
+            img_path = os.path.join(img_dir, img_file)
+            if os.path.getsize(img_path) > MAX_FILE_SIZE:
+                continue
+            try:
+                with open(img_path, "rb") as fi:
+                    b64 = base64.b64encode(fi.read()).decode()
+                ext = img_file.lower().split('.')[-1]
+                mime = ("image/png" if ext == "png"
+                        else "image/jpeg" if ext in ("jpg", "jpeg")
+                        else "image/gif")
+                images_b64.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"}
+                })
+            except Exception:
+                continue
+
+    try:
+        res, tool_calls = call_api(api_url, api_key, model, md_content, images_b64,
+                                   q_name, prompt, tools=tools, max_loops=max_loops)
+    except Exception as e:
+        return {"success": False, "result": "", "error": str(e), "tool_calls": []}
+
+    if "API调用失败" not in res:
+        if generate_pdf:
+            md_path = os.path.join(q_dir, "_校对报告.md")
+            try:
+                with open(md_path, "w", encoding="utf-8") as f:
+                    f.write(res)
+            except Exception:
+                pass
+            save_proofread_json(res, q_dir, tool_calls)
+        return {"success": True, "result": res, "tool_calls": tool_calls, "error": None}
+    else:
+        err_detail = res.replace("**API调用失败：**\n", "").strip()[:200]
+        return {"success": False, "result": "", "error": err_detail, "tool_calls": []}
+
+
+def get_supported_file_types():
+    """返回支持的文件类型列表，用于文件选择对话框。"""
+    return [
+        ("支持的文件", "*.docx;*.doc;*.idml;*.zip"),
+        ("Word 文档", "*.docx;*.doc"),
+        ("InDesign IDML", "*.idml"),
+        ("ZIP 压缩包", "*.zip"),
+        ("所有文件", "*.*"),
+    ]
+
+
+def get_supported_extensions():
+    """返回支持的文件扩展名列表（小写）。"""
+    return {".docx", ".doc", ".idml"}
+
+
+def default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax=False):
+    """默认的文件转 Markdown 方法（仅支持 Word 文档）。
+    
+    Args:
+        file_path: 输入文件路径
+        output_md: 输出 Markdown 文件路径
+        img_dir: 图片输出目录
+        use_mathjax: 是否使用 MathJax
+    
+    Returns:
+        dict: 包含 success 和 needs_post_process 等信息
+    """
+    from core.pandoc_utils import convert_with_pandoc, check_pandoc
+    
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext in (".docx", ".doc"):
+        if not check_pandoc():
+            log("❌ Pandoc 未安装，无法转换 Word 文档")
+            return {"success": False, "needs_post_process": True}
+        ok = convert_with_pandoc(file_path, output_md, img_dir, use_mathjax=use_mathjax)
+        return {"success": ok, "needs_post_process": True}
+    
+    log(f"❌ 不支持的文件格式: {ext}")
+    return {"success": False, "needs_post_process": False}
+
+
+def default_collect_paper_dirs(base_path):
+    result = []
+    base = Path(base_path)
+    if not base.exists(): return result
+    sub_items = [x for x in base.iterdir() if x.is_dir()]
+    sub_names = [x.name for x in sub_items]
+    def _is_unit_dir(name):
+        return '题' in name or name.startswith('板块')
+    has_question_dir = any(_is_unit_dir(n) for n in sub_names)
+    has_knowledge = any(n == '知识' for n in sub_names)
+    if has_question_dir or has_knowledge:
+        result.append(str(base))
+    else:
+        for d in sub_items:
+            inner = [x.name for x in d.iterdir() if x.is_dir()]
+            if any(_is_unit_dir(n) for n in inner) or '知识' in inner:
+                result.append(str(d))
+    return result
