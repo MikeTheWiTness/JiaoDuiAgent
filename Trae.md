@@ -262,3 +262,84 @@ Managed via GUI's API config dialog.
 - **Chinese subject directories** use `importlib.util.spec_from_file_location` to load modules by path.
 - **Thread safety**: `core.logging_utils.log()` uses `_log_lock`. GUI updates must use `root.after()`.
 - **Subprocess calls** on Windows use `CREATE_NO_WINDOW` flag to avoid black console windows.
+
+---
+
+## Knowledge Base
+
+### Web Tools Guide
+
+`shared/web_tools.py` provides two LangChain tools for web access.
+
+#### Available Tools
+
+| Tool | Name | Purpose |
+|------|------|---------|
+| `WebSearchTool` | `web_search` | Search the internet, return title/snippet/url list |
+| `WebFetchTool` | `web_fetch` | Fetch and extract text from a specific URL |
+
+#### Dedicated Website Adaptors
+
+WebFetchTool has special handling for certain sites. Always prefer using the dedicated adaptor over generic fetching — better accuracy and reliability.
+
+| Website | Adaptor | URL Pattern | Notes |
+|---------|---------|-------------|-------|
+| 搜韵网 (sou-yun.cn) | `_fetch_souyun` | `https://sou-yun.cn/QueryPoem.aspx?q=诗句` | ASP.NET form-based, handles `__VIEWSTATE`. Use `q` query param for poem lookup. Best for classical Chinese poetry verification. |
+| 识典古籍 (shidianguji.com) | `_fetch_shidianguji` | `https://www.shidianguji.com/search/关键词` | Server-rendered HTML. Search URL encodes query in path. Best for classical prose/text verification. |
+| Generic webpages | `_fetch_generic` | Any URL | Fallback. Quality varies depending on page structure. |
+
+#### Usage Tips
+
+- **For classical Chinese poetry verification**: use `web_fetch` with sou-yun.cn URL
+- **For classical prose (文言文) verification**: use `web_fetch` with shidianguji.com URL
+- **For general knowledge lookup**: use `web_search` first, then `web_fetch` on promising URLs
+- `web_search` backends: `ddgs` (DuckDuckGo, international) or `baidu` (Chinese content best)
+- Both tools return error messages in Chinese on failure — LLM should fall back to its own knowledge
+
+### Chinese (语文) v2.0 Project
+
+Major project under development. Upgrades 高中语文 from v1.1 to v2.0 with significant new features.
+
+- **Project directory**: `subjects/高中语文v1.1/`
+- **Task list**: `subjects/高中语文v1.1/docs/TASKS.md` (12 slices, start here to see current progress)
+- **PRD**: `subjects/高中语文v1.1/docs/PRD_v2.0.md`
+- **Architecture decisions**: `subjects/高中语文v1.1/docs/adr/` (8 ADRs)
+- **GitHub issues**: https://github.com/MikeTheWiTness/JiaoDuiAgent/issues (issues #3-#14)
+
+**New features in v2.0**:
+- 自由校对 mode (free-form input: paste text + images, or upload files)
+- 批注评审 mode (review human annotations in Word documents)
+- Smart splitting via LLM with `<problem>` XML markers
+- Manual marker-based splitting (`###### 题目开始 ######` / `###### 题目结束 ######`)
+- Pre-proofreading classical text search + automatic diff (文言文/诗歌)
+- All four source modes: 讲义 / 试卷 / 自由校对 / 批注评审
+
+### Testing
+
+**Status**: No formal test framework yet. Tests live in the project root as standalone scripts.
+
+**Current test files**:
+- `test_comments.py` — Word comment extraction test
+- `test_shidianguji.py` — Shidianguji fetching test
+
+**Running tests**:
+```bash
+# Run individual test scripts directly
+python test_comments.py
+python test_shidianguji.py
+```
+
+**Convention**: New test scripts go in the project root and are named `test_*.py`. Each test should be self-contained and print pass/fail results.
+
+### Core File Quick Reference
+
+| File | What it does | Touch when |
+|------|-------------|------------|
+| `core/defaults.py` | Default split + proofreading implementations (reference, not mandate) | Adding subject-agnostic default behaviors |
+| `core/api_client.py` | API calls + tool call loop | Changing API behavior, retry logic, tool loop |
+| `core/config_loader.py` | config.json loading and access | Adding new config fields |
+| `shared/web_tools.py` | Web search and fetching tools | Adding new website adaptors, changing search backends |
+| `shared/latex_generator.py` | Markdown → LaTeX PDF generation (two-column paracol) | Adding new PDF layouts, customizing template |
+| `shared/pdf_compiler.py` | XeLaTeX compilation | Changing TeX paths, compilation options |
+| `ui/default_app.py` | Default GUI template | Adding all-subject UI features, new source modes |
+| `ui/widgets.py` | Reusable UI components | New shared widgets |

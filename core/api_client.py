@@ -3,7 +3,7 @@ import requests
 from core.logging_utils import log
 
 MAX_RETRY = 2
-TIME_OUT = 480
+TIME_OUT = 900
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
 

@@ -41,6 +41,10 @@ class DefaultApp:
         self.parallel_enabled = tk.BooleanVar(value=True)
         self.parallel_count = tk.StringVar(value="10")
 
+        self.split_mode = tk.StringVar(value="rule")
+        self.free_text = ""
+        self.free_images = []
+
         self.file_list = []
         self.proofread_list = []
         self.proofread_result = {}
@@ -78,10 +82,46 @@ class DefaultApp:
         self.mode_selector = ModeSelector(self.root, self.source_mode, self.exec_mode, self.on_mode_changed)
         self.mode_selector.set_source_options(features.get("show_source_modes", ["讲义", "试卷"]))
         self.mode_selector.set_exec_options(features.get("show_exec_modes", ["仅转换", "完整流程", "仅校对", "仅生成PDF"]))
+        self.mode_selector.set_source_descriptions({
+            "讲义": "讲义模式：处理 Word 讲义文档，支持清理表格、提取知识文件夹，适合同步讲义/备课资料校对。",
+            "试卷": "试卷模式：处理 Word 试卷文档，按题号拆分校对，适合试卷/练习题校对。",
+            "自由校对": "自由校对模式：直接粘贴文本或上传图片/文件，无需 Word 格式，适合零散内容快速校对。",
+            "批注评审": "批注评审模式：提取 Word 文档中的批注，逐条评审批注质量并补充遗漏错误。",
+        })
+        self.mode_selector.set_exec_descriptions({
+            "完整流程": "完整流程：转换 → 拆分 → 校对 → 生成报告，一键完成全部步骤。",
+            "仅转换": "仅转换：只将 Word 文档转换为 Markdown，不拆分、不校对。",
+            "仅拆分": "仅拆分：转换后按题目/板块拆分为多个单元，不进行校对。",
+            "仅校对": "仅校对：对已拆分的题目目录进行 LLM 校对，需先完成拆分。",
+            "仅生成PDF": "仅生成PDF：对已有校对结果的目录生成 LaTeX PDF 报告。",
+        })
 
-        self.frame_pdf_options = ttk.Frame(self.root, padding=(10, 0, 10, 0))
+        self.frame_convert_settings = ttk.Frame(self.root, padding=10)
+        self.frame_convert_settings.pack(fill=tk.X)
+
+        self.setup_extra_options(self.frame_convert_settings)
+
+        self.frame_split_mode = ttk.Frame(self.frame_convert_settings)
+        if features.get("show_split_mode_option", False):
+            self.frame_split_mode.pack(fill=tk.X, pady=(6, 0))
+            ttk.Label(self.frame_split_mode, text="分割方式：").pack(side=tk.LEFT)
+            self.combo_split = ttk.Combobox(self.frame_split_mode, textvariable=self.split_mode,
+                                            values=["rule", "none", "smart", "manual"],
+                                            state="readonly", width=12)
+            self.combo_split.pack(side=tk.LEFT, padx=4)
+            self.lbl_split_desc = ttk.Label(self.frame_split_mode, text="（普通规则）", foreground="gray")
+            self.lbl_split_desc.pack(side=tk.LEFT, padx=4)
+            self.combo_split.bind("<<ComboboxSelected>>", self._on_split_mode_changed)
+            self._update_split_mode_desc()
+
+        self.frame_output_dir = ttk.Frame(self.frame_convert_settings)
+        ttk.Label(self.frame_output_dir, text="输出根目录：").pack(side=tk.LEFT)
+        ttk.Entry(self.frame_output_dir, textvariable=self.output_dir, width=50).pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        ttk.Button(self.frame_output_dir, text="浏览", command=self.select_output_dir).pack(side=tk.LEFT)
+
+        self.frame_pdf_options = ttk.Frame(self.frame_convert_settings)
         if features.get("show_pdf_option", True):
-            self.frame_pdf_options.pack(fill=tk.X)
+            self.frame_pdf_options.pack(fill=tk.X, pady=(6, 0))
             ttk.Checkbutton(self.frame_pdf_options, text="生成 LaTeX PDF 校对报告",
                             variable=self.generate_pdf).pack(side=tk.LEFT, padx=4)
         if features.get("show_parallel_option", True):
@@ -91,16 +131,15 @@ class DefaultApp:
                 ttk.Entry(self.frame_pdf_options, textvariable=self.parallel_count, width=3).pack(side=tk.LEFT)
                 ttk.Label(self.frame_pdf_options, text="题/批").pack(side=tk.LEFT)
 
-        self.frame_convert_settings = ttk.Frame(self.root, padding=10)
-        self.frame_convert_settings.pack(fill=tk.X)
-
-        f_out = ttk.Frame(self.frame_convert_settings)
-        f_out.pack(fill=tk.X)
-        ttk.Label(f_out, text="输出根目录：").pack(side=tk.LEFT)
-        ttk.Entry(f_out, textvariable=self.output_dir, width=50).pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
-        ttk.Button(f_out, text="浏览", command=self.select_output_dir).pack(side=tk.LEFT)
-
-        self.setup_extra_options(self.frame_convert_settings)
+        self.frame_free_input = ttk.Frame(self.frame_convert_settings)
+        self.btn_paste_text = ttk.Button(self.frame_free_input, text="📝 粘贴文本",
+                                          command=self.paste_free_text)
+        self.btn_add_images = ttk.Button(self.frame_free_input, text="🖼️ 上传图片",
+                                          command=self.add_free_images)
+        self.btn_add_free_files = ttk.Button(self.frame_free_input, text="📄 上传文件",
+                                              command=self.add_free_files)
+        self.lbl_free_status = ttk.Label(self.frame_free_input, text="未设置文本/图片/文件", foreground="gray")
+        self.free_files = []
 
         self.frame_jy_options = ttk.Frame(self.frame_convert_settings)
         if features.get("show_clean_table_option", True) or features.get("show_knowledge_option", True):
@@ -167,6 +206,98 @@ class DefaultApp:
 
         ApiDialog(self.root, self.api_config, on_save)
 
+    def _on_split_mode_changed(self, event=None):
+        self._update_split_mode_desc()
+
+    def _update_split_mode_desc(self):
+        mode = self.split_mode.get()
+        desc_map = {
+            "rule": "（普通规则 - 按标题/题号拆分）",
+            "none": "（不拆分 - 整份作为一个单元）",
+            "smart": "（智能分割 - LLM 自动识别题目）",
+            "manual": "（人工标记 - 按 ###### 标记拆分）",
+        }
+        desc = desc_map.get(mode, "")
+        if hasattr(self, 'lbl_split_desc'):
+            self.lbl_split_desc.config(text=desc)
+
+    def paste_free_text(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("粘贴待校对文本")
+        dialog.geometry("600x450")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="请粘贴或输入待校对的文本：", padding=10).pack(anchor=tk.W)
+        text_widget = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        if self.free_text:
+            text_widget.insert("1.0", self.free_text)
+
+        btn_frame = ttk.Frame(dialog, padding=(0, 0, 0, 10))
+        btn_frame.pack(fill=tk.X)
+
+        def _save():
+            self.free_text = text_widget.get("1.0", tk.END).strip()
+            self._update_free_status()
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="确定", command=_save).pack(side=tk.RIGHT, padx=10)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
+
+    def add_free_images(self):
+        paths = filedialog.askopenfilenames(
+            title="选择图片",
+            filetypes=[("图片文件", "*.png;*.jpg;*.jpeg;*.gif;*.bmp"), ("所有文件", "*.*")]
+        )
+        if paths:
+            added = 0
+            for p in paths:
+                if p not in self.free_images:
+                    self.free_images.append(p)
+                    added += 1
+            self._update_free_status()
+            log(f"🖼️ 已添加 {added} 张图片，共 {len(self.free_images)} 张")
+
+    def add_free_files(self):
+        paths = filedialog.askopenfilenames(
+            title="选择文件（支持 md/txt/图片）",
+            filetypes=[
+                ("支持的文件", "*.md;*.txt;*.png;*.jpg;*.jpeg;*.gif;*.bmp"),
+                ("Markdown/文本", "*.md;*.txt"),
+                ("图片文件", "*.png;*.jpg;*.jpeg;*.gif;*.bmp"),
+                ("所有文件", "*.*")
+            ]
+        )
+        if paths:
+            added = 0
+            for p in paths:
+                if p not in self.free_files:
+                    self.free_files.append(p)
+                    added += 1
+            self._update_free_status()
+            self.refresh_listbox()
+            log(f"📄 已添加 {added} 个文件，共 {len(self.free_files)} 个")
+
+    def _update_free_status(self):
+        has_text = bool(self.free_text)
+        has_images = len(self.free_images) > 0
+        has_files = len(self.free_files) > 0
+        parts = []
+        if has_text:
+            parts.append("文本")
+        if has_images:
+            parts.append(f"{len(self.free_images)}张图")
+        if has_files:
+            parts.append(f"{len(self.free_files)}个文件")
+        if parts:
+            status = "✅ 已设置 " + " + ".join(parts)
+            color = "green"
+        else:
+            status = "未设置文本/图片/文件"
+            color = "gray"
+        self.lbl_free_status.config(text=status, foreground=color)
+
     def on_mode_changed(self):
         self.update_ui_for_mode()
 
@@ -175,25 +306,17 @@ class DefaultApp:
         source_mode = self.source_mode.get()
         is_proof_only = (exec_mode == "仅校对")
         is_pdf_only = (exec_mode == "仅生成PDF")
+        is_free_mode = (source_mode == "自由校对")
+        is_review_mode = (source_mode == "批注评审")
+        features = self._get_ui_features()
 
-        if is_proof_only or is_pdf_only:
-            self.mode_selector.pack_forget_source()
-        else:
-            self.mode_selector.pack_source(before=self.frame_list)
-
-        if is_pdf_only:
-            self.frame_pdf_options.pack_forget()
-        else:
-            self.frame_pdf_options.pack(fill=tk.X, before=self.frame_list)
-
-        if is_proof_only or is_pdf_only:
-            self.frame_convert_settings.pack_forget()
-        else:
-            self.frame_convert_settings.pack(fill=tk.X, before=self.frame_list)
-            if source_mode == "讲义":
-                self.frame_jy_options.pack(fill=tk.X, pady=(6, 0))
-            else:
-                self.frame_jy_options.pack_forget()
+        self.mode_selector.pack_forget_source()
+        self.frame_convert_settings.pack_forget()
+        self.frame_jy_options.pack_forget()
+        self.frame_free_input.pack_forget()
+        self.frame_split_mode.pack_forget() if hasattr(self, 'frame_split_mode') else None
+        self.frame_output_dir.pack_forget()
+        self.frame_pdf_options.pack_forget()
 
         self.btn_add_files.pack_forget()
         self.btn_add_folder.pack_forget()
@@ -202,12 +325,59 @@ class DefaultApp:
         self.btn_select_root.pack_forget()
         self.btn_select_pdf_folders.pack_forget()
 
+        if not is_pdf_only:
+            self.mode_selector.pack_source(before=self.frame_file_area)
+
+        if not is_proof_only and not is_pdf_only:
+            self.frame_convert_settings.pack(fill=tk.X, before=self.frame_file_area)
+
+            last_widget = None
+
+            if source_mode == "讲义" and (features.get("show_clean_table_option", True) or features.get("show_knowledge_option", True)):
+                if last_widget:
+                    self.frame_jy_options.pack(fill=tk.X, after=last_widget, pady=(6, 0))
+                else:
+                    self.frame_jy_options.pack(fill=tk.X, pady=(6, 0))
+                last_widget = self.frame_jy_options
+
+            if is_free_mode:
+                if last_widget:
+                    self.frame_free_input.pack(fill=tk.X, after=last_widget, pady=(6, 0))
+                else:
+                    self.frame_free_input.pack(fill=tk.X, pady=(6, 0))
+                self.btn_paste_text.pack(side=tk.LEFT, padx=4)
+                self.btn_add_images.pack(side=tk.LEFT, padx=4)
+                self.btn_add_free_files.pack(side=tk.LEFT, padx=4)
+                self.lbl_free_status.pack(side=tk.LEFT, padx=10)
+                last_widget = self.frame_free_input
+
+            if features.get("show_split_mode_option", False) and hasattr(self, 'frame_split_mode'):
+                if last_widget:
+                    self.frame_split_mode.pack(fill=tk.X, after=last_widget, pady=(6, 0))
+                else:
+                    self.frame_split_mode.pack(fill=tk.X, pady=(6, 0))
+                last_widget = self.frame_split_mode
+
+            if last_widget:
+                self.frame_output_dir.pack(fill=tk.X, after=last_widget, pady=(6, 0))
+            else:
+                self.frame_output_dir.pack(fill=tk.X, pady=(6, 0))
+            last_widget = self.frame_output_dir
+
+            if features.get("show_pdf_option", True) or features.get("show_parallel_option", True):
+                if last_widget:
+                    self.frame_pdf_options.pack(fill=tk.X, after=last_widget, pady=(6, 0))
+                else:
+                    self.frame_pdf_options.pack(fill=tk.X, pady=(6, 0))
+
         if is_pdf_only:
             self.btn_select_pdf_folders.pack(side=tk.LEFT, padx=4)
             self.btn_clear.pack(side=tk.LEFT, padx=4)
         elif is_proof_only:
             self.btn_select_papers.pack(side=tk.LEFT, padx=4)
             self.btn_select_root.pack(side=tk.LEFT, padx=4)
+        elif is_free_mode:
+            self.btn_clear.pack(side=tk.LEFT, padx=4)
         else:
             self.btn_add_files.pack(side=tk.LEFT, padx=4)
             self.btn_add_folder.pack(side=tk.LEFT, padx=4)
@@ -309,6 +479,12 @@ class DefaultApp:
             self.proofread_list = []
             self.proofread_result = {}
             log("🗑️ 已清空清单")
+        elif self.source_mode.get() == "自由校对":
+            self.free_text = ""
+            self.free_images = []
+            self.free_files = []
+            self._update_free_status()
+            log("🗑️ 已清空文本、图片和文件")
         else:
             self.file_list = []
             log("🗑️ 已清空文件列表")
@@ -321,9 +497,29 @@ class DefaultApp:
     def refresh_listbox(self):
         self.list_box.delete(0, tk.END)
         exec_mode = self.exec_mode.get()
+        source_mode = self.source_mode.get()
+
         if exec_mode in ("仅校对", "仅生成PDF"):
             for i, (path, name) in enumerate(self.proofread_list, 1):
                 self.list_box.insert(tk.END, f"{i}. {name}")
+        elif source_mode == "自由校对":
+            idx = 1
+            if self.free_text:
+                preview = self.free_text[:50].replace('\n', ' ')
+                if len(self.free_text) > 50:
+                    preview += "..."
+                self.list_box.insert(tk.END, f"{idx}. 📝 文本: {preview}")
+                idx += 1
+            for img in self.free_images:
+                self.list_box.insert(tk.END, f"{idx}. 🖼️  图片: {os.path.basename(img)}")
+                idx += 1
+            for f in self.free_files:
+                ext = os.path.splitext(f)[1].lower()
+                icon = "📄" if ext in ('.md', '.txt') else "🖼️"
+                self.list_box.insert(tk.END, f"{idx}. {icon} 文件: {os.path.basename(f)}")
+                idx += 1
+            if idx == 1:
+                self.list_box.insert(tk.END, "（未设置文本、图片或文件，请点击上方按钮添加）")
         else:
             sorted_files = sorted(self.file_list, key=lambda p: self._natural_key(os.path.basename(p)))
             for idx, path in enumerate(sorted_files, 1):
@@ -424,9 +620,18 @@ class DefaultApp:
         pass
 
     def start_conversion(self):
-        if not self.file_list:
-            messagebox.showwarning("提示", "请先添加文件")
-            return
+        source_mode = self.source_mode.get()
+        is_free_mode = (source_mode == "自由校对")
+
+        if is_free_mode:
+            if not self.free_text and not self.free_images and not self.free_files:
+                messagebox.showwarning("提示", "请先粘贴文本、上传图片或上传文件")
+                return
+        else:
+            if not self.file_list:
+                messagebox.showwarning("提示", "请先添加文件")
+                return
+
         out_dir = self.output_dir.get().strip()
         if not out_dir:
             out_dir = DEFAULT_OUTPUT
@@ -437,17 +642,18 @@ class DefaultApp:
                 messagebox.showerror("错误", f"无法创建输出目录: {e}")
                 return
 
-        has_word = any(f.lower().endswith(('.docx', '.doc')) for f in self.file_list)
-        if has_word and not check_pandoc():
-            messagebox.showerror("错误", "检测到 Word 文件，但 Pandoc 未安装")
-            return
+        if not is_free_mode:
+            has_word = any(f.lower().endswith(('.docx', '.doc')) for f in self.file_list)
+            if has_word and not check_pandoc():
+                messagebox.showerror("错误", "检测到 Word 文件，但 Pandoc 未安装")
+                return
 
-        invalid = [f for f in self.file_list if ')' in os.path.basename(f)]
-        if invalid:
-            msg = "以下文件名包含 )，请重命名：\n\n" + "\n".join(os.path.basename(f) for f in invalid)
-            messagebox.showerror("文件名错误", msg)
-            log("❌ 文件名包含 ')'，已取消")
-            return
+            invalid = [f for f in self.file_list if ')' in os.path.basename(f)]
+            if invalid:
+                msg = "以下文件名包含 )，请重命名：\n\n" + "\n".join(os.path.basename(f) for f in invalid)
+                messagebox.showerror("文件名错误", msg)
+                log("❌ 文件名包含 ')'，已取消")
+                return
 
         self.btn_action.config(state=tk.DISABLED)
         self.on_start_conversion()
@@ -457,99 +663,186 @@ class DefaultApp:
     def _conversion_thread(self, out_root):
         source = self.source_mode.get()
         exec_mode = self.exec_mode.get()
-        total = len(self.file_list)
+        split_mode = self.split_mode.get()
+        is_free_mode = (source == "自由校对")
+        is_review_mode = (source == "批注评审")
+
         log("=" * 50)
-        log(f"开始转换，模式={source}，共 {total} 个文件")
 
         split_root = os.path.join(out_root, "拆题结果")
         os.makedirs(split_root, exist_ok=True)
 
         converted_dirs = []
 
-        for idx, word_path in enumerate(self.file_list, 1):
-            fname = os.path.basename(word_path)
-            basename = os.path.splitext(fname)[0]
+        if is_free_mode:
+            log(f"开始转换，模式=自由校对")
+            from shared.free_proofread import create_free_proofread_md
+            import datetime
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            basename = f"自由校对_{ts}"
 
-            target_base = basename
-            counter = 1
-            while os.path.exists(os.path.join(split_root, target_base)):
-                target_base = f"{basename}_{counter}"
-                counter += 1
-            if target_base != basename:
-                log(f"   ⚠️ 目录重名：{basename} → {target_base}")
-                basename = target_base
+            temp_dir = os.path.join(out_root, "自由校对临时文件")
+            os.makedirs(temp_dir, exist_ok=True)
 
-            log(f"\n[{idx}/{total}] {fname}")
-            word_dir = os.path.dirname(word_path)
-            raw_md = os.path.join(word_dir, f"{basename}_raw.md")
-            img_dir = os.path.join(word_dir, f"{basename}_images")
+            all_text_parts = []
+            all_images = []
 
-            use_mathjax = (source == "讲义")
-            
-            convert_func = getattr(self.subject_app, 'convert_file_to_md', None)
-            if convert_func:
-                result = convert_func(word_path, raw_md, img_dir, use_mathjax=use_mathjax)
-                if isinstance(result, dict):
-                    ok = result.get('success', False)
-                    needs_post = result.get('needs_post_process', True)
-                else:
-                    ok = result
-                    needs_post = True
-            else:
-                ok = convert_with_pandoc(word_path, raw_md, img_dir, use_mathjax=use_mathjax)
-                needs_post = True
-            
-            if not ok:
-                log(f"   ❌ 转换失败")
-                continue
+            if self.free_text:
+                all_text_parts.append(self.free_text)
 
-            if needs_post:
-                if source == "讲义":
-                    fix_latex_escapes(raw_md)
-                    if self.clean_enabled.get():
-                        if clean_md_file(raw_md):
-                            log("   ✅ 表格清理完成")
-                        else:
-                            log("   ⚠️ 表格清理失败")
-                    fix_floating_images(raw_md)
-                    normalize_option_spacing(raw_md)
-                else:
-                    post_process_md_zw(raw_md)
+            all_images.extend(self.free_images)
 
-            post_hook = getattr(self.subject_app, 'post_convert_hook', None)
-            if post_hook:
-                post_hook(raw_md, source=source)
+            for fpath in self.free_files:
+                ext = os.path.splitext(fpath)[1].lower()
+                if ext in ('.md', '.txt'):
+                    try:
+                        with open(fpath, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        all_text_parts.append(content)
+                        log(f"   📄 已读取文件: {os.path.basename(fpath)}")
+                    except Exception as e:
+                        log(f"   ⚠️ 读取文件失败 {os.path.basename(fpath)}: {e}")
+                elif ext in ('.png', '.jpg', '.jpeg', '.gif', '.bmp'):
+                    if fpath not in all_images:
+                        all_images.append(fpath)
+                        log(f"   🖼️  已添加图片: {os.path.basename(fpath)}")
+
+            combined_text = "\n\n".join(all_text_parts) if all_text_parts else ""
+
+            raw_md = create_free_proofread_md(combined_text, all_images, temp_dir)
+            img_dir = os.path.join(temp_dir, f"{basename}_images")
+            fname = basename
+            needs_post = False
 
             if exec_mode == "仅转换":
                 converted_dirs.append(os.path.dirname(raw_md))
-                log(f"   ✅ {fname} 转换完成")
-                continue
-
-            log("   ✂️ 开始拆分题目...")
-            if source == "讲义":
-                options = {"do_clean": self.clean_enabled.get()}
-                split_ok = self.subject_app.split_lecture(raw_md, split_root, basename, options)
+                log(f"   ✅ 自由校对转换完成")
             else:
-                split_ok = self.subject_app.split_exam(raw_md, split_root, basename)
+                log("   ✂️ 开始拆分...")
+                options = {"split_mode": split_mode}
+                if hasattr(self.subject_app, 'split_exam'):
+                    split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
+                else:
+                    split_ok = False
 
-            if split_ok:
-                if source == "讲义" and self.knowledge_enabled.get():
-                    from core import config_loader
-                    split_mode = config_loader.get_lecture_split_mode(self.subject_app.config)
-                    if split_mode != "section":
-                        self.subject_app.generate_knowledge(raw_md, split_root, basename)
+                if split_ok:
+                    converted_dir = os.path.join(split_root, basename)
+                    converted_dirs.append(converted_dir)
+                    log(f"   ✅ 自由校对处理完成")
+        else:
+            total = len(self.file_list)
+            log(f"开始转换，模式={source}，共 {total} 个文件")
+
+            for idx, file_path in enumerate(self.file_list, 1):
+                fname = os.path.basename(file_path)
+                basename = os.path.splitext(fname)[0]
+                ext = os.path.splitext(fname)[1].lower()
+
+                target_base = basename
+                counter = 1
+                while os.path.exists(os.path.join(split_root, target_base)):
+                    target_base = f"{basename}_{counter}"
+                    counter += 1
+                if target_base != basename:
+                    log(f"   ⚠️ 目录重名：{basename} → {target_base}")
+                    basename = target_base
+
+                log(f"\n[{idx}/{total}] {fname}")
+                file_dir = os.path.dirname(file_path)
+                raw_md = os.path.join(file_dir, f"{basename}_raw.md")
+                img_dir = os.path.join(file_dir, f"{basename}_images")
+
+                is_md_file = (ext == '.md')
+
+                if is_md_file:
+                    try:
+                        shutil.copy2(file_path, raw_md)
+                        ok = True
+                        needs_post = False
+                        log("   📄 直接使用 Markdown 文件")
+                    except Exception as e:
+                        log(f"   ❌ 复制 md 文件失败: {e}")
+                        ok = False
+                else:
+                    use_mathjax = (source == "讲义")
+                    
+                    convert_func = getattr(self.subject_app, 'convert_file_to_md', None)
+                    if convert_func:
+                        result = convert_func(file_path, raw_md, img_dir, use_mathjax=use_mathjax)
+                        if isinstance(result, dict):
+                            ok = result.get('success', False)
+                            needs_post = result.get('needs_post_process', True)
+                        else:
+                            ok = result
+                            needs_post = True
                     else:
-                        log("   📘 section 模式：跳过知识提取（版块即单元）")
+                        ok = convert_with_pandoc(file_path, raw_md, img_dir, use_mathjax=use_mathjax)
+                        needs_post = True
+                
+                if not ok:
+                    log(f"   ❌ 转换失败")
+                    continue
 
-                converted_dir = os.path.join(split_root, basename)
-                converted_dirs.append(converted_dir)
-                log(f"   ✅ {fname} 处理完成")
+                if needs_post:
+                    if source == "讲义":
+                        fix_latex_escapes(raw_md)
+                        if self.clean_enabled.get():
+                            if clean_md_file(raw_md):
+                                log("   ✅ 表格清理完成")
+                            else:
+                                log("   ⚠️ 表格清理失败")
+                        fix_floating_images(raw_md)
+                        normalize_option_spacing(raw_md)
+                    else:
+                        post_process_md_zw(raw_md)
+
+                if is_review_mode and not is_md_file:
+                    from shared.docx_comments import insert_comments_from_docx
+                    try:
+                        with open(raw_md, 'r', encoding='utf-8') as f:
+                            md_content = f.read()
+                        comment_md = insert_comments_from_docx(file_path, md_content)
+                        with open(raw_md, 'w', encoding='utf-8') as f:
+                            f.write(comment_md)
+                        log("   📝 已提取 Word 批注")
+                    except Exception as e:
+                        log(f"   ⚠️ 批注提取失败：{e}")
+
+                post_hook = getattr(self.subject_app, 'post_convert_hook', None)
+                if post_hook:
+                    post_hook(raw_md, source=source)
+
+                if exec_mode == "仅转换":
+                    converted_dirs.append(os.path.dirname(raw_md))
+                    log(f"   ✅ {fname} 转换完成")
+                    continue
+
+                log("   ✂️ 开始拆分题目...")
+                options = {"split_mode": split_mode}
+                if source == "讲义":
+                    options["do_clean"] = self.clean_enabled.get()
+                    split_ok = self.subject_app.split_lecture(raw_md, split_root, basename, options)
+                else:
+                    split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
+
+                if split_ok:
+                    if source == "讲义" and self.knowledge_enabled.get():
+                        from core import config_loader
+                        config_split_mode = config_loader.get_lecture_split_mode(self.subject_app.config)
+                        if config_split_mode != "section":
+                            self.subject_app.generate_knowledge(raw_md, split_root, basename)
+                        else:
+                            log("   📘 section 模式：跳过知识提取（版块即单元）")
+
+                    converted_dir = os.path.join(split_root, basename)
+                    converted_dirs.append(converted_dir)
+                    log(f"   ✅ {fname} 处理完成")
 
         log("=" * 50)
         if exec_mode == "仅转换":
-            log(f"✅ 转换完成，成功 {len(converted_dirs)}/{total}")
+            log(f"✅ 转换完成，成功 {len(converted_dirs)} 个")
         else:
-            log(f"✅ 拆分完成，成功 {len(converted_dirs)}/{total}")
+            log(f"✅ 拆分完成，成功 {len(converted_dirs)} 个")
 
         if exec_mode == "完整流程":
             if converted_dirs:
@@ -598,6 +891,7 @@ class DefaultApp:
         api_url = self.api_config.get("api_url", "")
         api_key = self.api_config.get("api_key", "")
         model = self.api_config.get("model_name", "")
+        source_mode = self.source_mode.get()
         out_root = self.output_dir.get().strip()
         if not out_root:
             out_root = DEFAULT_OUTPUT
@@ -631,6 +925,28 @@ class DefaultApp:
                 if knowledge_dir is not None:
                     all_dirs.append(knowledge_dir)
 
+                skipped_dirs = []
+                remaining_dirs = []
+                for q_dir in all_dirs:
+                    md_path = os.path.join(q_dir, "_校对报告.md")
+                    json_path = os.path.join(q_dir, "_校对数据.json")
+                    if os.path.exists(md_path) and os.path.exists(json_path):
+                        try:
+                            with open(md_path, 'r', encoding='utf-8') as f:
+                                cached_result = f.read()
+                            self.proofread_result[q_dir] = cached_result
+                            paper_results[q_dir] = cached_result
+                            skipped_dirs.append(q_dir)
+                        except Exception:
+                            remaining_dirs.append(q_dir)
+                    else:
+                        remaining_dirs.append(q_dir)
+
+                if skipped_dirs:
+                    log(f"   ⏭️  跳过已校对：{len(skipped_dirs)} 题")
+
+                all_dirs = remaining_dirs
+
                 generate_pdf = self.generate_pdf.get()
                 use_parallel = self.parallel_enabled.get()
                 try:
@@ -658,7 +974,7 @@ class DefaultApp:
                                 log(f"  ⏳ 提交{task_type}：{q_name}")
                                 future = executor.submit(
                                     self.subject_app.proofread_one,
-                                    api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf
+                                    api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode
                                 )
                                 future_map[future] = (q_dir, q_name, is_knowledge)
 
@@ -688,7 +1004,7 @@ class DefaultApp:
                         task_type = "知识" if is_knowledge else "题目"
                         log(f"校对{task_type}：{q_name}")
                         data = self.subject_app.proofread_one(
-                            api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf
+                            api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode
                         )
                         if data["success"]:
                             self.proofread_result[q_dir] = data["result"]

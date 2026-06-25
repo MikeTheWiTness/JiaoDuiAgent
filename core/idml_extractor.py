@@ -99,6 +99,33 @@ def _get_story_positions(z, spread_files, story_data):
     """获取每个 story 的起始位置（页码和坐标）。"""
     all_tfs = []
 
+    def _iter_with_parent_transform(elem, parent_tx=0.0, parent_ty=0.0):
+        """递归遍历元素，累加父元素的变换。"""
+        tag = _get_tag(elem)
+        
+        tx, ty = _parse_transform(elem.get('ItemTransform', ''))
+        abs_tx = parent_tx + tx
+        abs_ty = parent_ty + ty
+        
+        if tag == 'TextFrame':
+            story_id = elem.get('ParentStory', '')
+            if story_id and story_id in story_data:
+                tf_self = elem.get('Self', '')
+                prev_tf = elem.get('PreviousTextFrame', '')
+                next_tf = elem.get('NextTextFrame', '')
+                yield {
+                    'tf_self': tf_self,
+                    'story_id': story_id,
+                    'prev_tf': prev_tf,
+                    'next_tf': next_tf,
+                    'x': abs_tx,
+                    'y': abs_ty,
+                }
+        
+        for child in elem:
+            if isinstance(child.tag, str):
+                yield from _iter_with_parent_transform(child, abs_tx, abs_ty)
+
     for sf in spread_files:
         sp_xml = z.read(sf)
         sp_root = ET.fromstring(sp_xml)
@@ -119,38 +146,24 @@ def _get_story_positions(z, spread_files, story_data):
 
         pages.sort(key=lambda p: p['x'])
 
-        for elem in _iter_all(sp_root):
-            if _get_tag(elem) == 'TextFrame':
-                story_id = elem.get('ParentStory', '')
-                if not story_id or story_id not in story_data:
-                    continue
+        for tf_info in _iter_with_parent_transform(sp_root):
+            tx = tf_info['x']
+            ty = tf_info['y']
+            
+            page_name = None
+            for page in pages:
+                if (page['x'] <= tx < page['x'] + page['w'] and
+                        page['y'] <= ty < page['y'] + page['h']):
+                    page_name = page['name']
+                    break
 
-                tf_self = elem.get('Self', '')
-                prev_tf = elem.get('PreviousTextFrame', '')
-                next_tf = elem.get('NextTextFrame', '')
-                tx, ty = _parse_transform(elem.get('ItemTransform', ''))
+            if page_name is None and len(pages) >= 2:
+                mid_x = pages[0]['x'] + pages[0]['w']
+                page_name = pages[0]['name'] if tx < mid_x else pages[1]['name']
 
-                page_name = None
-                for page in pages:
-                    if (page['x'] <= tx < page['x'] + page['w'] and
-                            page['y'] <= ty < page['y'] + page['h']):
-                        page_name = page['name']
-                        break
-
-                if page_name is None and len(pages) >= 2:
-                    mid_x = pages[0]['x'] + pages[0]['w']
-                    page_name = pages[0]['name'] if tx < mid_x else pages[1]['name']
-
-                if page_name:
-                    all_tfs.append({
-                        'tf_self': tf_self,
-                        'story_id': story_id,
-                        'prev_tf': prev_tf,
-                        'next_tf': next_tf,
-                        'x': tx,
-                        'y': ty,
-                        'page_name': page_name
-                    })
+            if page_name:
+                tf_info['page_name'] = page_name
+                all_tfs.append(tf_info)
 
     return all_tfs
 
@@ -196,6 +209,68 @@ def _is_annotation_style(style):
         return False
     annotation_keywords = ['旁注', '小贴士', '贴士', '批注', '注释：']
     return any(k in style for k in annotation_keywords)
+
+
+def _annotation_sort_priority(story_id, story_data):
+    """排序优先级：正文 0，批注 1。同一行内正文在前，批注在后。"""
+    paras = story_data.get(story_id, [])
+    if paras and _is_annotation_style(paras[0]['style']):
+        return 1
+    return 0
+
+
+def _sort_stories(story_start, story_data, y_bin_size=60.0):
+    """对 story 进行智能排序：按页 → 按 y 分箱 → 正文在前批注在后 → 按 x。
+    
+    Args:
+        story_start: 每个 story 的起始位置信息
+        story_data: 每个 story 的段落数据
+        y_bin_size: y 坐标分箱大小（像素），同一行内的内容放在一起
+    
+    Returns:
+        排序后的 (story_id, start_info) 列表
+    """
+    items = list(story_start.items())
+    
+    # 先按页分组
+    pages = {}
+    for story_id, info in items:
+        page = info['page_name']
+        if page not in pages:
+            pages[page] = []
+        pages[page].append((story_id, info))
+    
+    result = []
+    # 按页排序
+    for page_name in sorted(pages.keys(), key=_page_sort_key):
+        page_items = pages[page_name]
+        
+        # 找出 y 范围
+        y_values = [info['y'] for _, info in page_items]
+        if not y_values:
+            continue
+        y_min = min(y_values)
+        y_max = max(y_values)
+        
+        # 按 y 分箱
+        bins = {}
+        for story_id, info in page_items:
+            bin_key = int((info['y'] - y_min) / y_bin_size)
+            if bin_key not in bins:
+                bins[bin_key] = []
+            bins[bin_key].append((story_id, info))
+        
+        # 每个分箱内：正文在前，批注在后；同类型按 x 排序
+        for bin_key in sorted(bins.keys()):
+            bin_items = bins[bin_key]
+            # 按 (是否批注, x) 排序
+            bin_items.sort(key=lambda item: (
+                _annotation_sort_priority(item[0], story_data),
+                item[1]['x']
+            ))
+            result.extend(bin_items)
+    
+    return result
 
 
 def _classify_heading(text, style):
@@ -299,14 +374,7 @@ def extract_idml_to_markdown(idml_path, output_md_path=None):
         all_tfs = _get_story_positions(z, spread_files, story_data)
         story_start = _get_story_start_info(all_tfs)
 
-    sorted_stories = sorted(
-        story_start.items(),
-        key=lambda item: (
-            _page_sort_key(item[1]['page_name']),
-            item[1]['y'],
-            item[1]['x']
-        )
-    )
+    sorted_stories = _sort_stories(story_start, story_data, y_bin_size=60.0)
 
     md_lines = []
     base_name = Path(idml_path).stem

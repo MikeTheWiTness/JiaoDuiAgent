@@ -61,22 +61,50 @@ class ModeSelector:
         self.on_change = on_change
         self.parent = parent
 
-        self.frame_source = ttk.Frame(parent, padding=10)
+        self.frame_source = ttk.Frame(parent, padding=(10, 10, 10, 0))
         self.frame_source.pack(fill=tk.X)
         self.source_label = ttk.Label(self.frame_source, text="来源模式：")
         self.source_label.pack(side=tk.LEFT)
         self.source_buttons = []
 
-        self.f1 = ttk.Frame(parent, padding=10)
+        self.frame_source_desc = ttk.Frame(parent, padding=(10, 2, 10, 4))
+        self.frame_source_desc.pack(fill=tk.X)
+        self.lbl_source_desc = ttk.Label(self.frame_source_desc, text="", foreground="#555", wraplength=1000, justify=tk.LEFT)
+        self.lbl_source_desc.pack(anchor=tk.W)
+
+        self.f1 = ttk.Frame(parent, padding=(10, 6, 10, 0))
         self.f1.pack(fill=tk.X)
         ttk.Label(self.f1, text="执行模式：").pack(side=tk.LEFT)
         self.exec_buttons = []
 
+        self.frame_exec_desc = ttk.Frame(parent, padding=(10, 2, 10, 4))
+        self.frame_exec_desc.pack(fill=tk.X)
+        self.lbl_exec_desc = ttk.Label(self.frame_exec_desc, text="", foreground="#555", wraplength=1000, justify=tk.LEFT)
+        self.lbl_exec_desc.pack(anchor=tk.W)
+
         self._source_options = ["讲义", "试卷"]
         self._exec_options = ["完整流程", "仅转换", "仅拆分", "仅校对", "仅生成PDF"]
 
+        self.source_descs = {}
+        self.exec_descs = {}
+
         self._build_source_buttons()
         self._build_exec_buttons()
+        self._update_descs()
+
+    def set_source_descriptions(self, descs):
+        self.source_descs = descs or {}
+        self._update_descs()
+
+    def set_exec_descriptions(self, descs):
+        self.exec_descs = descs or {}
+        self._update_descs()
+
+    def _update_descs(self):
+        s_text = self.source_descs.get(self.source_var.get(), "")
+        e_text = self.exec_descs.get(self.exec_var.get(), "")
+        self.lbl_source_desc.config(text=f"💡 {s_text}" if s_text else "")
+        self.lbl_exec_desc.config(text=f"💡 {e_text}" if e_text else "")
 
     def _build_source_buttons(self):
         for btn in self.source_buttons:
@@ -117,14 +145,18 @@ class ModeSelector:
         self._build_exec_buttons()
 
     def _on_change(self):
+        self._update_descs()
         if self.on_change:
             self.on_change()
 
     def pack_forget_source(self):
         self.frame_source.pack_forget()
+        self.frame_source_desc.pack_forget()
 
     def pack_source(self, before=None):
         if before:
             self.frame_source.pack(fill=tk.X, before=before)
+            self.frame_source_desc.pack(fill=tk.X, before=before)
         else:
             self.frame_source.pack(fill=tk.X)
+            self.frame_source_desc.pack(fill=tk.X)

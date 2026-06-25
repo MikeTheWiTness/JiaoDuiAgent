@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/witne/Desktop/校对临时/【2026秋】5年级语文·A+班·讲义/**)",
+      "Bash(unzip -l \"【2026秋】5年级语文·A+班·讲义.idml\")",
+      "Bash(powershell.exe -NoProfile -Command '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $p='\\\\''C:\\\\Users\\\\witne\\\\Desktop\\\\Python_Tools\\\\校对agent\\\\core\\\\idml_extractor.py'\\\\''; if \\(Test-Path -LiteralPath $p\\) { \\(Get-Item -LiteralPath $p\\).Length; '\\\\''---'\\\\''; \\(Get-Content -LiteralPath $p\\).Count; '\\\\'' lines'\\\\'' } else { '\\\\''NOT FOUND'\\\\'' }')"
+    ]
+  }
+}

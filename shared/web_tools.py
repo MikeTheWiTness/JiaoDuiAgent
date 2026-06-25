@@ -60,6 +60,8 @@ class WebFetchTool(BaseTool):
         try:
             if "sou-yun.cn" in url:
                 return self._fetch_souyun(url)
+            if "shidianguji.com" in url:
+                return self._fetch_shidianguji(url)
             return self._fetch_generic(url)
         except Exception as e:
             return f"[网页抓取失败: {e}]"
@@ -110,8 +112,98 @@ class WebFetchTool(BaseTool):
             return "[搜索结果为空：搜韵网未收录此内容]"
         return _truncate(text)
 
+    def _fetch_shidianguji(self, url: str) -> str:
+        import urllib.parse as _up
+        parsed = _up.urlparse(url)
+        path = parsed.path
+
+        query = ""
+        if "search" in path:
+            parts = [p for p in path.split("/") if p]
+            if len(parts) >= 2 and parts[-1] != "search":
+                query = _up.unquote(parts[-1])
+        if not query:
+            query = _up.parse_qs(parsed.query).get("q", [""])[0]
+        if not query:
+            query = _up.parse_qs(parsed.query).get("keyword", [""])[0]
+
+        if not query:
+            return "[识典古籍搜索需要提供关键词，如 https://www.shidianguji.com/search/关键词 或 ?q=关键词]"
+
+        search_url = f"https://www.shidianguji.com/search/{_up.quote(query)}"
+        try:
+            resp = requests.get(search_url, timeout=20, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            })
+            resp.encoding = "utf-8"
+        except Exception as e:
+            return f"[识典古籍搜索失败: {e}]"
+
+        results = _parse_shidianguji_search(resp.text)
+        if not results:
+            return "[搜索结果为空：识典古籍未收录此内容]"
+
+        first = results[0]
+        detail_url = first["url"]
+        if detail_url.startswith("/"):
+            detail_url = "https://www.shidianguji.com" + detail_url
+
+        try:
+            resp2 = requests.get(detail_url, timeout=20, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            })
+            resp2.encoding = "utf-8"
+        except Exception as e:
+            return f"[识典古籍详情页获取失败: {e}]"
+
+        text = _parse_shidianguji_detail(resp2.text)
+        if not text.strip():
+            text = _extract_text(resp2.text)
+        if not text.strip():
+            return "[识典古籍详情页内容为空]"
+
+        title = first.get("title", "")
+        header = f"【识典古籍】{title}\n\n" if title else "【识典古籍】\n\n"
+        return _truncate(header + text)
+
     async def _arun(self, *args: Any, **kwargs: Any) -> str:
         raise NotImplementedError
+
+
+def _parse_shidianguji_search(html: str):
+    results = []
+    patterns = [
+        r'<a[^>]+href="(/[^"]+)"[^>]*>([^<]+)</a>',
+        r'<div[^>]*class="[^"]*result[^"]*"[^>]*>.*?<a[^>]+href="(/[^"]+)"[^>]*>([^<]+)</a>',
+        r'<li[^>]*>.*?<a[^>]+href="(/book/[^"]+)"[^>]*>([^<]+)</a>',
+    ]
+    for pattern in patterns:
+        matches = re.findall(pattern, html, re.DOTALL)
+        for url, title in matches:
+            title = re.sub(r'<[^>]+>', '', title).strip()
+            if title and "/book/" in url and url not in [r["url"] for r in results]:
+                results.append({"title": title, "url": url})
+        if results:
+            break
+    return results[:10]
+
+
+def _parse_shidianguji_detail(html: str) -> str:
+    content_selectors = [
+        r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
+        r'<div[^>]*class="[^"]*text[^"]*"[^>]*>(.*?)</div>',
+        r'<article[^>]*>(.*?)</article>',
+        r'<div[^>]*id="content"[^>]*>(.*?)</div>',
+    ]
+    for selector in content_selectors:
+        m = re.search(selector, html, re.DOTALL)
+        if m:
+            text = _extract_text(m.group(1))
+            if len(text.strip()) > 20:
+                return text.strip()
+    return _extract_text(html).strip()
 
 
 # ============================================================
