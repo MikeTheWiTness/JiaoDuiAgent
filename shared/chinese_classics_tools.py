@@ -280,7 +280,8 @@ def _is_classical(clean_text, particle_density=None):
     if particle_density is None:
         density = _particle_density(clean_text)
     else:
-        density = particle_density
+        # 可能来自 detect_text_type 的含标点版本，重新计算以确保准确性
+        density = _particle_density(clean_text) if particle_density < 0.04 and len(clean_text) > 50 else particle_density
 
     if density >= 0.08:
         return True
@@ -293,8 +294,17 @@ def _is_classical(clean_text, particle_density=None):
         if m in clean_text:
             marker_count += 1
 
-    if density >= 0.05 and marker_count >= 3:
+    # 长文本要求更高的虚词密度（避免现代文引用古文时被误判）
+    if len(clean_text) > 500:
+        if density >= 0.07 and marker_count >= 5:
+            return True
+    elif density >= 0.06 and marker_count >= 4:
         return True
+
+    # 回退：出现「字+X」人名模式 + 官职关键词 +「曰」，大幅降低虚词阈值
+    if density >= 0.035 and marker_count >= 2:
+        if re.search(r'[一-鿿]{1,4}字[一-鿿]{1,4}', clean_text) or            re.search(r'(刺史|司马|长史|司农|法曹|参军事|太府|通事舍人|刺史|太守|县令|尚书|侍郎|御史|大理|鸿胪)', clean_text):
+            return True
 
     return False
 

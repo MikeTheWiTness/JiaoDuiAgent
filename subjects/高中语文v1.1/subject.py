@@ -1,4 +1,8 @@
-"""高中语文业务逻辑 —— 工具、提示词、拆分、校对、钩子。"""
+"""高中语文业务逻辑 —— 工具、提                "5. 同一道题中最多使用 2 次工具调用，超过则用自身知识完成校对。
+"
+示词、拆分、校对、钩                "   **硬性约束**：若前置参考中已提供权威原文和差异列表，则禁止再使用 web_search 或 web_fetch 搜索该段文言文/诗歌的原文，仅需基于差异列表逐条判断即可。
+"
+子。"""
 import os
 import sys
 
@@ -38,7 +42,7 @@ class SubjectApp:
         ]
 
     def get_max_tool_loops(self):
-        return 8
+        return 3
 
     def get_tool_instructions(self):
         web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
