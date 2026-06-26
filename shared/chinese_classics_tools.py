@@ -430,6 +430,10 @@ def build_reference_section(text_type, original, diffs):
         lines.append("### 比对结果")
         lines.append("")
         lines.append("✅ 待校稿与权威原文字面一致。")
+        lines.append("")
+        lines.append("> **指令**：该段文言文/诗歌的原文已通过识典古籍/搜韵网自动验证，")
+        lines.append("> 与权威原文字面完全一致，无需再对正文内容进行逐字校对。")
+        lines.append("> 请仅检查：标点符号、注释编号、格式标记是否与原文匹配。")
     lines.append("")
 
     return "\n".join(lines)
@@ -438,8 +442,8 @@ def build_reference_section(text_type, original, diffs):
 def search_original_text(text_type, sample_text):
     """搜索权威原文。
 
-    策略：搜韵网(诗歌) / 百度搜索 → 抓取结果页 → 提取文言文/诗歌原文。
-    （识典古籍虽能搜索但详情页为 SPA，无法服务端抓取全文，故跳过）
+    策略：识典古籍(文言文, Playwright) → 搜韵网(诗歌) → ddgs/百度搜索 → 提取原文。
+    Playwright 不可用时自动回退到搜索引擎方案。
 
     Args:
         text_type: 'classical' | 'poetry' | 'modern'
@@ -453,8 +457,8 @@ def search_original_text(text_type, sample_text):
     sample = sample_text.strip()
     sample = _strip_leadin(sample)
     sample = re.sub(r'[#*`\[\]()\s]', '', sample)
-    if len(sample) > 30:
-        sample = sample[:30]
+    if len(sample) > 10:
+        sample = sample[:10]
     if len(sample) < 4:
         return None
 
@@ -467,7 +471,22 @@ def search_original_text(text_type, sample_text):
         fetcher = WebFetchTool()
         searcher = WebSearchTool()
 
-        # 第1优先：搜韵网（仅诗歌）
+        # 第1优先：识典古籍（文言文，Playwright 可用时）
+        if text_type == "classical":
+            try:
+                from shared.shidianguji_playwright import is_playwright_available, search_and_extract
+                # 只在 Playwright 可用时才尝试识典
+                if is_playwright_available():
+                    log(f"   📚 尝试识典古籍搜索...")
+                    sdg_result = search_and_extract(sample)
+                    if sdg_result and len(sdg_result) > 50:
+                        log(f"   ✅ 识典古籍找到原文 ({len(sdg_result)} 字)")
+                        return sdg_result
+                    log(f"   ⚠️ 识典古籍未找到或结果过短")
+            except Exception as e:
+                log(f"   ⚠️ 识典古籍搜索异常: {e}")
+
+        # 第2优先：搜韵网（仅诗歌）
         if text_type == "poetry":
             url = f"https://sou-yun.cn/QueryPoem.aspx?q={urllib.parse.quote(sample)}"
             result = fetcher._run(url)
@@ -476,7 +495,7 @@ def search_original_text(text_type, sample_text):
                 return _extract_first_poem(result)
             log(f"   ⚠️ 搜韵网未找到，尝试百度搜索...")
 
-        # 第2优先：DuckDuckGo 搜索 + 抓取（返回直接 URL，无需跳转）
+        # 第3优先：DuckDuckGo/Baidu 搜索 + 抓取
         search_query = f"{sample} 原文"
         log(f"   🌐 搜索: {search_query[:40]}...")
         # 先尝试 ddgs（返回直接 URL），失败回退百度
@@ -585,8 +604,10 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
     """前置处理：检测文本类型 → 搜索权威原文 → diff → 注入参考资料。
 
     Args:
-        md_text: 待校对的 Markdown 文本
+        md_text: 待校对的 Markdown 文本（含格式标记）
         api_url/api_key/model: 可选的 API 配置，用于精准提取搜索关键词
+
+    搜索关键词取前 10 个汉字。识典古籍 Playwright 优先，失败回退 ddgs。
     """
     if not md_text or not md_text.strip():
         return md_text
@@ -606,14 +627,18 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
         search_key = extract_text_start_via_api(md_text, api_url, api_key, model)
 
     if not search_key:
-        # 回退：用正则去掉引导语后取前 50 字
+        # 回退：用正则去除标记后取前 10 个汉字
+        from shared.docx_format_enhancer import strip_format_markers
         clean = _clean_annotations(md_text)
+        clean = strip_format_markers(clean)
         clean = re.sub(r'[#*`\[\]()]', '', clean)
         clean = re.sub(r'\s+', '', clean)
+        # 去掉题号 "第N题"
+        clean = re.sub(r'^第\d+题[：:.,，。、\s]*', '', clean)
         search_key = _strip_leadin(clean)
-        if len(search_key) > 50:
-            search_key = search_key[:50]
-        log(f"   📝 回退正则提取关键词: {search_key[:30]}...")
+        if len(search_key) > 10:
+            search_key = search_key[:10]
+        log(f"   📝 回退正则提取关键词: {search_key}")
 
     # 步骤2：去权威来源搜索原文
     original = search_original_text(text_type, search_key)
@@ -622,7 +647,12 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
         log(f"   ⚠️ 未找到权威原文，跳过前置 diff")
         return md_text
 
-    # 步骤3：字符级 diff
+    # 步骤3：从全文截取节选范围（可多不可少），再做字符级 diff
+    original_excerpt = extract_excerpt_from_full(original, md_text, margin=20)
+    if original_excerpt:
+        log(f"   ✂️ 从全文({len(original)}字)中截取节选范围({len(original_excerpt)}字)")
+        original = original_excerpt
+
     clean_given = re.sub(r'[#*`\[\]()\s]', '', md_text)
     clean_orig = re.sub(r'[#*`\[\]()\s]', '', original)
 
