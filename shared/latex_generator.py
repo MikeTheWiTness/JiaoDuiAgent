@@ -10,6 +10,8 @@ import os
 import re
 import sys
 
+from shared.review_mode import extract_comments_from_md
+
 _counter = itertools.count(1)
 
 _TEMPLATE_FILE = None
@@ -193,6 +195,77 @@ def _extract_md_formatting(text: str, placeholder_map: dict[str, str]) -> str:
 
     text = re.sub(r"\*\*(.+?)\*\*", _bold_repl, text)
     text = re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", _italic_repl, text)
+    return text
+
+
+# Word 批注 [📝批注N：内容] 的标记正则
+_COMMENT_RE = re.compile(r'\[📝批注(\d+)：([^\]]+)\]')
+
+
+def _extract_comments_to_placeholders(text: str, comments: list[dict],
+                                       placeholder_map: dict[str, str]) -> str:
+    """将 [📝批注N：内容] 替换为 \\textsuperscript{\\textcircled{N}} 占位符。
+
+    Args:
+        text: 原始 markdown 文本
+        comments: 已提取的批注列表（由外部 extract_comments_from_md 提供）
+        placeholder_map: 占位符 → LaTeX 映射，会追加注入
+
+    Returns:
+        处理后的文本（批注标记已被替换为占位符）
+    """
+    if not comments:
+        return text
+
+    # 按位置从后往前替换，避免位置偏移（用 re.sub 替换每个独立标记）
+    def _repl(m):
+        cid = int(m.group(1))
+        key = f"COMMENTCIRCLE{cid}"
+        placeholder_map[key] = (
+            r"\textsuperscript{\textcircled{"
+            + str(cid) + r"}}"
+        )
+        return key
+
+    return _COMMENT_RE.sub(_repl, text)
+
+
+# Word 格式标记 → LaTeX 命令映射
+# 与 docx_format_enhancer._FMT_MARKERS 保持同步
+_FMT_MARKER_TO_LATEX = {
+    "着重": r"\CJKunderdot{",       # 着重号（需 xeCJKfntef 宏包）
+    "下划线": r"\underline{",        # 下划线（LaTeX 内置）
+    "波浪线": r"\uwave{",           # 波浪线（需 ulem 宏包）
+    "删除线": r"\sout{",           # 删除线（需 ulem 宏包）
+    "双删除线": r"\dout{",         # 双删除线（模板中自定义 \dout 命令）
+    "下标": r"\textsubscript{",     # 下标（LaTeX 内置）
+    "上标": r"\textsuperscript{",  # 上标（LaTeX 内置）
+}
+
+
+def _convert_format_markers(text: str, placeholder_map: dict[str, str]) -> str:
+    """将 Word 格式占位符 【xxx】...【/xxx】 转为 LaTeX 命令，避免作为原文写入 PDF。
+
+    处理顺序：先替换开启标记（→ LaTeX 命令 + {），再替换关闭标记（→ }）。
+    内部文本已经经过 markdown 格式处理，所以对齐括号即可。
+    """
+    if not re.search(r'【(?:着重|下划线|波浪线|删除线|双删除线|下标|上标)】', text):
+        return text  # 没有格式标记，直接返回
+
+    for marker, latex_cmd in _FMT_MARKER_TO_LATEX.items():
+        open_tag = f"【{marker}】"
+        close_tag = f"【/{marker}】"
+        # 用占位符保护 LaTeX 命令，避免后续 escaping 破坏
+        while open_tag in text and close_tag in text:
+            open_pos = text.find(open_tag)
+            close_pos = text.find(close_tag, open_pos + len(open_tag))
+            if close_pos == -1:
+                break
+            inner = text[open_pos + len(open_tag):close_pos]
+            key = f"FMTWORD{next(_counter)}"
+            placeholder_map[key] = latex_cmd + inner + "}"
+            text = text[:open_pos] + key + text[close_pos + len(close_tag):]
+
     return text
 
 
@@ -604,6 +677,13 @@ def _fix_missing_chars(text: str) -> str:
     # 省略号 …（U+2026）—— DejaVuSans 含此字符
     if '…' in text:
         text = text.replace('…', r'{\fallbacksymbols …}')
+    # FandolSong 已知缺失的 CJK 字符 — 用 fallbacksymbols 包裹
+    # (这些字符在 CJK 统一汉字区内但 FandolSong 字体不包含)
+    extra_chars = '奧稅說戶値彥'
+    for ch in extra_chars:
+        if ch in text:
+            text = text.replace(ch, r'{allbacksymbols ' + ch + '}')
+
     # 兜底：剥离便携版回退字体（DejaVuSans）不含的 emoji 字符。
     # DejaVuSans 只覆盖 BMP 内的部分区段，不含 emoji 平面（U+1F000+）
     # 也不含 Dingbats（U+2700–U+27BF）等。{\fallbacksymbols ...} 对这些字符无效，
@@ -641,7 +721,13 @@ def build_paracol_content(md_content: str, corrections: list[dict],
                           tool_calls: list[dict] | None = None) -> str:
     corrections = corrections or []
 
+    # 1. 提取 Word 批注 [📝批注N：内容]，替换为数字上标占位符，避免混入原文
+    comments = extract_comments_from_md(md_content)
+
     md_processed, placeholder_map = _extract_images(md_content)
+
+    # 2. 将批注替换为上标圆圈数字占位符（必须在 escaping 之前完成）
+    md_processed = _extract_comments_to_placeholders(md_processed, comments, placeholder_map)
 
     # 检测新格式：内联标记 【N原文|改为】（必须在格式化之前）
     has_inline = bool(_INLINE_MARKER_RE.search(md_processed))
@@ -649,6 +735,7 @@ def build_paracol_content(md_content: str, corrections: list[dict],
         md_processed, numbered = _process_inline_markers(md_processed, corrections, placeholder_map)
 
     md_processed = _extract_md_formatting(md_processed, placeholder_map)
+    md_processed = _convert_format_markers(md_processed, placeholder_map)
     md_processed = re.sub(r'^#{1,4}\s+(.+)', r'\\textbf{\1}', md_processed, flags=re.MULTILINE)
 
     # 修复 Pandoc 转义残留：非数学内容的 \[...\] → [...]
@@ -672,7 +759,29 @@ def build_paracol_content(md_content: str, corrections: list[dict],
     lines.append(r"\switchcolumn")
     lines.append("")
 
+    # --- 右栏：原有批注 ---
+    if comments:
+        lines.append(r"\textbf{\Large 📝 原有批注}")
+        lines.append(r"\\")
+        lines.append("")
+        for c in comments:
+            cid = c["id"]
+            ctext = _escape_text(c["text"])
+            lines.append(
+                r"\correctionbox{"
+                r"\textcircled{" + str(cid) + r"} "
+                + ctext + r"}"
+            )
+            lines.append(r"\medskip")
+            lines.append("")
+        lines.append(r"\bigskip")
+        lines.append("")
+
+    # --- 右栏：修改意见 ---
     if numbered:
+        lines.append(r"\textbf{\Large 🔴 修改意见}")
+        lines.append(r"\\")
+        lines.append("")
         for corr in numbered:
             lines.append(r"\correctionbox{" + _format_right_entry(corr) + "}")
             lines.append(r"\medskip")
