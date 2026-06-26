@@ -233,7 +233,7 @@ def _is_poetry(lines, clean_text, particle_density=0):
         l = lengths[0]
         if l in [20, 28, 40, 56]:
             # 额外检查：虚词密度 < 0.03 才可能是诗歌，否则是短文言文传记
-            if particle_density < 0.03 and _has_poetry_markers(clean_text):
+            if particle_density < 0.06 and _has_poetry_markers(clean_text):
                 return True
         if l >= 8 and l <= 60:
             if _is_clear_poetry_line(clean_text):
@@ -273,7 +273,7 @@ def _is_clear_poetry_line(text):
     if std_dev <= 1.0:
         # 额外检查：文言文散文（而非诗歌）的虚词密度通常 >= 0.03
         # 避免把短篇文言文传记（如韦凑传开头）误判为诗歌
-        if _particle_density(text) < 0.03:
+        if _particle_density(text) < 0.06:
             return True
         # 如果虚词密度达到文言文水平，则不是诗歌
         return False
