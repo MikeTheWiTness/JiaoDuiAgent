@@ -38,7 +38,7 @@ class SubjectApp:
         ]
 
     def get_max_tool_loops(self):
-        return 10
+        return 8
 
     def get_tool_instructions(self):
         web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
@@ -50,12 +50,12 @@ class SubjectApp:
             lines.append("\n".join(f"- `{t.name}`: {t.description}" for t in web_tools))
             lines.append(
                 "\n使用规则：\n"
-                "1. 涉及古诗文原文、作者信息、文学常识等，**优先使用 web_fetch 访问识典古籍**（权威来源）。\n"
-                "   - 文言文/古文：调用 `web_fetch` 访问 https://www.shidianguji.com/search/关键词\n"
-                "   - 古诗词/诗歌：调用 `web_fetch` 访问 https://sou-yun.cn/QueryPoem.aspx?q=诗句\n"
-                "2. 识典古籍或搜韵网找不到时，再用 web_search 全网搜索。\n"
-                "3. 成语典故、现代文知识点等，可直接用 web_search 验证。\n"
-                "4. 不得凭模型自身记忆判断古诗文原文，必须通过工具检索验证。\n"
+                "1. **首先检查「前置参考」**：如果题目上方有「## 前置参考：文言文原文校验」或"
+                "「## 前置参考：诗歌原文校验」，说明程序已经自动搜索了权威原文并做了 diff 比对。"
+                "直接参考其中的原文和差异列表，无需再次搜索同样的内容。\n"
+                "2. 前置参考中未覆盖的信息（如典故出处、作者生平、字词释义等），按需搜索验证。\n"
+                "3. 每个知识点最多搜索 1 次，搜索无结果时使用模型自身知识判断，不得反复重试。\n"
+                "4. 使用 web_fetch 访问识典古籍/搜韵网失败时，直接改用模型知识，不再回退到 web_search。\n"
             )
 
         return "".join(lines)
@@ -95,7 +95,7 @@ class SubjectApp:
             api_key = options.get("api_key", "")
             model = options.get("model", "")
             from shared.smart_split import smart_split
-            problems = smart_split(md_content, api_url, api_key, model)
+            problems = smart_split(md_content, api_url, api_key, model, md_file=md_file)
         else:
             log(f"⚠️ 未知分割模式: {split_mode}，使用规则模式")
             return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
@@ -122,7 +122,7 @@ class SubjectApp:
             api_key = options.get("api_key", "")
             model = options.get("model", "")
             from shared.smart_split import smart_split
-            problems = smart_split(md_content, api_url, api_key, model)
+            problems = smart_split(md_content, api_url, api_key, model, md_file=md_file)
         else:
             log(f"⚠️ 未知分割模式: {split_mode}，使用规则模式")
             return default_split_exam(md_file, output_root, base_name, self.config)
@@ -178,6 +178,18 @@ class SubjectApp:
 
             (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
 
+            # 同步生成 _clean.md（去除所有格式标记的纯文本版）
+            try:
+                from shared.docx_format_enhancer import strip_format_markers
+                clean = strip_format_markers(new_content)
+                # 去掉 [📝批注] 标记
+                clean = re.sub(r'\[📝批注\d+：.+?\]', '', clean)
+                clean = re.sub(r'\*\*([^*]+)\*\*', r'', clean)
+                clean = re.sub(r'__([^_]+)__', r'', clean)
+                (q_dir / f"第{idx}题_clean.md").write_text(clean, encoding='utf-8')
+            except Exception:
+                pass
+
         log(f"📂 拆分完成: {len(problems)} 题")
         return True
 
@@ -200,9 +212,15 @@ class SubjectApp:
             prompt = self.get_review_prompt()
         else:
             prompt = self.get_question_prompt()
+
+        # 构建前置处理 hook：文言文/诗歌的前置搜索 + 自动 diff
+        def pre_hook(md_content):
+            return self.pre_proofread_hook(md_content, api_url, api_key, model)
+
         return default_proofread_one(
             api_url, api_key, model, q_dir, q_name, is_knowledge,
-            prompt, self.tools, self.get_max_tool_loops(), generate_pdf
+            prompt, self.tools, self.get_max_tool_loops(), generate_pdf,
+            pre_hook=pre_hook
         )
 
     def collect_paper_dirs(self, base_path):
@@ -220,9 +238,9 @@ class SubjectApp:
     def get_supported_extensions(self):
         return {".docx", ".doc", ".md"}
 
-    def pre_proofread_hook(self, md_text):
+    def pre_proofread_hook(self, md_text, api_url=None, api_key=None, model=None):
         from shared.chinese_classics_tools import preprocess_for_proofread
-        return preprocess_for_proofread(md_text)
+        return preprocess_for_proofread(md_text, api_url, api_key, model)
 
     def post_proofread_hook(self, result, q_dir):
         return result
