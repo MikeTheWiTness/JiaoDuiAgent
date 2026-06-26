@@ -495,15 +495,42 @@ def default_split_exam(md_file, output_root, base_name, config):
     return True
 
 
-def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf):
+def _format_tool_calls_summary(tool_calls: list) -> str:
+    """生成工具调用摘要，追加到校对报告末尾。"""
+    if not tool_calls:
+        return ""
+    lines = [
+        "\n\n---\n",
+        "## 📋 工具调用日志\n\n",
+        f"共调用 {len(tool_calls)} 次\n\n",
+    ]
+    for i, tc in enumerate(tool_calls, 1):
+        tool = tc.get("tool", "?")
+        args = tc.get("args", {})
+        result = tc.get("result", "")
+        # 截取参数中可读的 query/url
+        arg_summary = args.get("query", "") or args.get("url", "") or str(args)[:80]
+        result_preview = result[:500].replace("\n", " ").strip()
+        lines.append(f"**{i}. {tool}** — `{arg_summary[:100]}`\n\n")
+        lines.append(f"> {result_preview}\n\n")
+    return "".join(lines)
+
+
+def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None):
+    target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
-    for f in os.listdir(q_dir):
-        if f.endswith(".md"):
-            with open(os.path.join(q_dir, f), 'r', encoding='utf-8') as fm:
-                md_content = fm.read()
-            break
+    if os.path.exists(target_md):
+        with open(target_md, 'r', encoding='utf-8') as fm:
+            md_content = fm.read()
     if not md_content:
         return {"success": False, "result": "", "error": "未找到 md 文件"}
+
+    # 前置处理 hook：文言文/诗歌的前置搜索 + diff
+    if pre_hook:
+        try:
+            md_content = pre_hook(md_content)
+        except Exception as e:
+            log(f"   ⚠️ 前置处理异常：{e}")
 
     images_b64 = []
     img_dir = os.path.join(q_dir, "images")
@@ -540,6 +567,9 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
             try:
                 with open(md_path, "w", encoding="utf-8") as f:
                     f.write(res)
+                    # 追加工具调用摘要，方便排查搜索质量
+                    if tool_calls:
+                        f.write(_format_tool_calls_summary(tool_calls))
             except Exception:
                 pass
             save_proofread_json(res, q_dir, tool_calls)
