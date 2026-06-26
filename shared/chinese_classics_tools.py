@@ -1,6 +1,10 @@
 """文言文/诗歌校对工具集 —— 文本类型识别、前置搜索、自动 diff。"""
 import re
 import difflib
+import requests
+import json
+
+from core.logging_utils import log
 
 
 CLASSICAL_PARTICLES = [
@@ -11,6 +15,147 @@ CLASSICAL_PARTICLES = [
     "不", "弗", "毋", "勿", "未", "非",
     "因", "故", "遂", "乃", "辄", "便",
 ]
+
+# 批注标记：匹配 [📝批注N：...] 或其变体
+_ANNOTATION_RE = re.compile(r'\[📝批注\d+[：:][^\]]*\]')
+
+# 下划线/波浪线/强调标记 — 用中文全角括号
+_FORMATTING_MARKER_RE = re.compile(r'【(?:波浪线|下划线|加点|/)?】|【/?[波浪线下划线加点]+】')
+
+# Markdown 强调标记和 HTML 标签
+_MD_BOLD_RE = re.compile(r'\*\*[^*]+\*\*|__[^_]+__|<[^>]+>')
+
+# 试题引导语模式
+_LEADIN_PATTERNS = [
+    # "阅读下面的文言文，完成1-6题" — 允许批注标记插入
+    re.compile(r'阅读下面的(?:文言文|古诗|唐诗|宋词|词|诗歌|元曲|散曲|文字|作品|文章|这首词|这首诗)[，。,\.、\s]*完成\d+(?:[—\-～~]\d+)?题[。]?(\[[^\]]*\])?'),
+    re.compile(r'阅读下面的(?:文言文|古诗|唐诗|宋词|词|诗歌|元曲|散曲|文字|作品|文章|这首词|这首诗)[，。,\.、\s]*完成下面小?题[。]?'),
+    # "二、文言文阅读（本题共4道小题，19分）" 等段落标题
+    re.compile(r'^[\d一二三四五六七八九十]+[、，\.]\s*(?:文言文|古代诗歌|古诗词|现代文)阅读\s*[（(][^）)]*[）)]'),
+    re.compile(r'^[（(]节选自[^）)]*[）)]'),
+    # Markdown 粗体标题
+    re.compile(r'\*\*[\d一二三四五六七八九十]+、[^*]+\*\*'),
+]
+
+
+def _clean_annotations(text):
+    """清理文本中的批注标记、格式标记，方便后续正则匹配。
+
+    处理嵌套批注如 [📝批注2：原[📝批注27：源]文为杨字]。
+    """
+    # 处理可能嵌套的批注标记：[📝批注N：...] — 找到配对的 ]
+    result = []
+    i = 0
+    while i < len(text):
+        # 查找 [📝批注 开头
+        m = re.match(r'\[📝批注\d+[：:]', text[i:])
+        if m:
+            # 找到这个批注标记的配对方括号
+            depth = 1
+            j = i + m.end()
+            while j < len(text) and depth > 0:
+                if text[j] == '[':
+                    depth += 1
+                elif text[j] == ']':
+                    depth -= 1
+                j += 1
+            i = j  # 跳过整个批注标记
+        else:
+            result.append(text[i])
+            i += 1
+    result = ''.join(result)
+
+    # 清理格式标记（【波浪线】等）
+    result = _FORMATTING_MARKER_RE.sub('', result)
+    # 清理 Markdown 强调和 HTML 标签
+    result = _MD_BOLD_RE.sub('', result)
+    # 清理残留的方括号
+    result = result.replace('[', '').replace(']', '')
+    # 清理连续逗号/空白
+    result = re.sub(r'[,，]{2,}', '，', result)
+    result = re.sub(r'\s{2,}', ' ', result)
+    return result
+
+
+def _strip_leadin(text):
+    """去掉试题引导语，返回正文开头的纯文本片段。"""
+    # 先清理批注标记，否则会干扰引导语正则匹配
+    result = _clean_annotations(text)
+    for pat in _LEADIN_PATTERNS:
+        result = pat.sub("", result)
+    # 再去掉常见的前缀标注
+    result = re.sub(r'^[\(（].*?[\)）]', '', result)
+    result = re.sub(r'^[\d一二三四五六七八九十]+[、．.．]\s*', '', result)
+    return result.strip()
+
+
+def extract_text_start_via_api(text, api_url, api_key, model, timeout=15):
+    """使用 API 从试题文本中提取文言文/诗歌正文的开头 20 字。
+
+    用于生成精准的搜索关键词，避免引导语干扰。
+    返回提取到的开头文本，失败返回 None。
+    """
+    # 清理批注标记，避免干扰 LLM 判断
+    clean_text = _clean_annotations(text)
+    sample = clean_text[:300]
+
+    system_prompt = (
+        "你是一个高精度的文本提取工具。你的任务是从语文试题文本中提取"
+        "文言文或古诗词正文的开头部分。"
+        "只返回正文内容，不要返回任何解释、标点或其他文字。"
+    )
+
+    user_prompt = (
+        "从以下语文试题文本中，提取文言文/古诗/词/曲的正文开头20个字：\n"
+        "\n"
+        "规则：\n"
+        "1. 去掉\"阅读下面的文言文，完成1-4题\"等引导语\n"
+        "2. 去掉题号（如\"一、\"\"1.\"）和段落标题（如\"**二、文言文阅读**\"）\n"
+        "3. 去掉作者名和出处标注（如\"（节选自《新唐书》）\"）\n"
+        "4. 去掉【波浪线】等格式标记\n"
+        "5. 只返回正文的前20个汉字，不要标点\n"
+        "6. 如果文本不包含文言文或古诗词（纯白话文/现代文），返回 MODERN\n"
+        "\n"
+        f"文本：\n{sample}\n"
+        "\n"
+        "只返回提取结果，不要任何其他内容。"
+    )
+
+    try:
+        chat_url = api_url.rstrip("/")
+        if not chat_url.endswith("/chat/completions"):
+            chat_url += "/chat/completions"
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 50,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(chat_url, json=payload, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        result = resp.json()["choices"][0]["message"]["content"].strip()
+        log(f"   🔧 API 原始返回: {result[:80]}")
+        if result == "MODERN" or not result:
+            return None
+        # 清理结果：去标点、取前20字
+        clean = re.sub(r'[^一-鿿]', '', result)
+        if len(clean) > 20:
+            clean = clean[:20]
+        if len(clean) < 3:
+            return None
+        log(f"   🎯 API 提取正文开头：{clean}")
+        return clean
+    except Exception as e:
+        log(f"   ⚠️ API 提取正文开头失败：{e}")
+        return None
 
 
 def detect_text_type(text):
@@ -187,6 +332,62 @@ def diff_characters(original, given):
     }
 
 
+def extract_excerpt_from_full(full_text, excerpt_text, margin=20):
+    """从识典全文(full_text)中，截取出与节选(excerpt_text)对应的区间。
+
+    用 difflib 对齐全文与节选（去标点版），保留匹配区间的两端各 margin 字。
+    可多不可少——确保不因为截断而漏掉节选边缘文字。
+
+    Args:
+        full_text: 识典古籍全文（带标点）
+        excerpt_text: 试卷节选文本（带标点）
+        margin: 两端各保留的额外字数，默认 20
+
+    Returns:
+        str: 截取后的原文区间，或 None（节选在全文找不到匹配时）
+    """
+    if not full_text or not excerpt_text:
+        return None
+
+    def _norm(s):
+        return re.sub(r'[^一-鿿]', '', s)
+
+    n_full = _norm(full_text)
+    n_excerpt = _norm(excerpt_text)
+
+    if len(n_excerpt) == 0 or len(n_full) == 0:
+        return None
+
+    matcher = difflib.SequenceMatcher(None, n_full, n_excerpt)
+    blocks = matcher.get_matching_blocks()
+
+    real_blocks = [b for b in blocks if b.size > 0]
+    if not real_blocks:
+        return None
+
+    first_start = real_blocks[0].a
+    last_end = real_blocks[-1].a + real_blocks[-1].size
+
+    start = max(0, first_start - margin)
+    end = min(len(n_full), last_end + margin)
+
+    # 映射去标点位置 → 原始带标点位置
+    chi_pos = 0
+    full_start = full_end = 0
+    for i, ch in enumerate(full_text):
+        if full_start == 0 and chi_pos == start:
+            full_start = i
+        if chi_pos == end:
+            full_end = i
+            break
+        if '一' <= ch <= '鿿':
+            chi_pos += 1
+    else:
+        full_end = len(full_text)
+
+    return full_text[full_start:full_end]
+
+
 def build_reference_section(text_type, original, diffs):
     type_label = {
         "classical": "文言文",
@@ -235,35 +436,90 @@ def build_reference_section(text_type, original, diffs):
 
 
 def search_original_text(text_type, sample_text):
+    """搜索权威原文。
+
+    策略：搜韵网(诗歌) / 百度搜索 → 抓取结果页 → 提取文言文/诗歌原文。
+    （识典古籍虽能搜索但详情页为 SPA，无法服务端抓取全文，故跳过）
+
+    Args:
+        text_type: 'classical' | 'poetry' | 'modern'
+        sample_text: 待搜索的关键词（应尽量是正文而非引导语）
+    """
     if text_type == "modern":
         return None
     if not sample_text or not sample_text.strip():
         return None
 
     sample = sample_text.strip()
-    if len(sample) > 50:
-        sample = sample[:50]
+    sample = _strip_leadin(sample)
+    sample = re.sub(r'[#*`\[\]()\s]', '', sample)
+    if len(sample) > 30:
+        sample = sample[:30]
+    if len(sample) < 4:
+        return None
+
+    log(f"   🔍 搜索关键词: {sample}")
 
     try:
-        from shared.web_tools import WebFetchTool
-        fetcher = WebFetchTool()
+        from shared.web_tools import WebFetchTool, WebSearchTool
+        import urllib.parse
 
+        fetcher = WebFetchTool()
+        searcher = WebSearchTool()
+
+        # 第1优先：搜韵网（仅诗歌）
         if text_type == "poetry":
-            import urllib.parse
             url = f"https://sou-yun.cn/QueryPoem.aspx?q={urllib.parse.quote(sample)}"
             result = fetcher._run(url)
             if result and not result.startswith("[") and "搜索结果为空" not in result:
+                log(f"   ✅ 搜韵网找到结果")
                 return _extract_first_poem(result)
+            log(f"   ⚠️ 搜韵网未找到，尝试百度搜索...")
 
-        if text_type == "classical" or text_type == "poetry":
-            import urllib.parse
-            url = f"https://www.shidianguji.com/search/{urllib.parse.quote(sample)}"
-            result = fetcher._run(url)
-            if result and not result.startswith("[") and "未收录" not in result and "为空" not in result:
-                return _extract_first_classical(result)
+        # 第2优先：DuckDuckGo 搜索 + 抓取（返回直接 URL，无需跳转）
+        search_query = f"{sample} 原文"
+        log(f"   🌐 搜索: {search_query[:40]}...")
+        # 先尝试 ddgs（返回直接 URL），失败回退百度
+        search_result = None
+        for backend in ["ddgs", "baidu"]:
+            try:
+                search_result = searcher._run(search_query, backend=backend)
+                if search_result and not search_result.startswith("[E"):
+                    break
+            except Exception:
+                continue
 
-    except Exception:
-        pass
+        if search_result:
+            try:
+                items = json.loads(search_result)
+                for item in items:
+                    url = item.get("url", "")
+                    if not url:
+                        continue
+                    # 跳过百度文库（403 反爬）
+                    if "wenku.baidu.com" in url:
+                        continue
+
+                    log(f"   📄 尝试抓取: {item.get('title', '')[:50]}")
+                    page = fetcher._run(url)
+                    if page and len(page) > 200 and not page.startswith("["):
+                        # 提取页面中的文言文/诗歌部分
+                        if text_type == "poetry":
+                            extracted = _extract_first_poem(page)
+                        else:
+                            extracted = _extract_first_classical(page)
+                        if extracted and len(extracted) > 30:
+                            log(f"   ✅ 搜索→抓取成功 ({len(extracted)} 字)")
+                            return extracted
+                        else:
+                            log(f"   ⚠️ 页面未提取到足够文本（{len(extracted) if extracted else 0} 字）")
+            except (json.JSONDecodeError, Exception) as e:
+                log(f"   ⚠️ 搜索结果解析失败: {e}")
+
+        log(f"   ⚠️ 搜索未找到可用原文")
+
+    except Exception as e:
+        log(f"   ⚠️ 前置搜索异常: {e}")
 
     return None
 
@@ -287,24 +543,51 @@ def _extract_first_poem(text):
 
 
 def _extract_first_classical(text):
+    """从网页文本中提取文言文正文。跳过导航、页眉等噪音。"""
     if not text:
         return None
     lines = text.strip().splitlines()
     result_lines = []
+    started = False
+
     for line in lines:
         stripped = line.strip()
+        # 跳过明显非正文的行
+        if not stripped:
+            continue
         if stripped.startswith("【") or stripped.startswith("##"):
             continue
-        if stripped:
-            result_lines.append(stripped)
-        if len(result_lines) >= 30:
+        if len(stripped) < 6:
+            continue
+        # 跳过纯导航/链接行（含大量空格或特殊字符少的中文）
+        chinese = re.findall(r'[一-鿿]', stripped)
+        if len(chinese) < 4:
+            continue
+
+        # 检测"正文开始"信号：出现高密度文言虚词或连续中文
+        density = _particle_density(''.join(chinese)) if chinese else 0
+        if not started:
+            if density >= 0.03 or len(chinese) >= 15:
+                started = True
+            else:
+                continue
+
+        result_lines.append(stripped)
+        if len(result_lines) >= 40:
             break
-    if result_lines:
+
+    if len(result_lines) >= 3:
         return "\n".join(result_lines)
     return None
 
 
-def preprocess_for_proofread(md_text):
+def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
+    """前置处理：检测文本类型 → 搜索权威原文 → diff → 注入参考资料。
+
+    Args:
+        md_text: 待校对的 Markdown 文本
+        api_url/api_key/model: 可选的 API 配置，用于精准提取搜索关键词
+    """
     if not md_text or not md_text.strip():
         return md_text
 
@@ -313,20 +596,42 @@ def preprocess_for_proofread(md_text):
     if text_type == "modern":
         return md_text
 
-    sample = re.sub(r'[#*`\[\]()]', '', md_text)
-    sample = re.sub(r'\s+', '', sample)
-    if len(sample) > 100:
-        sample = sample[:100]
+    log(f"   📖 检测到文本类型: {'文言文' if text_type == 'classical' else '诗歌'}，启动前置搜索...")
 
-    original = search_original_text(text_type, sample)
+    # 步骤1：生成搜索关键词
+    search_key = None
+
+    if api_url and api_key and model:
+        # 优先使用 API 精准提取正文开头
+        search_key = extract_text_start_via_api(md_text, api_url, api_key, model)
+
+    if not search_key:
+        # 回退：用正则去掉引导语后取前 50 字
+        clean = _clean_annotations(md_text)
+        clean = re.sub(r'[#*`\[\]()]', '', clean)
+        clean = re.sub(r'\s+', '', clean)
+        search_key = _strip_leadin(clean)
+        if len(search_key) > 50:
+            search_key = search_key[:50]
+        log(f"   📝 回退正则提取关键词: {search_key[:30]}...")
+
+    # 步骤2：去权威来源搜索原文
+    original = search_original_text(text_type, search_key)
 
     if original is None:
+        log(f"   ⚠️ 未找到权威原文，跳过前置 diff")
         return md_text
 
+    # 步骤3：字符级 diff
     clean_given = re.sub(r'[#*`\[\]()\s]', '', md_text)
     clean_orig = re.sub(r'[#*`\[\]()\s]', '', original)
 
     diff_result = diff_characters(clean_orig, clean_given)
     reference = build_reference_section(text_type, original, diff_result["differences"])
+
+    if diff_result["identical"]:
+        log(f"   ✅ 前置校验完成：原文一致，无需 LLM 额外搜索")
+    else:
+        log(f"   ⚡ 发现 {len(diff_result['differences'])} 处字面差异，已注入 prompt 供 LLM 判断")
 
     return reference + "\n---\n\n" + md_text
