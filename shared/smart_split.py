@@ -1,4 +1,6 @@
 import re
+import os
+from pathlib import Path
 from core.logging_utils import log
 from core.api_client import call_api
 
@@ -7,10 +9,11 @@ SMART_SPLIT_PROMPT = """你是专业的语文试卷结构分析专家。请在�
 
 规则：
 1. **绝对不修改原文任何一个字**，只在题目边界插入标签
-2. 每个完整题目单元（一篇文言文+几道小题、一首诗+鉴赏题等）用一对 <problem> 标签包裹
-3. 引言、说明、过渡文字、参考答案等非题目内容不标记
-4. 标签必须单独占一行，不要和正文混在一起
-5. 输出完整的带标签文本，不要加其他解释
+2. 每个完整题目单元（一篇文言文+几道小题、一首诗+鉴赏题等 + 该题的答案解析）用一对 <problem> 标签包裹
+3. **答案解析是题目的一部分**：如果某道题后面紧跟着答案、解析、参考答案等内容，必须将它们也包含在同一个 <problem> 标签内
+4. **仅跳过**：试卷级别的标题、总分说明、考试时间等全局信息。这些不属于任何一道题
+5. 标签必须单独占一行，不要和正文混在一起
+6. 输出完整的带标签文本，不要加其他解释
 
 示例：
 ```
@@ -26,19 +29,40 @@ SMART_SPLIT_PROMPT = """你是专业的语文试卷结构分析专家。请在�
 ```"""
 
 
+SMART_SPLIT_MAX_TOKENS = 262144  # 256K，支持 50+ 页试卷完整输出
+
+
 def parse_problem_tags(text):
     pattern = r"<problem>(.*?)</problem>"
     matches = re.findall(pattern, text, re.DOTALL)
     return [{"content": m.strip()} for m in matches]
 
 
-def smart_split_with_callable(md_content, llm_callable):
+def _dump_smart_split_raw(raw_text, md_file, label=""):
+    """将 LLM 返回的原始标注文本保存到原始 MD 同目录，方便排查。"""
+    try:
+        if md_file:
+            base_dir = Path(md_file).parent
+        else:
+            base_dir = Path.cwd()
+        suffix = f"_{label}" if label else ""
+        dump_path = base_dir / f"_smart_split_raw{suffix}.md"
+    except Exception:
+        dump_path = Path.cwd() / "_smart_split_raw.md"
+
+    dump_path.write_text(raw_text or "(空)", encoding='utf-8')
+    log(f"   📄 智能分割原始输出已保存: {dump_path}")
+
+
+def smart_split_with_callable(md_content, llm_callable, md_file=None):
     for attempt in range(2):
         try:
             result_text = llm_callable(md_content, SMART_SPLIT_PROMPT)
         except Exception as e:
             log(f"   ⚠️ 智能分割第 {attempt+1} 次调用失败: {e}")
             continue
+
+        _dump_smart_split_raw(result_text, md_file, label=f"attempt{attempt+1}")
 
         problems = parse_problem_tags(result_text)
         problems = [p for p in problems if p["content"].strip()]
@@ -52,13 +76,14 @@ def smart_split_with_callable(md_content, llm_callable):
     return [{"content": md_content}]
 
 
-def smart_split(md_content, api_url, api_key, model):
+def smart_split(md_content, api_url, api_key, model, md_file=None):
     def _llm_call(text, prompt):
         result, _ = call_api(
             api_url, api_key, model,
             text, [], "智能分割",
-            prompt, tools=[], max_loops=1
+            prompt, tools=[], max_loops=1,
+            max_tokens=SMART_SPLIT_MAX_TOKENS,
         )
         return result
 
-    return smart_split_with_callable(md_content, _llm_call)
+    return smart_split_with_callable(md_content, _llm_call, md_file=md_file)

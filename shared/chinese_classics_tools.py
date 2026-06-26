@@ -23,7 +23,6 @@ _ANNOTATION_RE = re.compile(r'\[📝批注\d+[：:][^\]]*\]')
 _FORMATTING_MARKER_RE = re.compile(r'【(?:波浪线|下划线|加点|/)?】|【/?[波浪线下划线加点]+】')
 
 # Markdown 强调标记和 HTML 标签
-_MD_BOLD_RE = re.compile(r'\*\*[^*]+\*\*|__[^_]+__|<[^>]+>')
 
 # 试题引导语模式
 _LEADIN_PATTERNS = [
@@ -67,8 +66,11 @@ def _clean_annotations(text):
 
     # 清理格式标记（【波浪线】等）
     result = _FORMATTING_MARKER_RE.sub('', result)
-    # 清理 Markdown 强调和 HTML 标签
-    result = _MD_BOLD_RE.sub('', result)
+    # 清理 Markdown 强调标记（保留内部文字）
+    result = re.sub(r'\*\*([^*]+)\*\*', r'\1', result)
+    result = re.sub(r'__([^_]+)__', r'\1', result)
+    # 清理 HTML 标签
+    result = re.sub(r'<[^>]+>', '', result)
     # 清理残留的方括号
     result = result.replace('[', '').replace(']', '')
     # 清理连续逗号/空白
