@@ -1,0 +1,1 @@
+- [识典古籍文本提取方案](shidianguji-text-extraction.md) — ADR 0004 全部 5 个 Issue 已完成，65 个测试通过，端到端交付
