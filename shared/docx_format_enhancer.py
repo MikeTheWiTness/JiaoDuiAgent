@@ -31,10 +31,16 @@ def extract_special_formats(docx_path):
             'start_pos': 在段落中的起始位置
         }
     """
+    Document = None
     try:
-        import docx
-        Document = docx.Document
+        from docx import Document
     except (ImportError, AttributeError):
+        try:
+            import docx as _dx
+            Document = _dx.Document
+        except (ImportError, AttributeError):
+            pass
+    if Document is None:
         log("⚠️ python-docx 未安装或版本不兼容，无法提取特殊格式")
         return []
 
