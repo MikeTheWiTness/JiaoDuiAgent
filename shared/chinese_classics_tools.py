@@ -537,6 +537,8 @@ def search_original_text(text_type, sample_text):
             try:
                 items = json.loads(search_result)
                 for item in items:
+                    if not isinstance(item, dict):
+                        continue
                     url = item.get("url", "")
                     if not url:
                         continue

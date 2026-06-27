@@ -124,6 +124,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
     for retry in range(MAX_RETRY + 1):
         tool_calls_log.clear()
         try:
+            recent_results = []
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": [
