@@ -4,7 +4,7 @@ import os
 import tempfile
 import shutil
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.review_latex import (
     generate_review_latex,
@@ -31,13 +31,13 @@ class TestEscapeText(unittest.TestCase):
 
 class TestMarkerReplacement(unittest.TestCase):
     def test_single_marker(self):
-        md = "原文[📝批注1：批注内容]继续"
+        md = '原文<批注 id=1><原>此处</原><改>批注内容</改></批注>继续'
         result = _replace_markers_with_circled_numbers(md)
         self.assertIn("①", result)
-        self.assertNotIn("📝批注1", result)
+        self.assertNotIn('批注', result)
 
     def test_multiple_markers(self):
-        md = "开头[📝批注1：内容1]中间[📝批注2：内容2]结尾"
+        md = '开头<批注 id=1><原>此处</原><改>内容1</改></批注>中间<批注 id=2><原>此处</原><改>内容2</改></批注>结尾'
         result = _replace_markers_with_circled_numbers(md)
         self.assertIn("①", result)
         self.assertIn("②", result)
@@ -68,7 +68,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
         return md_path, json_path
 
     def test_generate_returns_tex_path(self):
-        md = "原文[📝批注1：批注内容]结尾"
+        md = '原文<批注 id=1><原>此处</原><改>批注内容</改></批注>结尾'
         review_data = {
             "judgments": [
                 {"id": 1, "verdict": "正确", "reason": "确实是错字"}
@@ -107,7 +107,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
         self.assertIn("这是原文内容", tex)
 
     def test_tex_contains_judgments(self):
-        md = "内容[📝批注1：批注内容]"
+        md = '内容<批注 id=1><原>此处</原><改>批注内容</改></批注>'
         review_data = {
             "judgments": [
                 {"id": 1, "verdict": "正确", "reason": "说明文字"}
@@ -143,7 +143,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
         self.assertIn("第二处补充", tex)
 
     def test_three_verdicts_display(self):
-        md = "a[📝批注1：1]b[📝批注2：2]c[📝批注3：3]d"
+        md = 'a<批注 id=1><原>此处</原><改>1</改></批注>b<批注 id=2><原>此处</原><改>2</改></批注>c<批注 id=3><原>此处</原><改>3</改></批注>d'
         review_data = {
             "judgments": [
                 {"id": 1, "verdict": "正确", "reason": "对"},
@@ -164,7 +164,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
         self.assertIn("部分正确", tex)
 
     def test_circled_numbers_in_text(self):
-        md = "原文[📝批注1：内容]继续"
+        md = '原文<批注 id=1><原>此处</原><改>内容</改></批注>继续'
         review_data = {
             "judgments": [
                 {"id": 1, "verdict": "正确", "reason": ""}

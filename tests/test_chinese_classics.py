@@ -2,7 +2,7 @@ import unittest
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.chinese_classics_tools import (
     detect_text_type,
@@ -158,6 +158,52 @@ class TestPreprocessForProofread(unittest.TestCase):
             self.assertIn("前置参考", result)
         finally:
             mod.search_original_text = orig_search
+
+
+class TestDetectModernWithRomanLeadIn(unittest.TestCase):
+    """现代文阅读题(带罗马数字引导语+古人名引用)不得误判为文言文。
+
+    回归用例:真实运行时,某现代文阅读题被 detect_text_type 误判为 classical,
+    正则回退把引导语"现代文阅读Ⅰ（本题共"当关键词,去识典古籍搜到 4 万字
+    不相关原文注入 prompt,反而误导 LLM 反复搜网页。
+    """
+
+    def test_modern_reading_with_roman_numeral_not_classical(self):
+        text = "现代文阅读Ⅰ（本题共2小题，7分）\n阅读下面的文字，完成1-2题。\n戴胄忠清公直擢为大理，韦凑字彦宗，京兆万年人也。"
+        self.assertEqual(detect_text_type(text), "modern")
+
+    def test_modern_reading_with_arabic_numeral_not_classical(self):
+        text = "现代文阅读2（本题共2小题）\n阅读下面的文字。\n朱光潜先生在《诗论》中谈及莱辛的观点。"
+        self.assertEqual(detect_text_type(text), "modern")
+
+    def test_classical_still_detected_when_no_modern_marker(self):
+        # 真文言文传记(无现代文标记词)仍应判 classical,确保否决不误杀
+        text = "韦凑字彦宗，京兆万年人也。少以孝闻，除右卫率府铠曹参军。"
+        self.assertEqual(detect_text_type(text), "classical")
+
+
+class TestBuildReferenceSectionHardConstraint(unittest.TestCase):
+    """前置参考块必须带与 config 同强度的硬指令,压制 LLM 重搜同段原文。"""
+
+    def test_hard_constraint_present_with_diffs(self):
+        diffs = [{"original": "明", "given": "名", "position": 2, "type": "replace"}]
+        result = build_reference_section("classical", "先帝创业未半", diffs)
+        self.assertIn("严禁", result)
+        self.assertIn("web_search", result)
+
+    def test_hard_constraint_present_no_diffs(self):
+        result = build_reference_section("poetry", "床前明月光", [])
+        self.assertIn("严禁", result)
+        self.assertIn("web_fetch", result)
+
+    def test_allows_search_for_uncovered_info(self):
+        # 硬指令不应一刀切禁搜,需为典故/作者/释义等未覆盖信息留口子
+        diffs = [{"original": "明", "given": "名", "position": 2, "type": "replace"}]
+        result = build_reference_section("classical", "先帝创业未半", diffs)
+        self.assertTrue(
+            "按需" in result or "未覆盖" in result,
+            "硬指令应为前置未覆盖的信息(典故出处/作者生平/字词释义)保留按需搜索的口子"
+        )
 
 
 if __name__ == "__main__":

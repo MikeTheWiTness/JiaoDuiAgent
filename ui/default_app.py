@@ -719,7 +719,10 @@ class DefaultApp:
                 log(f"   ✅ 自由校对转换完成")
             else:
                 log("   ✂️ 开始拆分...")
-                options = {"split_mode": split_mode}
+                options = {"split_mode": split_mode,
+                          "api_url": self.api_config.get("api_url", ""),
+                          "api_key": self.api_config.get("api_key", ""),
+                          "model": self.api_config.get("model_name", "")}
                 if hasattr(self.subject_app, 'split_exam'):
                     split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
                 else:
@@ -778,10 +781,15 @@ class DefaultApp:
                     else:
                         ok = convert_with_pandoc(file_path, raw_md, img_dir, use_mathjax=use_mathjax)
                         needs_post = True
-                
+
                 if not ok:
                     log(f"   ❌ 转换失败")
                     continue
+
+                # Word 格式增强：提取着重号、下划线、波浪线、删除线等特殊格式
+                if not is_md_file and ext in ('.docx', '.doc'):
+                    from core.pandoc_utils import enhance_docx_conversion
+                    enhance_docx_conversion(file_path, raw_md)
 
                 if needs_post:
                     if source == "讲义":
@@ -818,7 +826,10 @@ class DefaultApp:
                     continue
 
                 log("   ✂️ 开始拆分题目...")
-                options = {"split_mode": split_mode}
+                options = {"split_mode": split_mode,
+                          "api_url": self.api_config.get("api_url", ""),
+                          "api_key": self.api_config.get("api_key", ""),
+                          "model": self.api_config.get("model_name", "")}
                 if source == "讲义":
                     options["do_clean"] = self.clean_enabled.get()
                     split_ok = self.subject_app.split_lecture(raw_md, split_root, basename, options)

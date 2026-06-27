@@ -16,8 +16,8 @@ CLASSICAL_PARTICLES = [
     "因", "故", "遂", "乃", "辄", "便",
 ]
 
-# 批注标记：匹配 [📝批注N：...] 或其变体
-_ANNOTATION_RE = re.compile(r'\[📝批注\d+[：:][^\]]*\]')
+# 批注标记：XML 风格 <批注 id=N><原>原文</原><改>建议</改></批注>
+_ANNOTATION_RE = re.compile(r'<批注\s+id=\d+>.*?</批注>', re.DOTALL)
 
 # 下划线/波浪线/强调标记 — 用中文全角括号
 _FORMATTING_MARKER_RE = re.compile(r'【(?:波浪线|下划线|加点|/)?】|【/?[波浪线下划线加点]+】')
@@ -30,7 +30,8 @@ _LEADIN_PATTERNS = [
     re.compile(r'阅读下面的(?:文言文|古诗|唐诗|宋词|词|诗歌|元曲|散曲|文字|作品|文章|这首词|这首诗)[，。,\.、\s]*完成\d+(?:[—\-～~]\d+)?题[。]?(\[[^\]]*\])?'),
     re.compile(r'阅读下面的(?:文言文|古诗|唐诗|宋词|词|诗歌|元曲|散曲|文字|作品|文章|这首词|这首诗)[，。,\.、\s]*完成下面小?题[。]?'),
     # "二、文言文阅读（本题共4道小题，19分）" 等段落标题
-    re.compile(r'^[\d一二三四五六七八九十]+[、，\.]\s*(?:文言文|古代诗歌|古诗词|现代文)阅读\s*[（(][^）)]*[）)]'),
+    # 兼容"现代文阅读Ⅰ""文言文阅读Ⅱ"等带罗马数字/数字后缀的标题
+    re.compile(r'^[\d一二三四五六七八九十]+[、，\.]\s*(?:文言文|古代诗歌|古诗词|现代文)阅读\s*[ⅠⅡⅢⅣⅤⅥ1-9一二三四五六七八九十]?[、．.]?\s*[（(][^）)]*[）)]'),
     re.compile(r'^[（(]节选自[^）)]*[）)]'),
     # Markdown 粗体标题
     re.compile(r'\*\*[\d一二三四五六七八九十]+、[^*]+\*\*'),
@@ -40,43 +41,25 @@ _LEADIN_PATTERNS = [
 def _clean_annotations(text):
     """清理文本中的批注标记、格式标记，方便后续正则匹配。
 
-    处理嵌套批注如 [📝批注2：原[📝批注27：源]文为杨字]。
+    XML 风格标记 <批注 id=N>...</批注>，简单正则删除即可（无嵌套歧义）。
     """
-    # 处理可能嵌套的批注标记：[📝批注N：...] — 找到配对的 ]
-    result = []
-    i = 0
-    while i < len(text):
-        # 查找 [📝批注 开头
-        m = re.match(r'\[📝批注\d+[：:]', text[i:])
-        if m:
-            # 找到这个批注标记的配对方括号
-            depth = 1
-            j = i + m.end()
-            while j < len(text) and depth > 0:
-                if text[j] == '[':
-                    depth += 1
-                elif text[j] == ']':
-                    depth -= 1
-                j += 1
-            i = j  # 跳过整个批注标记
-        else:
-            result.append(text[i])
-            i += 1
-    result = ''.join(result)
+    # 反复删除批注标记直到无残留（处理可能的嵌套情况）
+    prev = None
+    while prev != text:
+        prev = text
+        text = _ANNOTATION_RE.sub('', text)
 
     # 清理格式标记（【波浪线】等）
-    result = _FORMATTING_MARKER_RE.sub('', result)
+    text = _FORMATTING_MARKER_RE.sub('', text)
     # 清理 Markdown 强调标记（保留内部文字）
-    result = re.sub(r'\*\*([^*]+)\*\*', r'\1', result)
-    result = re.sub(r'__([^_]+)__', r'\1', result)
-    # 清理 HTML 标签
-    result = re.sub(r'<[^>]+>', '', result)
-    # 清理残留的方括号
-    result = result.replace('[', '').replace(']', '')
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    # 清理 HTML 标签（Pandoc 残留）
+    text = re.sub(r'<[^>]+>', '', text)
     # 清理连续逗号/空白
-    result = re.sub(r'[,，]{2,}', '，', result)
-    result = re.sub(r'\s{2,}', ' ', result)
-    return result
+    text = re.sub(r'[,，]{2,}', '，', text)
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text
 
 
 def _strip_leadin(text):
@@ -102,25 +85,23 @@ def extract_text_start_via_api(text, api_url, api_key, model, timeout=15):
     sample = clean_text[:300]
 
     system_prompt = (
-        "你是一个高精度的文本提取工具。你的任务是从语文试题文本中提取"
-        "文言文或古诗词正文的开头部分。"
-        "只返回正文内容，不要返回任何解释、标点或其他文字。"
+        "你是一个文本提取器。只输出 JSON，不输出任何其他内容。"
     )
 
     user_prompt = (
-        "从以下语文试题文本中，提取文言文/古诗/词/曲的正文开头20个字：\n"
+        "从以下语文试题文本中，提取文言文/古诗/词/曲的正文开头。\n"
         "\n"
         "规则：\n"
         "1. 去掉\"阅读下面的文言文，完成1-4题\"等引导语\n"
-        "2. 去掉题号（如\"一、\"\"1.\"）和段落标题（如\"**二、文言文阅读**\"）\n"
-        "3. 去掉作者名和出处标注（如\"（节选自《新唐书》）\"）\n"
-        "4. 去掉【波浪线】等格式标记\n"
-        "5. 只返回正文的前20个汉字，不要标点\n"
-        "6. 如果文本不包含文言文或古诗词（纯白话文/现代文），返回 MODERN\n"
+        "2. 去掉题号（如\"一、\"\"1.\"）和段落标题\n"
+        "3. 去掉作者名和出处标注\n"
+        "4. 只提取汉字，去掉标点符号和空格\n"
+        "5. 如果文本不包含文言文或古诗词，text 填 \"MODERN\"\n"
         "\n"
-        f"文本：\n{sample}\n"
+        "输出格式（严格 JSON，不要其他文字）：\n"
+        '{"text": "韦凑字彦宗京兆万年人永淳初解褐婺州参军事"}\n'
         "\n"
-        "只返回提取结果，不要任何其他内容。"
+        f"文本：\n{sample}"
     )
 
     try:
@@ -135,7 +116,8 @@ def extract_text_start_via_api(text, api_url, api_key, model, timeout=15):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
-            "max_tokens": 50,
+            "max_tokens": 200,
+            "response_format": {"type": "json_object"},
         }
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -143,8 +125,14 @@ def extract_text_start_via_api(text, api_url, api_key, model, timeout=15):
         }
         resp = requests.post(chat_url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
-        result = resp.json()["choices"][0]["message"]["content"].strip()
-        log(f"   🔧 API 原始返回: {result[:80]}")
+        body = resp.json()
+        msg = body["choices"][0].get("message", {})
+        raw = msg.get("content", "") or msg.get("reasoning_content", "") or ""
+        raw = raw.strip()
+        log(f"   🔧 API 原始返回: {raw[:120]}")
+        # 解析 JSON
+        data = json.loads(raw)
+        result = data.get("text", "")
         if result == "MODERN" or not result:
             return None
         # 清理结果：去标点、取前20字
@@ -314,6 +302,12 @@ def _is_classical(clean_text, particle_density=None):
         has_name = re.search(r'[一-鿿]{1,4}字[一-鿿]{1,4}', clean_text)
         has_title = re.search(r'(刺史|司马|长史|司农|法曹|参军事|太府|通事舍人|太守|县令|尚书|侍郎|御史|大理|鸿胪)', clean_text)
         if has_name and (marker_count >= 1 or has_title):
+            # 现代文阅读题(含古人名引用)误入回退分支的否决：真正文言文题不会带这些标记词。
+            # 仅作用于低密度回退分支，不影响密度≥0.08 等高密度主分支。
+            modern_markers = ("现代文阅读", "论述类", "实用类", "文学类",
+                              "非连续性文本", "信息类", "阅读下面的文字")
+            if any(m in clean_text for m in modern_markers):
+                return False
             return True
 
     return False
@@ -454,6 +448,17 @@ def build_reference_section(text_type, original, diffs):
         lines.append("> **指令**：该段文言文/诗歌的原文已通过识典古籍/搜韵网自动验证，")
         lines.append("> 与权威原文字面完全一致，无需再对正文内容进行逐字校对。")
         lines.append("> 请仅检查：标点符号、注释编号、格式标记是否与原文匹配。")
+    lines.append("")
+
+    # 硬性约束：前置搜索已提供权威原文+差异列表时，禁止 LLM 重复检索同段原文。
+    # 位于 user 消息顶部，以与 config 同强度的「严禁/不得」压制 system 层「必须用工具」，
+    # 避免 LLM 在前置搜索成功后仍反复调 web_search/web_fetch 搜同一原文。
+    lines.append("---")
+    lines.append("")
+    lines.append("⚠️ **硬性约束**：本段原文已由程序自动从识典古籍/搜韵网检索并完成字面比对，")
+    lines.append("权威原文与差异列表均已在上方给出。**严禁再使用 web_search 或 web_fetch 检索本段文言文/诗歌的原文**，")
+    lines.append("仅需基于上方「权威原文」与「字面差异」逐条判断即可。")
+    lines.append("如需验证典故出处、作者生平、字词释义等前置未覆盖的信息，可按需搜索，但不得搜索本段原文本身。")
     lines.append("")
 
     return "\n".join(lines)
@@ -639,26 +644,19 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
 
     log(f"   📖 检测到文本类型: {'文言文' if text_type == 'classical' else '诗歌'}，启动前置搜索...")
 
-    # 步骤1：生成搜索关键词
+    # 步骤1：生成搜索关键词（正则去除引导语后取前 10 汉字）
     search_key = None
 
-    if api_url and api_key and model:
-        # 优先使用 API 精准提取正文开头
-        search_key = extract_text_start_via_api(md_text, api_url, api_key, model)
-
-    if not search_key:
-        # 回退：用正则去除标记后取前 10 个汉字
-        from shared.docx_format_enhancer import strip_format_markers
-        clean = _clean_annotations(md_text)
-        clean = strip_format_markers(clean)
-        clean = re.sub(r'[#*`\[\]()]', '', clean)
-        clean = re.sub(r'\s+', '', clean)
-        # 去掉题号 "第N题"
-        clean = re.sub(r'^第\d+题[：:.,，。、\s]*', '', clean)
-        search_key = _strip_leadin(clean)
-        if len(search_key) > 10:
-            search_key = search_key[:10]
-        log(f"   📝 回退正则提取关键词: {search_key}")
+    from shared.docx_format_enhancer import strip_format_markers
+    clean = _clean_annotations(md_text)
+    clean = strip_format_markers(clean)
+    clean = re.sub(r'[#*`\[\]()]', '', clean)
+    clean = re.sub(r'\s+', '', clean)
+    clean = re.sub(r'^第\d+题[：:.,，。、\s]*', '', clean)
+    search_key = _strip_leadin(clean)
+    if len(search_key) > 10:
+        search_key = search_key[:10]
+    log(f"   📝 回退正则提取关键词: {search_key}")
 
     # 步骤2：去权威来源搜索原文
     original = search_original_text(text_type, search_key)

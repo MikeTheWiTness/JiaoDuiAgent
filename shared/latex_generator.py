@@ -198,13 +198,13 @@ def _extract_md_formatting(text: str, placeholder_map: dict[str, str]) -> str:
     return text
 
 
-# Word 批注 [📝批注N：内容] 的标记正则
-_COMMENT_RE = re.compile(r'\[📝批注(\d+)：([^\]]+)\]')
+# Word 批注 <批注 id=N><原>原文</原><改>建议</改></批注> 的标记正则
+_COMMENT_RE = re.compile(r'<批注\s+id=(\d+)><原>(.*?)</原><改>(.*?)</改></批注>')
 
 
 def _extract_comments_to_placeholders(text: str, comments: list[dict],
                                        placeholder_map: dict[str, str]) -> str:
-    """将 [📝批注N：内容] 替换为 \\textsuperscript{\\textcircled{N}} 占位符。
+    """将 <批注N>内容</批注> 替换为 \\textsuperscript{\\textcircled{N}} 占位符。
 
     Args:
         text: 原始 markdown 文本
@@ -222,7 +222,7 @@ def _extract_comments_to_placeholders(text: str, comments: list[dict],
         cid = int(m.group(1))
         key = f"COMMENTCIRCLE{cid}"
         placeholder_map[key] = (
-            r"\textsuperscript{\textcircled{"
+            r"\textsuperscript{\fbox{"
             + str(cid) + r"}}"
         )
         return key
@@ -230,11 +230,10 @@ def _extract_comments_to_placeholders(text: str, comments: list[dict],
     return _COMMENT_RE.sub(_repl, text)
 
 
-# Word 格式标记 → LaTeX 命令映射
-# 与 docx_format_enhancer._FMT_MARKERS 保持同步
+# Word 格式标记 → LaTeX 命令映射（XML 风格，与 docx_format_enhancer._FMT_MARKERS 同步）
 _FMT_MARKER_TO_LATEX = {
     "着重": r"\CJKunderdot{",       # 着重号（需 xeCJKfntef 宏包）
-    "下划线": r"\underline{",        # 下划线（LaTeX 内置）
+    "下划线": r"\uline{",           # 下划线（需 ulem 宏包，支持换行）
     "波浪线": r"\uwave{",           # 波浪线（需 ulem 宏包）
     "删除线": r"\sout{",           # 删除线（需 ulem 宏包）
     "双删除线": r"\dout{",         # 双删除线（模板中自定义 \dout 命令）
@@ -244,18 +243,18 @@ _FMT_MARKER_TO_LATEX = {
 
 
 def _convert_format_markers(text: str, placeholder_map: dict[str, str]) -> str:
-    """将 Word 格式占位符 【xxx】...【/xxx】 转为 LaTeX 命令，避免作为原文写入 PDF。
+    """将 XML 格式标记 <xxx>...</xxx> 转为 LaTeX 命令占位符。
 
-    处理顺序：先替换开启标记（→ LaTeX 命令 + {），再替换关闭标记（→ }）。
-    内部文本已经经过 markdown 格式处理，所以对齐括号即可。
+    先由 _process_inline_markers 处理内部的校对标记，
+    再由本函数将格式标记整块替为 LaTeX 占位符，避免后续 escaping 破坏。
+    例：<下划线>ABC\\corrmark{DE}{1}</下划线> → FMTWORD1 (placeholder)
     """
-    if not re.search(r'【(?:着重|下划线|波浪线|删除线|双删除线|下标|上标)】', text):
-        return text  # 没有格式标记，直接返回
+    if not re.search(r'<(?:着重|下划线|波浪线|删除线|双删除线|下标|上标)>', text):
+        return text
 
     for marker, latex_cmd in _FMT_MARKER_TO_LATEX.items():
-        open_tag = f"【{marker}】"
-        close_tag = f"【/{marker}】"
-        # 用占位符保护 LaTeX 命令，避免后续 escaping 破坏
+        open_tag = f"<{marker}>"
+        close_tag = f"</{marker}>"
         while open_tag in text and close_tag in text:
             open_pos = text.find(open_tag)
             close_pos = text.find(close_tag, open_pos + len(open_tag))
@@ -311,13 +310,12 @@ def _rewrite_unresolvable_images(para_content: str, available_files: set[str]) -
 
 
 def _restore_placeholders(text: str, placeholder_map: dict[str, str]) -> str:
-    """将所有占位符替换回 LaTeX 代码（两轮，处理嵌套占位符）"""
-    for key, latex in placeholder_map.items():
-        text = text.replace(key, latex)
-    # 第二轮：还原嵌套在已还原值内部的占位符
-    # （如 INLINEMARKER 被包在 FMTBOLD/IMG 等外层占位符的值里）
-    for key, latex in placeholder_map.items():
-        text = text.replace(key, latex)
+    """将所有占位符替换回 LaTeX 代码（按键长度降序，防止短键腐蚀长键）。"""
+    # 按长度降序：CORRMARK10 先于 CORRMARK1 被替换，避免 CORRMARK1 吃掉 CORRMARK10 的前缀
+    keys = sorted(placeholder_map.keys(), key=len, reverse=True)
+    for _ in range(2):  # 两轮：处理嵌套占位符
+        for key in keys:
+            text = text.replace(key, placeholder_map[key])
     return text
 
 
@@ -654,6 +652,28 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
 
     # 第二步：处理剩余的普通内联标记
     processed = _INLINE_MARKER_RE.sub(_repl, processed)
+
+    # 第三步：strip 紧邻标记前的原文（避免 "1-61-6①" 翻倍）
+    # LLM 输出格式：原文【N|原文|改为】，需要把前面的原文也吃掉
+    for c in inline_corrections:
+        orig = c["original"]
+        num = c["num"]
+        # CORRMARK 或 INLINEMARKER 占位符
+        for prefix in ("CORRMARK", "INLINEMARKER"):
+            key = f"{prefix}{num}"
+            if key not in placeholder_map:
+                continue
+            # 若 marker 紧跟在 orig 之后，去掉前面的 orig
+            target = orig + key
+            if target in processed:
+                processed = processed.replace(target, key)
+            # 对于 $ 包裹的 math：去掉 $ 前缀
+            if orig.startswith("$$") and orig.endswith("$$"):
+                stripped = orig[2:-2]
+                target2 = stripped + key
+                if target2 in processed:
+                    processed = processed.replace(target2, key)
+
     inline_corrections.sort(key=lambda x: x["num"])
 
     # 修复被 $ 剥离后残留的 split-math 问题：\left 和 \right 落在不同 $ 块
@@ -665,7 +685,11 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
 
 
 def _fix_missing_chars(text: str) -> str:
-    """替换 SimSun 不包含的常见符号，用字体切换包裹。"""
+    """处理 LaTeX 字体无法渲染的字符。
+
+    CJK 缺字由 xeCJK AutoFallBack（FandolHei）自动处理。
+    本函数仅处理非 CJK 特殊符号和非渲染 emoji 剥离。
+    """
     # 先剥离已有的 \fallbacksymbols 包裹，避免双重嵌套
     text = re.sub(r'\{\\fallbacksymbols ([^}]*)\}', r'\1', text)
     # 星号 ★☆（U+2605 / U+2606）—— DejaVuSans 含此字符
@@ -677,12 +701,8 @@ def _fix_missing_chars(text: str) -> str:
     # 省略号 …（U+2026）—— DejaVuSans 含此字符
     if '…' in text:
         text = text.replace('…', r'{\fallbacksymbols …}')
-    # FandolSong 已知缺失的 CJK 字符 — 用 fallbacksymbols 包裹
-    # (这些字符在 CJK 统一汉字区内但 FandolSong 字体不包含)
-    extra_chars = '奧稅說戶値彥'
-    for ch in extra_chars:
-        if ch in text:
-            text = text.replace(ch, r'{allbacksymbols ' + ch + '}')
+    # 双引号
+    text = text.replace('"', r'{\fallbacksymbols "}')
 
     # 兜底：剥离便携版回退字体（DejaVuSans）不含的 emoji 字符。
     # DejaVuSans 只覆盖 BMP 内的部分区段，不含 emoji 平面（U+1F000+）
@@ -718,11 +738,40 @@ def _fix_missing_chars(text: str) -> str:
 
 
 def build_paracol_content(md_content: str, corrections: list[dict],
-                          tool_calls: list[dict] | None = None) -> str:
+                          tool_calls: list[dict] | None = None,
+                          review_judgments: list[dict] | None = None,
+                          review_supplements: list[str] | None = None,
+                          comments: list[dict] | None = None) -> str:
     corrections = corrections or []
+    review_judgments = review_judgments or []
+    review_supplements = review_supplements or []
 
-    # 1. 提取 Word 批注 [📝批注N：内容]，替换为数字上标占位符，避免混入原文
-    comments = extract_comments_from_md(md_content)
+    # 1. 提取 Word 批注（优先用外部传入的，否则从 md_content 中提取）
+    #    当 marked_text 存在时，LLM 可能丢弃了批注标记，此时用原始 md 的批注
+    # 0. 剥离核查用的思考内容（仅出现在 _校对报告.md 中，不应进入 PDF）
+    md_content = re.sub(r'\n*---\n## 📋 模型思考过程.*$', '', md_content, flags=re.DOTALL)
+
+    # 0.1 清理 Pandoc 原生 span 语法: [text]{.underline} → text
+    md_content = re.sub(r'\[([^\]]+)\]\{\.(?:underline|smallcaps|center|rtl|ltr)\}', r'\1', md_content)
+    # 0.2 修复破损 XML 标签
+    # 格式标签：允许标签名后有额外字符（如 < 下划线 7 > → <下划线>）
+    md_content = re.sub(
+        r'<\s*(/?)\s*(下划线|着重|波浪线|删除线|双删除线|下标|上标)\s*[^>]*>',
+        r'<\1\2>', md_content)
+    # 嵌套标签：仅去空格（如 </改 > → </改>，< 原 > → <原>）
+    md_content = re.sub(
+        r'<\s*(/?)\s*(改|原)\s*>',
+        r'<\1\2>', md_content)
+    # 批注标签：去空格但保留 id=N（如 <批注 id = 7 > → <批注 id=7>）
+    md_content = re.sub(
+        r'<\s*批注\s+id\s*=\s*(\d+)\s*>', r'<批注 id=\1>', md_content)
+    md_content = re.sub(
+        r'<\s*/\s*批注\s*>', r'</批注>', md_content)
+    # 修复 </批注> 后面的多余 > 字符
+    md_content = re.sub(r'</批注>\s*>', '</批注>', md_content)
+
+    if comments is None:
+        comments = extract_comments_from_md(md_content)
 
     md_processed, placeholder_map = _extract_images(md_content)
 
@@ -769,13 +818,61 @@ def build_paracol_content(md_content: str, corrections: list[dict],
             ctext = _escape_text(c["text"])
             lines.append(
                 r"\correctionbox{"
-                r"\textcircled{" + str(cid) + r"} "
+                r"\fbox{" + str(cid) + r"} "
                 + ctext + r"}"
             )
             lines.append(r"\medskip")
             lines.append("")
         lines.append(r"\bigskip")
         lines.append("")
+
+    # --- 右栏：批注评审（逐条评判） ---
+    if review_judgments:
+        lines.append(r"\textbf{\Large 🔍 批注评审}")
+        lines.append(r"\\")
+        lines.append("")
+        for j in review_judgments:
+            cid = j.get("id", 0)
+            verdict = j.get("verdict", "未评判")
+            reason = j.get("reason", "")
+
+            # 颜色编码：正确=绿色，部分正确=橙色，有误=红色
+            if "正确" in verdict and "部分" not in verdict:
+                vcolor = "green"
+            elif "有误" in verdict or "错误" in verdict:
+                vcolor = "red"
+            elif "部分" in verdict:
+                vcolor = "orange"
+            else:
+                vcolor = "black"
+
+            entry = (
+                r"\fbox{" + str(cid) + r"} "
+                + r"\textcolor{" + vcolor + r"}{\textbf{"
+                + _escape_text(verdict) + r"}}"
+            )
+            if reason:
+                entry += r" \\ " + _escape_text(reason)
+
+            lines.append(r"\correctionbox{" + entry + "}")
+            lines.append(r"\medskip")
+            lines.append("")
+        lines.append(r"\bigskip")
+        lines.append("")
+
+    # --- 右栏：补充发现（批注评审中发现的遗漏错误） ---
+    if review_supplements:
+        lines.append(r"\textbf{\Large 🔴 补充发现}")
+        lines.append(r"\\")
+        lines.append("")
+        for i, supp in enumerate(review_supplements, 1):
+            lines.append(
+                r"\correctionbox{"
+                r"\redcircled{" + str(i) + r"} "
+                + _escape_text(supp) + r"}"
+            )
+            lines.append(r"\medskip")
+            lines.append("")
 
     # --- 右栏：修改意见 ---
     if numbered:
@@ -784,7 +881,7 @@ def build_paracol_content(md_content: str, corrections: list[dict],
         lines.append("")
         for corr in numbered:
             lines.append(r"\correctionbox{" + _format_right_entry(corr) + "}")
-            lines.append(r"\medskip")
+            lines.append(r"\bigskip")
             lines.append("")
 
     # 工具调用记录
@@ -815,7 +912,11 @@ def generate_tex(json_path: str, md_path: str, output_path: str) -> str:
         md_content = f.read()
 
     corrections = data.get("corrections", [])
-    paracol_content = build_paracol_content(md_content, corrections)
+    review_judgments = data.get("review_judgments", [])
+    review_supplements = data.get("review_supplements", [])
+    paracol_content = build_paracol_content(md_content, corrections,
+                                            review_judgments=review_judgments,
+                                            review_supplements=review_supplements)
 
     title = os.path.splitext(os.path.basename(md_path))[0]
 
@@ -888,10 +989,23 @@ def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -
             with open(md_path, "r", encoding="utf-8") as f:
                 md_content = f.read()
 
+        # 从原始 md 文件中提取批注（marked_text 可能被 LLM 丢弃了批注标记）
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                orig_md = f.read()
+            orig_comments = extract_comments_from_md(orig_md)
+        except Exception:
+            orig_comments = None
+
         corrections = data.get("corrections", [])
         tool_calls = data.get("tool_calls", [])
+        review_judgments = data.get("review_judgments", [])
+        review_supplements = data.get("review_supplements", [])
         section_title = _get_section_name(subdir)
-        para_content = build_paracol_content(md_content, corrections, tool_calls)
+        para_content = build_paracol_content(md_content, corrections, tool_calls,
+                                             review_judgments=review_judgments,
+                                             review_supplements=review_supplements,
+                                             comments=orig_comments)
 
         # 将图片路径从 ./images/ 改为 ./{题目名}/images/ 以避免跨题目冲突
         img_dir = os.path.join(subdir, "images")

@@ -17,25 +17,8 @@ def make_clean_md(md_text):
     """生成干净版 md——保留正文文字，去除所有格式标记和批注"""
     # Step 1: 去掉【着重】【下划线】等格式标记对
     text = strip_format_markers(md_text)
-    # Step 2: 去掉 [📝批注] 标记
-    result = []
-    i = 0
-    while i < len(text):
-        m = re.match(r'\[📝批注\d+[：:]', text[i:])
-        if m:
-            depth = 1
-            j = i + m.end()
-            while j < len(text) and depth > 0:
-                if text[j] == '[':
-                    depth += 1
-                elif text[j] == ']':
-                    depth -= 1
-                j += 1
-            i = j
-        else:
-            result.append(text[i])
-            i += 1
-    text = ''.join(result)
+    # Step 2: 去掉 <批注 id=N>...</批注> 标记
+    text = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', text, flags=re.DOTALL)
     # Step 3: bold/italic 保留文字，只去标记
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'__([^_]+)__', r'\1', text)
@@ -50,9 +33,9 @@ class TestCleanMdPipeline(unittest.TestCase):
         self.raw_md = """## 第1题
 阅读下面的文言文，完成1-6题。
 
-【着重】韦凑字彦宗【/着重】，京兆万年人。永淳初，【下划线】解褐婺州参军事【/下划线】。
+<着重>韦凑字彦宗</着重>，京兆万年人。永淳初，<下划线>解褐婺州参军事</下划线>。
 
-[📝批注1：此处有异文]徙资州司兵，观察使房昶才之，表于朝，迁扬州法曹。
+<批注 id=1><原>此处</原><改>此处有异文</改></批注>徙资州司兵，观察使房昶才之，表于朝，迁扬州法曹。
 
 **韦子识远文详**，吾恨晚得之。
 """
@@ -63,14 +46,14 @@ class TestCleanMdPipeline(unittest.TestCase):
 
     def test_clean_md_contains_no_format_markers(self):
         clean = make_clean_md(self.raw_md)
-        markers = ["【着重】", "【/着重】", "【下划线】", "【/下划线】",
-                   "【波浪线】", "【/波浪线】", "【删除线】", "【/删除线】"]
+        markers = ["<着重>", "</着重>", "<下划线>", "</下划线>",
+                   "<波浪线>", "</波浪线>", "<删除线>", "</删除线>"]
         for m in markers:
             self.assertNotIn(m, clean, f"clean 版不应含 '{m}'")
 
     def test_clean_md_contains_no_annotation_markers(self):
         clean = make_clean_md(self.raw_md)
-        self.assertNotIn("📝批注", clean)
+        self.assertNotIn('批注', clean)
 
     def test_clean_md_preserves_chinese_text(self):
         clean = make_clean_md(self.raw_md)
@@ -109,7 +92,7 @@ class TestCleanMdPipeline(unittest.TestCase):
         with open(clean_path, 'r', encoding='utf-8') as f:
             saved = f.read()
         self.assertEqual(saved, clean_content)
-        self.assertNotIn("【下划线】", saved)
+        self.assertNotIn("<下划线>", saved)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ def _extract_text(html: str) -> str:
     return text.strip()
 
 
-def _truncate(text: str, limit: int = 2000) -> str:
+def _truncate(text: str, limit: int = 6000) -> str:
     if len(text) > limit:
         return text[:limit] + "\n...[截断]"
     return text
@@ -52,7 +52,7 @@ class WebFetchTool(BaseTool):
     description: str = (
         "抓取指定网页的文本内容并提取正文。"
         "支持：搜韵网(https://sou-yun.cn/)古诗检索、识典古籍(https://www.shidianguji.com/)原文搜索、"
-        "以及任意网页的正文抓取。返回纯文本，超过2000字自动截断。"
+        "以及任意网页的正文抓取。返回纯文本，超过6000字自动截断。"
     )
     args_schema: type[BaseModel] = WebFetchParams
 
@@ -87,17 +87,29 @@ class WebFetchTool(BaseTool):
             return "[搜韵网搜索需要提供 q 参数，如 https://sou-yun.cn/QueryPoem.aspx?q=诗句]"
 
         s = requests.Session()
+        # 尝试直接 GET（部分场景下 QueryString 即生效）
+        direct_resp = s.get(
+            f"https://sou-yun.cn/QueryPoem.aspx?q={_up.quote(query)}",
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+        )
+        direct_text = _extract_text(direct_resp.text)
+        # 如果直接 GET 拿到了有效内容（搜索框+KTV），说明可用
+        if len(direct_text.strip()) > 200 and ("Keywords" in direct_resp.text or query in direct_text):
+            return _truncate(direct_text)
+
+        # 回退：尝试获取 ViewState 再 POST（Legacy 兼容）
         resp = s.get("https://sou-yun.cn/QueryPoem.aspx", timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
         viewstate = re.search(r'id="__VIEWSTATE" value="([^"]+)"', resp.text)
-        vsgen = re.search(r'id="__VIEWSTATEGENERATOR" value="([^"]+)"', resp.text)
         if not viewstate:
-            return "[搜韵网访问失败：无法获取页面状态]"
+            return "[搜韵网暂时不可用，请使用模型自身知识判断]"
 
         data = {
             "__VIEWSTATE": viewstate.group(1),
-            "__VIEWSTATEGENERATOR": vsgen.group(1) if vsgen else "",
             "KeywordTextBox": query,
             "_ContentKeys": query,
             "QueryButton": "检索",
@@ -109,7 +121,7 @@ class WebFetchTool(BaseTool):
         })
         text = _extract_text(resp2.text)
         if query not in text.replace(" ", ""):
-            return "[搜索结果为空：搜韵网未收录此内容]"
+            return "[搜韵网未收录此内容，请使用模型自身知识判断]"
         return _truncate(text)
 
     def _fetch_shidianguji(self, url: str) -> str:
@@ -174,19 +186,20 @@ class WebFetchTool(BaseTool):
 
 def _parse_shidianguji_search(html: str):
     results = []
-    patterns = [
-        r'<a[^>]+href="(/[^"]+)"[^>]*>([^<]+)</a>',
-        r'<div[^>]*class="[^"]*result[^"]*"[^>]*>.*?<a[^>]+href="(/[^"]+)"[^>]*>([^<]+)</a>',
-        r'<li[^>]*>.*?<a[^>]+href="(/book/[^"]+)"[^>]*>([^<]+)</a>',
-    ]
-    for pattern in patterns:
-        matches = re.findall(pattern, html, re.DOTALL)
-        for url, title in matches:
-            title = re.sub(r'<[^>]+>', '', title).strip()
-            if title and "/book/" in url and url not in [r["url"] for r in results]:
-                results.append({"title": title, "url": url})
-        if results:
-            break
+    # 新版 SPA 结构：<a href="/book/ID/chapter/..." class="search-paragraph">...嵌套div...</a>
+    # 旧版结构：<a href="/book/...">标题</a>
+    # 抓取整个 <a> 标签，优先用其可见文本作 title（旧版书名），取不到再回退 URL book_id
+    anchor_matches = re.findall(r'<a\s+[^>]*href="(/book/[^"]+)"[^>]*>(.*?)</a>', html, re.DOTALL)
+    seen = set()
+    for href, inner in anchor_matches:
+        if href not in seen:
+            seen.add(href)
+            # 从 <a> 标签内部提取可读文本（去除嵌套标签后）
+            title_text = re.sub(r'<[^>]+>', '', inner).strip()
+            # 从 URL 中提取书名作回退：/book/BOOK_ID/chapter/...
+            parts = [p for p in href.split("/") if p]
+            book_id = parts[1] if len(parts) >= 2 else href
+            results.append({"title": title_text or book_id, "url": href})
     return results[:10]
 
 

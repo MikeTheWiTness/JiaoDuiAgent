@@ -13,6 +13,11 @@
 \setCJKsansfont{FandolHei-Regular.otf}[
   BoldFont=FandolHei-Bold.otf]
 \setCJKmonofont{FandolKai-Regular.otf}
+
+% === CJK 缺字回退（FandolSong 缺少的字符自动用 FandolHei 补上）===
+\xeCJKsetup{AutoFallBack=true}
+\setCJKfallbackfamilyfont{\CJKfallbackfont}{FandolHei-Regular.otf}
+
 \setmainfont{texgyretermes-regular.otf}[
   BoldFont=texgyretermes-bold.otf,
   ItalicFont=texgyretermes-italic.otf,
@@ -21,7 +26,7 @@
 \setsansfont{texgyretermes-regular.otf}
 \setmonofont{DejaVuSans.ttf}
 
-% === 符号回退字体（FandolSong 不含 ★☆ 等特殊符号）===
+% === 非 CJK 符号回退字体（★☆ 等特殊符号，非中文字符）===
 \newfontfamily{\fallbacksymbols}{DejaVuSans.ttf}[Scale=MatchUppercase]
 
 % === 宏包 ===
@@ -34,6 +39,8 @@
 \usepackage{fancyhdr}
 \usepackage{geometry}
 \usepackage{tikz}
+\usepackage[normalem]{ulem}        % \sout, \uwave, \dout 等命令
+\usepackage{xeCJKfntef}      % \CJKunderdot 等命令
 
 % === 红色圈号标记（TikZ 绘制，支持任意数字）===
 \newcommand{\redcircled}[1]{%
@@ -73,6 +80,20 @@
 % === Pandoc 兼容：非标准 LaTeX 命令 ===
 \newcommand{\lt}{{<}}
 \newcommand{\gt}{{>}}
+
+% === 双删除线命令（基于 ulem 宏包的自定义命令）===
+% ulem 不提供原生双删除线，使用 \markoverwith 实现
+\makeatletter
+\newcommand{\dout}{%
+  \bgroup
+  \markoverwith{%
+    \rule[-0.8ex]{0.1pt}{2.5ex}%
+    \hskip-0.1pt
+    \rule[0.2ex]{0.1pt}{2.5ex}%
+  }%
+  \ULon
+}
+\makeatother
 
 % === 页眉页脚 ===
 \pagestyle{fancy}

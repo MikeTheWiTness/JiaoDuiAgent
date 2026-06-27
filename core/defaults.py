@@ -6,6 +6,27 @@ from core.logging_utils import log
 from core import config_loader
 
 
+def _strip_search_from_prompt(prompt: str) -> str:
+    """移除系统提示词中的联网搜索指令。在前置搜索成功注入原文后调用，
+    避免 LLM 拿到前置参考后仍然反复搜索。
+    """
+    # 移除 "## 可用的联网搜索工具" 整段（到下一个 ## 标题前）
+    cleaned = re.sub(
+        r'\n*## 可用的联网搜索工具\n.*?(?=\n## )',
+        '',
+        prompt,
+        flags=re.DOTALL,
+    )
+    # 清理多余空行
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    # 追加说明：前置参考已提供原文，禁止再搜索
+    cleaned = cleaned.rstrip() + (
+        "\n\n**注意：上文「前置参考」已提供权威原文和差异对比结果，"
+        "本次校对严禁使用任何搜索工具，请直接基于前置参考和你的知识完成校对。**"
+    )
+    return cleaned
+
+
 def fix_latex_escapes(md_file):
     with open(md_file, 'r', encoding='utf-8') as f:
         content = f.read()
@@ -516,6 +537,21 @@ def _format_tool_calls_summary(tool_calls: list) -> str:
     return "".join(lines)
 
 
+def _is_no_issue(res: str) -> bool:
+    """判断 LLM 返回是否表示「无问题」。"""
+    if not res:
+        return False
+    # 去除空白和引用标记后，核心内容仅为「无问题」
+    stripped = res.strip()
+    # 纯「无问题」
+    if stripped == "无问题":
+        return True
+    # 「无问题」后跟变体（如 "无问题。"、"无问题\n\n"）
+    if stripped.startswith("无问题") and len(stripped) <= 10:
+        return True
+    return False
+
+
 def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
@@ -531,6 +567,14 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
             md_content = pre_hook(md_content)
         except Exception as e:
             log(f"   ⚠️ 前置处理异常：{e}")
+
+    # 前置搜索成功后，砍掉 prompt 里的联网搜索指令，避免 LLM 重复搜索
+    if pre_hook and "## 前置参考" in md_content:
+        prompt = _strip_search_from_prompt(prompt)
+        # 同时把 tools 置空，彻底关闭工具调用
+        tools = []
+        max_loops = 0
+        log("   🔒 前置参考已注入，关闭联网搜索")
 
     images_b64 = []
     img_dir = os.path.join(q_dir, "images")
@@ -556,8 +600,8 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 continue
 
     try:
-        res, tool_calls = call_api(api_url, api_key, model, md_content, images_b64,
-                                   q_name, prompt, tools=tools, max_loops=max_loops)
+        res, tool_calls, reasoning = call_api(api_url, api_key, model, md_content, images_b64,
+                                              q_name, prompt, tools=tools, max_loops=max_loops)
     except Exception as e:
         return {"success": False, "result": "", "error": str(e), "tool_calls": []}
 
@@ -570,9 +614,38 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                     # 追加工具调用摘要，方便排查搜索质量
                     if tool_calls:
                         f.write(_format_tool_calls_summary(tool_calls))
+                    # "无问题" 时追加模型思考内容，方便后期核查
+                    if _is_no_issue(res) and reasoning:
+                        f.write("\n\n---\n")
+                        f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
+                        f.write(reasoning)
             except Exception:
                 pass
             save_proofread_json(res, q_dir, tool_calls)
+
+            # 同步存档到 output/中间产物/{文档名}/{题目名}/
+            try:
+                q_dir_path = Path(q_dir)
+                doc_name = q_dir_path.parent.name   # 文档名（如 高中语文教研实习生笔试试卷）
+                q_name_clean = q_dir_path.name       # 题目名（如 第1题）
+                artifact_dir = Path("output") / "中间产物" / doc_name / q_name_clean
+                artifact_dir.mkdir(parents=True, exist_ok=True)
+                artifact_path = artifact_dir / "_校对报告.md"
+                with open(artifact_path, "w", encoding="utf-8") as f:
+                    f.write(res)
+                    if tool_calls:
+                        f.write(_format_tool_calls_summary(tool_calls))
+                    if _is_no_issue(res) and reasoning:
+                        f.write("\n\n---\n")
+                        f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
+                        f.write(reasoning)
+                # 同步存档结构化数据
+                import shutil, json as _json
+                src_json = os.path.join(q_dir, "_校对数据.json")
+                if os.path.exists(src_json):
+                    shutil.copy2(src_json, artifact_dir / "_校对数据.json")
+            except Exception:
+                pass
         return {"success": True, "result": res, "tool_calls": tool_calls, "error": None}
     else:
         err_detail = res.replace("**API调用失败：**\n", "").strip()[:200]
@@ -607,15 +680,17 @@ def default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax=False)
     Returns:
         dict: 包含 success 和 needs_post_process 等信息
     """
-    from core.pandoc_utils import convert_with_pandoc, check_pandoc
-    
+    from core.pandoc_utils import convert_with_pandoc, check_pandoc, enhance_docx_conversion
+
     ext = os.path.splitext(file_path)[1].lower()
-    
+
     if ext in (".docx", ".doc"):
         if not check_pandoc():
             log("❌ Pandoc 未安装，无法转换 Word 文档")
             return {"success": False, "needs_post_process": True}
         ok = convert_with_pandoc(file_path, output_md, img_dir, use_mathjax=use_mathjax)
+        if ok:
+            enhance_docx_conversion(file_path, output_md)
         return {"success": ok, "needs_post_process": True}
     
     log(f"❌ 不支持的文件格式: {ext}")

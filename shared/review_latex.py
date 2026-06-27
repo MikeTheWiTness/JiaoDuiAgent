@@ -46,7 +46,7 @@ def _replace_markers_with_circled_numbers(md_text: str) -> str:
             return _CIRCLED_NUMBERS[cid - 1]
         return f"[{cid}]"
 
-    pattern = r'\[📝批注(\d+)：[^\]]*\]'
+    pattern = r'<批注\s+id=(\d+)>.*?</批注>'
     return re.sub(pattern, _replace, md_text)
 
 

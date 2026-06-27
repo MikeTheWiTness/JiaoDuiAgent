@@ -61,7 +61,7 @@ def fuzzy_insert_comment(md_text, anchor_text, comment_content, comment_num):
         return md_text, False
 
     orig_end_pos = md_map[end_norm_pos] + 1
-    marker = f"[📝批注{comment_num}：{comment_content}]"
+    marker = f'<批注 id={comment_num}><原>{anchor_text}</原><改>{comment_content}</改></批注>'
     new_text = md_text[:orig_end_pos] + marker + md_text[orig_end_pos:]
     return new_text, True
 
@@ -94,35 +94,45 @@ def extract_comment_anchors(doc_xml_str):
         texts = text_pattern.findall(segment)
         anchor_text = "".join(texts)
         if anchor_text:
-            anchors.append({"id": cid, "text": anchor_text})
+            anchors.append({"id": cid, "text": anchor_text, "pos": pos})
 
     return anchors
 
 
 def insert_comments_into_md(md_text, comments_dict, anchors_list):
+    """将批注以 XML 风格标记插入 md 文本，避免方括号嵌套问题。
+
+    标记格式：<批注N>批注内容</批注>
+
+    按锚点在文档中的位置排序，编号跟随文档顺序。
+    """
     if not comments_dict or not anchors_list:
         return md_text
+
+    # 过滤有效锚点，按文档位置升序排列
+    valid = []
+    for a in anchors_list:
+        if a["id"] in comments_dict and a.get("text"):
+            valid.append(a)
+    valid.sort(key=lambda a: a.get("pos", 999999))
 
     result = md_text
     inserted = 0
 
-    for anchor in anchors_list:
+    for anchor in valid:
         cid = anchor["id"]
         anchor_text = anchor["text"]
-        if cid not in comments_dict:
-            continue
-        if not anchor_text:
-            continue
-
         comment_content = comments_dict[cid]
         inserted += 1
+        marker = f'<批注 id={inserted}><原>{anchor_text}</原><改>{comment_content}</改></批注>'
 
         if anchor_text in result:
-            marker = f"[📝批注{inserted}：{comment_content}]"
             result = result.replace(anchor_text, anchor_text + marker, 1)
         else:
-            result, ok = fuzzy_insert_comment(result, anchor_text, comment_content, inserted)
-            if not ok:
+            new_result, ok = fuzzy_insert_comment(result, anchor_text, comment_content, inserted)
+            if ok:
+                result = new_result
+            else:
                 inserted -= 1
 
     return result

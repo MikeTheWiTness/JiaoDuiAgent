@@ -5,12 +5,12 @@ import tempfile
 import shutil
 import importlib.util
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _load_subject():
     subject_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "subjects", "高中语文v1.1"
     )
     spec = importlib.util.spec_from_file_location(
@@ -52,7 +52,8 @@ class TestSplitModesExam(unittest.TestCase):
         q_dirs = [d for d in os.listdir(paper_dir) if os.path.isdir(os.path.join(paper_dir, d))]
         self.assertEqual(len(q_dirs), 1)
         q_dir = os.path.join(paper_dir, q_dirs[0])
-        md_files = [f for f in os.listdir(q_dir) if f.endswith(".md")]
+        # 仅计题目主文件，排除前置搜索用的 _clean.md 辅助副本
+        md_files = [f for f in os.listdir(q_dir) if f.endswith(".md") and not f.endswith("_clean.md")]
         self.assertEqual(len(md_files), 1)
 
     def test_split_mode_rule_default(self):
@@ -90,7 +91,8 @@ class TestSplitModesExam(unittest.TestCase):
         self.assertEqual(len(q_dirs), 2)
         for qd in q_dirs:
             q_dir = os.path.join(paper_dir, qd)
-            md_files = [f for f in os.listdir(q_dir) if f.endswith(".md")]
+            # 仅计题目主文件，排除前置搜索用的 _clean.md 辅助副本
+            md_files = [f for f in os.listdir(q_dir) if f.endswith(".md") and not f.endswith("_clean.md")]
             self.assertEqual(len(md_files), 1)
 
     def test_split_mode_none_output_consistent(self):
@@ -126,7 +128,7 @@ class TestSplitModesExam(unittest.TestCase):
         import shared.smart_split as smart_mod
         orig = smart_mod.smart_split
 
-        def fake_smart(md, url, key, model):
+        def fake_smart(md, url, key, model, md_file=None):
             return [{"content": "第一部分"}, {"content": "第二部分"}]
 
         smart_mod.smart_split = fake_smart
@@ -164,7 +166,8 @@ class TestSplitModesExam(unittest.TestCase):
             for qd in q_dirs:
                 q_dir = os.path.join(paper_dir, qd)
                 self.assertTrue(os.path.isdir(q_dir))
-                md_files = [f for f in os.listdir(q_dir) if f.endswith(".md")]
+                # 仅计题目主文件，排除前置搜索用的 _clean.md 辅助副本
+                md_files = [f for f in os.listdir(q_dir) if f.endswith(".md") and not f.endswith("_clean.md")]
                 self.assertEqual(len(md_files), 1)
 
 

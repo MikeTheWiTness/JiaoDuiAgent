@@ -4,7 +4,7 @@ import os
 import tempfile
 import shutil
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.free_proofread import (
     create_free_proofread_md,
@@ -92,7 +92,7 @@ class TestSubjectFreeMode(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         import importlib.util
         subject_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "subjects", "高中语文v1.1"
         )
         spec = importlib.util.spec_from_file_location(

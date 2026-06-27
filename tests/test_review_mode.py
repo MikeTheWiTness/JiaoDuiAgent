@@ -2,7 +2,7 @@ import unittest
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.review_mode import (
     is_review_mode,
@@ -24,14 +24,14 @@ class TestIsReviewMode(unittest.TestCase):
 
 class TestExtractCommentsFromMd(unittest.TestCase):
     def test_extract_single_comment(self):
-        md = "这是原文[📝批注1：这里有错字]继续原文"
+        md = '这是原文<批注 id=1><原>此处</原><改>这里有错字</改></批注>继续原文'
         comments = extract_comments_from_md(md)
         self.assertEqual(len(comments), 1)
         self.assertEqual(comments[0]["id"], 1)
         self.assertIn("有错字", comments[0]["text"])
 
     def test_extract_multiple_comments(self):
-        md = "第一段[📝批注1：错误1]中间[📝批注2：错误2]结尾"
+        md = '第一段<批注 id=1><原>此处</原><改>错误1</改></批注>中间<批注 id=2><原>此处</原><改>错误2</改></批注>结尾'
         comments = extract_comments_from_md(md)
         self.assertEqual(len(comments), 2)
         self.assertEqual(comments[0]["id"], 1)
@@ -43,7 +43,7 @@ class TestExtractCommentsFromMd(unittest.TestCase):
         self.assertEqual(comments, [])
 
     def test_extract_context(self):
-        md = "上下文开头被批注文字[📝批注1：批注内容]上下文结尾"
+        md = '上下文开头被批注文字<批注 id=1><原>此处</原><改>批注内容</改></批注>上下文结尾'
         comments = extract_comments_from_md(md)
         self.assertEqual(len(comments), 1)
         self.assertIn("context_before", comments[0])
@@ -51,25 +51,31 @@ class TestExtractCommentsFromMd(unittest.TestCase):
 
 
 class TestBuildReviewPrompt(unittest.TestCase):
-    def test_prompt_contains_instructions(self):
-        md = "原文[📝批注1：有错字]"
+    def test_prompt_contains_instructions_with_comments(self):
+        md = '原文<批注 id=1><原>此处</原><改>有错字</改></批注>'
         prompt = build_review_prompt(md)
-        self.assertIn("批注", prompt)
-        self.assertIn("评审", prompt)
+        self.assertIn("批注评审", prompt)
 
     def test_prompt_mentions_judgment(self):
-        md = "原文[📝批注1：有错字]"
+        md = '原文<批注 id=1><原>此处</原><改>有错字</改></批注>'
         prompt = build_review_prompt(md)
         self.assertIn("正确", prompt)
         self.assertIn("错误", prompt)
 
     def test_prompt_mentions_supplement(self):
-        md = "原文[📝批注1：有错字]"
+        md = '原文<批注 id=1><原>此处</原><改>有错字</改></批注>'
         prompt = build_review_prompt(md)
         self.assertIn("补充", prompt)
 
-    def test_empty_md_still_has_prompt(self):
+    def test_prompt_without_comments_uses_proofread(self):
+        md = "纯文本无批注"
+        prompt = build_review_prompt(md)
+        self.assertIn("全文校对", prompt)
+        self.assertNotIn('批注评审', prompt)
+
+    def test_empty_md_uses_proofread(self):
         prompt = build_review_prompt("")
+        self.assertIn("全文校对", prompt)
         self.assertTrue(len(prompt) > 0)
 
 
@@ -136,7 +142,7 @@ class TestSubjectReviewMode(unittest.TestCase):
     def setUp(self):
         import importlib.util
         subject_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "subjects", "高中语文v1.1"
         )
         spec = importlib.util.spec_from_file_location(

@@ -75,24 +75,8 @@ def _gen_clean_md(md_path):
     # Step 1: 去掉【着重】【下划线】等格式标记对
     text = strip_format_markers(text)
 
-    # Step 2: 去掉 [📝批注] 标记（含嵌套）
-    result = []
-    i = 0
-    while i < len(text):
-        if text[i:i+4] == '[📝批注':
-            depth = 1
-            j = i + 4
-            while j < len(text) and depth > 0:
-                if text[j] == '[':
-                    depth += 1
-                elif text[j] == ']':
-                    depth -= 1
-                j += 1
-            i = j
-        else:
-            result.append(text[i])
-            i += 1
-    text = ''.join(result)
+    # Step 2: 去掉 <批注 id=N>...</批注> 标记
+    text = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', text, flags=re.DOTALL)
 
     # Step 3: bold/italic 保留文字，只去 ** 标记
     import re

@@ -5,12 +5,12 @@ import importlib.util
 import tempfile
 import shutil
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _load_subject_module():
     subject_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "subjects", "高中语文v1.1"
     )
     spec = importlib.util.spec_from_file_location(

@@ -148,6 +148,30 @@ def extract_json(text: str):
 
 def save_proofread_json(res: str, q_dir: str, tool_calls: list | None = None):
     data = extract_json(res)
+
+    # 始终尝试批注评审格式解析（## 批注评审结果 / ### 批注N / 评判 / 说明 / ### 补充发现）
+    # 与普通校对格式（### 标记原文 + 【N|原文|改为】）可以共存于同一 LLM 输出
+    has_review_markers = ("批注评审结果" in res or bool(re.search(r'###\s*批注\d+', res)))
+    if has_review_markers:
+        try:
+            from shared.review_mode import parse_review_result
+            review = parse_review_result(res)
+            if review.get("judgments") or review.get("supplements"):
+                if data is None:
+                    data = {
+                        "corrections": [],
+                        "summary": review.get("summary_hint", "批注评审完成"),
+                        "marked_text": "",
+                        "review_judgments": review["judgments"],
+                        "review_supplements": review["supplements"],
+                    }
+                else:
+                    # 合并：普通校对解析的 corrections + 批注评审的 review_judgments/supplements
+                    data["review_judgments"] = review["judgments"]
+                    data["review_supplements"] = review["supplements"]
+        except ImportError:
+            pass
+
     if data is None:
         return False
     if tool_calls:

@@ -1,8 +1,4 @@
-"""高中语文业务逻辑 —— 工具、提                "5. 同一道题中最多使用 2 次工具调用，超过则用自身知识完成校对。
-"
-示词、拆分、校对、钩                "   **硬性约束**：若前置参考中已提供权威原文和差异列表，则禁止再使用 web_search 或 web_fetch 搜索该段文言文/诗歌的原文，仅需基于差异列表逐条判断即可。
-"
-子。"""
+"""高中语文业务逻辑 —— 工具、提示词、拆分、校对、钩子。"""
 import os
 import sys
 
@@ -37,29 +33,56 @@ class SubjectApp:
 
     def build_tools(self):
         return [
-            WebSearchTool(),
             WebFetchTool(),
         ]
 
     def get_max_tool_loops(self):
         return 3
 
+    # 可靠原文检索源（通过 web_fetch 直接构造 URL，无需经过搜索引擎）
+    _DIRECT_SOURCES = [
+        ("识典古籍", "https://www.shidianguji.com/search/{kw}",
+         "文言文原文检索，直接返回古籍全文"),
+        ("搜韵网", "https://sou-yun.cn/QueryPoem.aspx?q={kw}",
+         "古诗词检索，返回诗词全文"),
+        ("中国作家网", "https://www.chinawriter.com.cn/search?q={kw}",
+         "现代散文/小说原文，收录《光明日报》《人民文学》等副刊文章"),
+        ("百度直达", "https://www.baidu.com/s?wd={kw}",
+         "通用原文查找，用 site: 前缀限定站点，如 wd=site:chinawriter.com.cn 叶梅 根河之恋"),
+    ]
+
     def get_tool_instructions(self):
         web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
 
         lines = []
         if web_tools:
-            lines.append("## 可用的联网搜索工具\n"
-                "如需查找最新说法、验证专业术语、检索不在训练数据内的信息，可使用：\n")
-            lines.append("\n".join(f"- `{t.name}`: {t.description}" for t in web_tools))
+            # 构建可靠来源列表
+            sources = "\n".join(
+                f"  - **{name}**: `web_fetch(url=\"{url.format(kw='关键词')}\")` — {desc}"
+                for name, url, desc in self._DIRECT_SOURCES
+            )
+
             lines.append(
-                "\n使用规则：\n"
-                "1. **首先检查「前置参考」**：如果题目上方有「## 前置参考：文言文原文校验」或"
-                "「## 前置参考：诗歌原文校验」，说明程序已经自动搜索了权威原文并做了 diff 比对。"
-                "直接参考其中的原文和差异列表，无需再次搜索同样的内容。\n"
-                "2. 前置参考中未覆盖的信息（如典故出处、作者生平、字词释义等），按需搜索验证。\n"
-                "3. 每个知识点最多搜索 1 次，搜索无结果时使用模型自身知识判断，不得反复重试。\n"
-                "4. 使用 web_fetch 访问识典古籍/搜韵网失败时，直接改用模型知识，不再回退到 web_search。\n"
+                "\n## 原文检索（仅供极端情况使用）\n"
+                "**你是一位资深语文教研员，你的核心能力是基于自身知识直接校对，不是搜索。**\n"
+                "\n"
+                "仅在以下情况才可检索原文，且必须用 **web_fetch 直达以下网站**，"
+                "严禁使用 web_search（搜索引擎对你不可用）。\n"
+                "\n"
+                f"{sources}\n"
+                "\n"
+                "**使用规则**：\n"
+                "- 文言文无前置参考 → 识典古籍 一次（原文中摘几句作关键词）\n"
+                "- 古诗词无前置参考 → 搜韵网 一次\n"
+                "- 现代文需核对原文引用 → 中国作家网 或 百度直达（加 site: 限定）一次\n"
+                "- 任一网站无结果 → **立即用自身知识判断，不得换网站再试，不得换关键词重搜**\n"
+                "\n"
+                "**严禁搜索的情形**：\n"
+                "- 错别字、标点错误、病句 → 你自身完全能判断\n"
+                "- 现代文阅读、诗歌鉴赏 → 原文引用正确性你可以凭训练数据判断\n"
+                "- 答案选项对错分析 → 不需搜索\n"
+                "- 有「前置参考」时 → 严禁一切检索\n"
+                "- 任何情况下不得为了「确认一下」而搜索\n"
             )
 
         return "".join(lines)
@@ -186,8 +209,8 @@ class SubjectApp:
             try:
                 from shared.docx_format_enhancer import strip_format_markers
                 clean = strip_format_markers(new_content)
-                # 去掉 [📝批注] 标记
-                clean = re.sub(r'\[📝批注\d+：.+?\]', '', clean)
+                # 去掉 <批注 id=N>...</批注> 标记
+                clean = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', clean, flags=re.DOTALL)
                 clean = re.sub(r'\*\*([^*]+)\*\*', r'', clean)
                 clean = re.sub(r'__([^_]+)__', r'', clean)
                 (q_dir / f"第{idx}题_clean.md").write_text(clean, encoding='utf-8')

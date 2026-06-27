@@ -2,7 +2,7 @@ import unittest
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.web_tools import WebFetchTool
 
@@ -67,7 +67,7 @@ class TestChineseSubjectHasFetchTool(unittest.TestCase):
     def test_subject_has_web_fetch_tool(self):
         import importlib.util
         subject_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "subjects", "高中语文v1.1"
         )
         spec = importlib.util.spec_from_file_location(
@@ -83,7 +83,7 @@ class TestChineseSubjectHasFetchTool(unittest.TestCase):
     def test_tool_instructions_mentions_shidianguji(self):
         import importlib.util
         subject_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "subjects", "高中语文v1.1"
         )
         spec = importlib.util.spec_from_file_location(
