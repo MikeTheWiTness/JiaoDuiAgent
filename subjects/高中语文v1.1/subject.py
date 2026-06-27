@@ -29,15 +29,21 @@ class SubjectApp:
     def __init__(self, subject_dir):
         self.subject_dir = subject_dir
         self.config = load_config(subject_dir)
+        self.react_mode = False
         self.tools = self.build_tools()
 
     def build_tools(self):
-        return [
-            WebFetchTool(),
-        ]
+        base = [WebFetchTool()]
+        if self.react_mode:
+            from shared.plan_tools import PlanUpdateTool
+            from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
+            base.append(PlanUpdateTool())
+            base.append(LocateParagraphTool())
+            base.append(ReadSectionTool())
+        return base
 
     def get_max_tool_loops(self):
-        return 3
+        return 15 if self.react_mode else 3
 
     # 可靠原文检索源（通过 web_fetch 直接构造 URL，无需经过搜索引擎）
     _DIRECT_SOURCES = [
@@ -88,6 +94,14 @@ class SubjectApp:
         return "".join(lines)
 
     def get_question_prompt(self):
+        if self.react_mode:
+            agent_lines = self.config.get("agent_prompt_lines")
+            if agent_lines:
+                base_prompt = "\n".join(agent_lines)
+                tool_instructions = self.get_tool_instructions()
+                if tool_instructions:
+                    return base_prompt + "\n\n" + tool_instructions
+                return base_prompt
         base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
         tool_instructions = self.get_tool_instructions()
         if tool_instructions:
@@ -247,7 +261,8 @@ class SubjectApp:
         return default_proofread_one(
             api_url, api_key, model, q_dir, q_name, is_knowledge,
             prompt, self.tools, self.get_max_tool_loops(), generate_pdf,
-            pre_hook=pre_hook
+            pre_hook=pre_hook,
+            react_mode=self.react_mode
         )
 
     def collect_paper_dirs(self, base_path):

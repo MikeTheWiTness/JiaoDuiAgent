@@ -553,7 +553,7 @@ def _is_no_issue(res: str) -> bool:
     return False
 
 
-def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None):
+def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None, react_mode=False):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
     if os.path.exists(target_md):
@@ -572,10 +572,13 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
     # 前置搜索成功后，砍掉 prompt 里的联网搜索指令，避免 LLM 重复搜索
     if pre_hook and "## 前置参考" in md_content:
         prompt = _strip_search_from_prompt(prompt)
-        # 同时把 tools 置空，彻底关闭工具调用
-        tools = []
-        max_loops = 0
-        log("   🔒 前置参考已注入，关闭联网搜索")
+        if react_mode:
+            # ReAct 模式下保留 LLM 的工具调用能力，注入 context 但不关闭搜索
+            log("   📖 前置参考已注入（ReAct 模式：LLM 仍可自主搜索）")
+        else:
+            tools = []
+            max_loops = 0
+            log("   🔒 前置参考已注入，关闭联网搜索")
 
     images_b64 = []
     img_dir = os.path.join(q_dir, "images")

@@ -101,3 +101,8 @@ def get_exam_question_pattern(config):
         return re.compile(config["exam_question_pattern"])
     except re.error:
         return re.compile(r"^(\d+)．")
+
+
+
+def get_agent_prompt(config):
+    return config.get("agent_prompt_lines", None)

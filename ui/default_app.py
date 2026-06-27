@@ -40,6 +40,7 @@ class DefaultApp:
 
         self.parallel_enabled = tk.BooleanVar(value=True)
         self.parallel_count = tk.StringVar(value="10")
+        self.react_enabled = tk.BooleanVar(value=True)
 
         self.split_mode = tk.StringVar(value="rule")
         self.free_text = ""
@@ -124,6 +125,9 @@ class DefaultApp:
             self.frame_pdf_options.pack(fill=tk.X, pady=(6, 0))
             ttk.Checkbutton(self.frame_pdf_options, text="生成 LaTeX PDF 校对报告",
                             variable=self.generate_pdf).pack(side=tk.LEFT, padx=4)
+            ttk.Checkbutton(self.frame_pdf_options, text="ReAct 模式",
+                            variable=self.react_enabled,
+                            command=self._on_react_toggled).pack(side=tk.LEFT, padx=4)
         if features.get("show_parallel_option", True):
             if features.get("show_pdf_option", True):
                 ttk.Checkbutton(self.frame_pdf_options, text="并行校对",
@@ -191,6 +195,12 @@ class DefaultApp:
         self.log_panel = LogPanel(self.root)
 
         set_log_func(self._log)
+
+    def _on_react_toggled(self):
+        enabled = self.react_enabled.get()
+        self.subject_app.react_mode = enabled
+        self.subject_app.tools = self.subject_app.build_tools()
+        log(f"ReAct 模式: {'ON' if enabled else 'OFF'}")
 
     def setup_extra_options(self, frame):
         pass
