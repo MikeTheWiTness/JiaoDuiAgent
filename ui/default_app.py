@@ -54,6 +54,10 @@ class DefaultApp:
 
         self.api_config = load_env_config(subject_app.subject_dir)
 
+        # ReAct 初始状态（默认开启）
+        self.subject_app.react_mode = True
+        self.subject_app.tools = self.subject_app.build_tools()
+
         self.system_prompt = subject_app.get_question_prompt()
         self.knowledge_prompt = subject_app.get_knowledge_prompt()
         self.tools = subject_app.tools
@@ -200,6 +204,8 @@ class DefaultApp:
         enabled = self.react_enabled.get()
         self.subject_app.react_mode = enabled
         self.subject_app.tools = self.subject_app.build_tools()
+        self.system_prompt = self.subject_app.get_question_prompt()
+        self.knowledge_prompt = self.subject_app.get_knowledge_prompt()
         log(f"ReAct 模式: {'ON' if enabled else 'OFF'}")
 
     def setup_extra_options(self, frame):
