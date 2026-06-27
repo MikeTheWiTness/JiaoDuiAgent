@@ -32,9 +32,10 @@ def extract_special_formats(docx_path):
         }
     """
     try:
-        from docx import Document
-    except ImportError:
-        log("⚠️ python-docx 未安装，无法提取特殊格式")
+        import docx
+        Document = docx.Document
+    except (ImportError, AttributeError):
+        log("⚠️ python-docx 未安装或版本不兼容，无法提取特殊格式")
         return []
 
     formats = []
