@@ -56,13 +56,15 @@ def _llm_format_fix(res, issues_desc, api_url, api_key, model):
         "3. 不改变任何校对结论\n\n"
         f"原始输出：\n{res}"
     )
+    from core.logging_utils import log
     try:
         result = call_api_continue(api_url, api_key, model, [], follow_up)
         content = result["content"]
         if content and "API调用失败" not in content:
             return content
-    except Exception:
-        pass
+        log(f"   ⚠️ 格式修正 API 返回无效: {str(content)[:100]}")
+    except Exception as e:
+        log(f"   ⚠️ 格式修正 API 异常: {e}")
     return None
 
 

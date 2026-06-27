@@ -573,8 +573,9 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
     if pre_hook and "## 前置参考" in md_content:
         prompt = _strip_search_from_prompt(prompt)
         if react_mode:
-            # ReAct 模式下保留 LLM 的工具调用能力，注入 context 但不关闭搜索
-            log("   📖 前置参考已注入（ReAct 模式：LLM 仍可自主搜索）")
+            # ReAct 模式：移除联网工具，仅依靠前置搜索结果
+            tools = [t for t in tools if t.name not in ("web_fetch", "web_search")]
+            log("   📖 前置参考已注入（已移除联网工具，仅依靠前置搜索结果）")
         else:
             tools = []
             max_loops = 0
