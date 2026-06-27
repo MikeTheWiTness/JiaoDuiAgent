@@ -600,8 +600,11 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 continue
 
     try:
-        res, tool_calls, reasoning = call_api(api_url, api_key, model, md_content, images_b64,
-                                              q_name, prompt, tools=tools, max_loops=max_loops)
+        result = call_api(api_url, api_key, model, md_content, images_b64,
+                          q_name, prompt, tools=tools, max_loops=max_loops)
+        res = result["content"]
+        tool_calls = result["tool_calls_log"]
+        reasoning = result.get("reasoning", "")
     except Exception as e:
         return {"success": False, "result": "", "error": str(e), "tool_calls": []}
 

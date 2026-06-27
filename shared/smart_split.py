@@ -85,7 +85,7 @@ def smart_split_with_callable(md_content, llm_callable, md_file=None):
 
 def smart_split(md_content, api_url, api_key, model, md_file=None):
     def _llm_call(text, prompt):
-        result, _, _ = call_api(
+        api_result = call_api(
             api_url, api_key, model,
             text, [], "智能分割",
             prompt, tools=[], max_loops=1,
