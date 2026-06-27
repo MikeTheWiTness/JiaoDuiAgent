@@ -3,6 +3,7 @@ from pathlib import Path
 from core.parsing import save_proofread_json
 from core.api_client import call_api, call_api_continue, MAX_FILE_SIZE
 from core.logging_utils import log
+from core.format_enforcement import _enforce_format, _llm_format_fix
 from core import config_loader
 
 
@@ -609,6 +610,15 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
         return {"success": False, "result": "", "error": str(e), "tool_calls": []}
 
     if "API调用失败" not in res:
+        format_ok, format_issues = _enforce_format(res)
+        if not format_ok:
+            log(f"   \u26a0\ufe0f 格式不合规：{format_issues}")
+            fixed = _llm_format_fix(res, format_issues, api_url, api_key, model)
+            if fixed and _enforce_format(fixed)[0]:
+                log("   \u2705 LLM 格式修正成功")
+                res = fixed
+            else:
+                log("   \u26a0\ufe0f 格式修正失败，使用原始输出")
         if generate_pdf:
             md_path = os.path.join(q_dir, "_校对报告.md")
             try:
