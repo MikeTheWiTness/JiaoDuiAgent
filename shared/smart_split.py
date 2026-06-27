@@ -91,6 +91,6 @@ def smart_split(md_content, api_url, api_key, model, md_file=None):
             prompt, tools=[], max_loops=1,
             max_tokens=SMART_SPLIT_MAX_TOKENS,
         )
-        return result
+        return api_result["content"]
 
     return smart_split_with_callable(md_content, _llm_call, md_file=md_file)
