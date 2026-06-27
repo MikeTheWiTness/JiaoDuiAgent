@@ -1,7 +1,7 @@
 import os, re, base64, shutil
 from pathlib import Path
 from core.parsing import save_proofread_json
-from core.api_client import call_api, MAX_FILE_SIZE
+from core.api_client import call_api, call_api_continue, MAX_FILE_SIZE
 from core.logging_utils import log
 from core import config_loader
 
