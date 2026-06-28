@@ -30,8 +30,8 @@ class TestSubjectAppInterface(unittest.TestCase):
     def setUp(self):
         self.app = SubjectApp(SUBJECT_DIR)
 
-    def test_version_is_v2(self):
-        self.assertEqual(self.app.version, "v2.0")
+    def test_version_is_v3(self):
+        self.assertEqual(self.app.version, "v3.0")
 
     def test_name_is_correct(self):
         self.assertEqual(self.app.name, "高中语文")
@@ -44,13 +44,16 @@ class TestSubjectAppInterface(unittest.TestCase):
         result = self.app.get_tool_instructions()
         self.assertIsInstance(result, str)
 
-    def test_get_question_prompt_includes_tool_instructions(self):
+    def test_get_question_prompt_includes_core_content(self):
         prompt = self.app.get_question_prompt()
-        self.assertIn("web_search", prompt)
+        self.assertIn("校对", prompt)
+        self.assertIn("批注", prompt)
+        self.assertIn("标记原文", prompt)
 
-    def test_get_knowledge_prompt_includes_tool_instructions(self):
+    def test_get_knowledge_prompt_includes_core_content(self):
         prompt = self.app.get_knowledge_prompt()
-        self.assertIn("web_search", prompt)
+        self.assertIn("校对", prompt)
+        self.assertIn("标记原文", prompt)
 
 
 class TestSubjectAppMethodSignatures(unittest.TestCase):

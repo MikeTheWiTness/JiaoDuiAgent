@@ -18,8 +18,10 @@ def _enforce_format(res: str):
     if _is_no_issue(res):
         return True, ""
     issues = []
-    marker_match = re.search(r'###\s*标记原文\s*\n(.*?)(?=\n###\s|\Z)', res, re.DOTALL)
-    reason_match = re.search(r'###\s*修改原因\s*\n(.*?)(?=\n###\s|\Z)', res, re.DOTALL)
+    # 注意：标记原文中可能包含内部 ### 标题（如前置参考的"### 权威原文"），
+    # 不能以任意 ### 作为结束边界，必须以 ### 修改原因 作为精确边界。
+    marker_match = re.search(r'###\s*标记原文\s*\n(.*?)(?=\n###\s*修改原因|\Z)', res, re.DOTALL)
+    reason_match = re.search(r'###\s*修改原因\s*\n(.*?)(?=\n###\s*修改|\Z)', res, re.DOTALL)
     if not marker_match:
         issues.append("缺少 ### 标记原文 段落")
     if not reason_match:

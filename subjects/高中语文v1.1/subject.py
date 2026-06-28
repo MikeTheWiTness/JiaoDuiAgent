@@ -4,7 +4,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.web_tools import WebSearchTool, WebFetchTool
+# 联网搜索工具已禁用，仅保留 pre_proofread_hook 中的预搜索阶段
+# from shared.web_tools import WebSearchTool, WebFetchTool
 from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
@@ -24,7 +25,7 @@ class SubjectApp:
     LEVEL = "高中"
     SUBJECT = "语文"
     name = "高中语文"
-    version = "v2.0"
+    version = "v3.0"
 
     def __init__(self, subject_dir):
         self.subject_dir = subject_dir
@@ -33,7 +34,9 @@ class SubjectApp:
         self.tools = self.build_tools()
 
     def build_tools(self):
-        base = [WebFetchTool()]
+        # 联网搜索工具（web_search / web_fetch）已完全禁用，
+        # 仅保留 pre_proofread_hook 中的预搜索阶段
+        base = []
         if self.react_mode:
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
@@ -43,7 +46,8 @@ class SubjectApp:
         return base
 
     def get_max_tool_loops(self):
-        return 15 if self.react_mode else 3
+        # 联网搜索工具已禁用，非 ReAct 模式无需工具循环
+        return 15 if self.react_mode else 0
 
     # 可靠原文检索源（通过 web_fetch 直接构造 URL，无需经过搜索引擎）
     _DIRECT_SOURCES = [
@@ -239,6 +243,18 @@ class SubjectApp:
 
     def get_review_prompt(self):
         from shared.review_mode import build_review_prompt
+        if self.react_mode:
+            agent_lines = self.config.get("agent_prompt_lines")
+            if agent_lines:
+                base_prompt = "\n".join(agent_lines)
+                # ReAct 代理模式：agent_prompt 已含完整校对流程，
+                # build_review_prompt 的无批注 else 分支是冗余指令，
+                # 会与 agent_prompt 冲突（"用工具" vs "直接输出"）。
+                # 仅在有批注时才追加评审指令。
+                tool_instructions = self.get_tool_instructions()
+                if tool_instructions:
+                    return base_prompt + "\n\n" + tool_instructions
+                return base_prompt
         base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
         tool_instructions = self.get_tool_instructions()
         review_specific = build_review_prompt("")
@@ -256,7 +272,7 @@ class SubjectApp:
 
         # 构建前置处理 hook：文言文/诗歌的前置搜索 + 自动 diff
         def pre_hook(md_content):
-            return self.pre_proofread_hook(md_content, api_url, api_key, model)
+            return self.pre_proofread_hook(md_content, api_url, api_key, model, q_dir=q_dir)
 
         return default_proofread_one(
             api_url, api_key, model, q_dir, q_name, is_knowledge,
@@ -280,9 +296,9 @@ class SubjectApp:
     def get_supported_extensions(self):
         return {".docx", ".doc", ".md"}
 
-    def pre_proofread_hook(self, md_text, api_url=None, api_key=None, model=None):
+    def pre_proofread_hook(self, md_text, api_url=None, api_key=None, model=None, q_dir=None):
         from shared.chinese_classics_tools import preprocess_for_proofread
-        return preprocess_for_proofread(md_text, api_url, api_key, model)
+        return preprocess_for_proofread(md_text, api_url, api_key, model, q_dir=q_dir)
 
     def post_proofread_hook(self, result, q_dir):
         return result
