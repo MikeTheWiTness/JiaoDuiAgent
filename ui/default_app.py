@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.env_config import load_env_config, save_env_config
 from core.logging_utils import set_log_func, log
+from core.config_loader import clear_config_cache, load_config
 from core.pandoc_utils import check_pandoc, convert_with_pandoc
 from core.defaults import (
     fix_latex_escapes, clean_md_file, fix_floating_images,
@@ -53,6 +54,10 @@ class DefaultApp:
         self.task_interrupt = False
 
         self.api_config = load_env_config(subject_app.subject_dir)
+
+        # 清除配置缓存，确保最新的 config.json / agent_prompt.json 被加载
+        clear_config_cache()
+        subject_app.config = load_config(subject_app.subject_dir)
 
         # ReAct 初始状态（默认开启）
         self.subject_app.react_mode = True
@@ -740,7 +745,11 @@ class DefaultApp:
                           "api_key": self.api_config.get("api_key", ""),
                           "model": self.api_config.get("model_name", "")}
                 if hasattr(self.subject_app, 'split_exam'):
-                    split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
+                    try:
+                        split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
+                    except Exception as e:
+                        log(f"❌ 拆分失败：{e}")
+                        split_ok = False
                 else:
                     split_ok = False
 
@@ -748,6 +757,8 @@ class DefaultApp:
                     converted_dir = os.path.join(split_root, basename)
                     converted_dirs.append(converted_dir)
                     log(f"   ✅ 自由校对处理完成")
+                else:
+                    log(f"   ⚠️ 自由校对拆分未完成，跳过")
         else:
             total = len(self.file_list)
             log(f"开始转换，模式={source}，共 {total} 个文件")
@@ -773,6 +784,18 @@ class DefaultApp:
 
                 is_md_file = (ext == '.md')
 
+                # 批注评审模式：转换前往 docx 注入占位符，让批注按 docx 真实位置就位
+                convert_source = file_path
+                temp_docx_path = None
+                if is_review_mode and not is_md_file and ext in ('.docx', '.doc'):
+                    try:
+                        from shared.docx_comments import inject_comment_placeholders
+                        temp_docx_path = inject_comment_placeholders(file_path)
+                        if temp_docx_path:
+                            convert_source = temp_docx_path
+                    except Exception as e:
+                        log(f"   ⚠️ 批注占位符注入失败，回退原文件：{e}")
+
                 if is_md_file:
                     try:
                         shutil.copy2(file_path, raw_md)
@@ -787,7 +810,7 @@ class DefaultApp:
                     
                     convert_func = getattr(self.subject_app, 'convert_file_to_md', None)
                     if convert_func:
-                        result = convert_func(file_path, raw_md, img_dir, use_mathjax=use_mathjax)
+                        result = convert_func(convert_source, raw_md, img_dir, use_mathjax=use_mathjax)
                         if isinstance(result, dict):
                             ok = result.get('success', False)
                             needs_post = result.get('needs_post_process', True)
@@ -795,8 +818,16 @@ class DefaultApp:
                             ok = result
                             needs_post = True
                     else:
-                        ok = convert_with_pandoc(file_path, raw_md, img_dir, use_mathjax=use_mathjax)
+                        ok = convert_with_pandoc(convert_source, raw_md, img_dir, use_mathjax=use_mathjax)
                         needs_post = True
+
+                # temp docx 已被 pandoc 读取完毕，清理（成功/失败都清）
+                if temp_docx_path:
+                    try:
+                        os.unlink(temp_docx_path)
+                    except OSError:
+                        pass
+                    temp_docx_path = None
 
                 if not ok:
                     log(f"   ❌ 转换失败")
@@ -848,9 +879,14 @@ class DefaultApp:
                           "model": self.api_config.get("model_name", "")}
                 if source == "讲义":
                     options["do_clean"] = self.clean_enabled.get()
-                    split_ok = self.subject_app.split_lecture(raw_md, split_root, basename, options)
-                else:
-                    split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
+                try:
+                    if source == "讲义":
+                        split_ok = self.subject_app.split_lecture(raw_md, split_root, basename, options)
+                    else:
+                        split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
+                except Exception as e:
+                    log(f"❌ 拆分失败：{e}")
+                    split_ok = False
 
                 if split_ok:
                     if source == "讲义" and self.knowledge_enabled.get():
@@ -864,6 +900,8 @@ class DefaultApp:
                     converted_dir = os.path.join(split_root, basename)
                     converted_dirs.append(converted_dir)
                     log(f"   ✅ {fname} 处理完成")
+                else:
+                    log(f"   ⚠️ {fname} 拆分未完成，跳过")
 
         log("=" * 50)
         if exec_mode == "仅转换":

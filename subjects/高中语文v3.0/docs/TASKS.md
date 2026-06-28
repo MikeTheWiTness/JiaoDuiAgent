@@ -31,7 +31,7 @@
 - **GitHub**：[#3](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/3)
 - **类型**：AFK
 - **状态**：已完成
-- **内容**：修复 subject.py 接口不兼容，对齐物理 v1.8 规范，版本升级到 v2.0，清理 app.py 路径 hack
+- **内容**：修复 subject.py 接口不兼容，对齐物理 v3.0 规范，版本升级到 v2.0，清理 app.py 路径 hack
 - **验收标准**：
   - [x] 启动不报错
   - [x] 讲义/试卷模式正常转换+拆分

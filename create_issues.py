@@ -53,12 +53,12 @@ issues = [
         "title": "[v2.0][高中语文] 切片1：基础修复 + 框架对齐",
         "body": """## What to build
 
-修复高中语文 v1.1 的接口不兼容问题，将 subject.py 对齐到高中物理 v1.8 的规范，版本号升级到 v2.0。
+修复高中语文 的接口不兼容问题，将 subject.py 对齐到高中物理 v3.0 的规范，版本号升级到 v2.0。
 
 具体内容：
 - 修复 split_lecture / split_exam / generate_knowledge / proofread_one 等方法签名，与 core/defaults.py 和 DefaultApp 调用方式一致
 - get_tool_instructions 改为无参数调用，在 get_question_prompt / get_knowledge_prompt 中拼接工具说明
-- 版本号从 v1.1 升级到 v2.0
+- 版本号升级到 v3.0
 - 清理 app.py 中的路径 hack
 - 修复后程序能正常启动并跑通基础流程
 

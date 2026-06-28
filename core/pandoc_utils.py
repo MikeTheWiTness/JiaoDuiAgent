@@ -51,19 +51,6 @@ def find_pandoc():
     return PANDOC_PATH
 
 
-def check_pandoc():
-    pandoc = find_pandoc()
-    try:
-        r = subprocess.run([pandoc, "--version"], capture_output=True, text=True,
-                           **(dict(creationflags=subprocess.CREATE_NO_WINDOW) if os.name == 'nt' else {}))
-        if r.returncode == 0:
-            log(f"✅ Pandoc: {r.stdout.splitlines()[0]}")
-            return True
-    except FileNotFoundError:
-        log("❌ Pandoc 未安装")
-    return False
-
-
 
 def _gen_clean_md(md_path):
     """从 raw.md 生成 _clean.md（去除所有格式标记和批注，保留正文文字）"""

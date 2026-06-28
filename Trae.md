@@ -298,12 +298,12 @@ WebFetchTool has special handling for certain sites. Always prefer using the ded
 
 ### Chinese (语文) v2.0 Project
 
-Major project under development. Upgrades 高中语文 from v1.1 to v2.0 with significant new features.
+Major project under development. Upgrades 高中语文 v3.0 with significant new features including ReAct agent mode.
 
-- **Project directory**: `subjects/高中语文v1.1/`
-- **Task list**: `subjects/高中语文v1.1/docs/TASKS.md` (12 slices, start here to see current progress)
-- **PRD**: `subjects/高中语文v1.1/docs/PRD_v2.0.md`
-- **Architecture decisions**: `subjects/高中语文v1.1/docs/adr/` (8 ADRs)
+- **Project directory**: `subjects/高中语文v3.0/`
+- **Task list**: `subjects/高中语文v3.0/docs/TASKS.md` (12 slices, start here to see current progress)
+- **PRD**: `subjects/高中语文v3.0/docs/PRD_v2.0.md`
+- **Architecture decisions**: `subjects/高中语文v3.0/docs/adr/` (8 ADRs)
 - **GitHub issues**: https://github.com/MikeTheWiTness/JiaoDuiAgent/issues (issues #3-#14)
 
 **New features in v2.0**:

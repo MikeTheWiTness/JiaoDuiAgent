@@ -1,6 +1,6 @@
 # 校对工具（学科独立版）
 
-K-12 多学科 AI 校对工具集 —— 每个学科独立程序，深度定制业务逻辑和界面
+K-12 多学科 AI 校对工具集 —— 每个学科独立程序，深度定制业务逻辑和界面。**v3.0 全学科接入 ReAct 代理模式。**
 
 ## 架构理念
 
@@ -15,48 +15,47 @@ K-12 多学科 AI 校对工具集 —— 每个学科独立程序，深度定制
 ## 项目结构
 
 ```
-校对agent/
+JiaoDuiAgent/
 ├── core/                     # 纯工具层（零业务逻辑、零 UI）
-│   ├── paths.py              # 路径工具（兼容打包后）
-│   ├── parsing.py            # LLM 输出解析
-│   ├── api_client.py         # API 调用（HTTP、重试、工具循环）
+│   ├── api_client.py         # API 调用（HTTP、重试、ReAct 工具循环）
+│   ├── parsing.py            # LLM 输出解析（内联标记 + 结构化 JSON）
+│   ├── defaults.py           # 默认拆分+校对参考实现
+│   ├── config_loader.py      # config.json + agent_prompt.json 加载
+│   ├── format_enforcement.py # 格式审查（程序初筛 + LLM 修正）
 │   ├── pandoc_utils.py       # Pandoc 转换
 │   ├── env_config.py         # .env 读写
 │   ├── logging_utils.py      # 日志
-│   ├── config_loader.py      # config.json 加载器
-│   └── defaults.py           # 默认拆分+校对参考实现
+│   └── manual_split.py       # 人工标记分割
 ├── shared/                   # 共享工具库
 │   ├── sympy_tools/          # 符号计算工具集
+│   ├── plan_tools.py         # ReAct 计划管理工具
+│   ├── text_nav_tools.py     # ReAct 文本定位工具
 │   ├── web_tools.py          # 联网检索
-│   ├── latex_generator.py    # Markdown → LaTeX
-│   ├── pdf_compiler.py       # XeLaTeX 编译
-│   ├── manual_split.py       # 人工标记分割
 │   ├── smart_split.py        # 智能分割（LLM + XML标记）
+│   ├── chinese_classics_tools.py  # 文言文/诗歌校对（识典古籍 + 搜韵）
+│   ├── shidianguji_playwright.py  # 识典古籍浏览器自动化
 │   ├── docx_comments.py      # Word 批注提取
-│   ├── chinese_classics_tools.py  # 文言文/诗歌校对工具
-│   ├── free_proofread.py     # 自由校对模式
+│   ├── docx_format_enhancer.py    # Word 格式标记增强
 │   ├── review_mode.py        # 批注评审模式
-│   ├── review_latex.py       # 批注评审 PDF 生成
+│   ├── latex_generator.py    # Markdown → LaTeX
 │   └── templates/
-│       └── proofread_template.tex
 ├── ui/                       # UI 组件库 + 默认模板
 │   ├── widgets.py            # 可复用组件（LogPanel/ApiDialog/ModeSelector）
-│   └── default_app.py        # DefaultApp 默认界面模板
-├── 高中物理/                  # 学科独立程序示例
-│   ├── main.py               # 入口
-│   ├── subject.py            # 业务逻辑（SubjectApp 类）
-│   ├── app.py                # GUI（SubjectGui 类，继承 DefaultApp）
-│   ├── config.json           # 配置（提示词 + 拆分规则）
-│   ├── README.md
-│   └── .env                  # API 配置（运行时生成）
-├── specs/                    # 各学科的 PyInstaller spec 文件
-│   └── 高中物理.spec
-├── tools/                    # 构建工具
-│   └── build_minimal_texlive.py
-├── docs/
-│   └── packaging.md          # 打包指南
+│   └── default_app.py        # DefaultApp — 默认 GUI 模板（含 ReAct 开关）
+├── subjects/                 # 学科独立程序
+│   ├── 高中语文v3.0/         # 高中语文 v3.0（ReAct 范例学科）
+│   ├── 高中物理v3.0/         # 高中物理 v3.0
+│   ├── 高中化学v3.0/         # 高中化学 v3.0
+│   ├── 初中英语v3.0/         # 初中英语 v3.0
+│   ├── 小学数学v3.0/         # 小学数学 v3.0
+│   └── 小学语文v3.0/         # 小学语文 v3.0
+├── tests/                    # 测试
+├── docs/                     # 文档
+│   ├── packaging.md          # 打包指南
+│   └── adr/                  # 架构决策记录
+├── specs/                    # PyInstaller spec 文件
 ├── requirements.txt
-└── Trae.md                   # 项目系统提示词（给 AI 助手看的）
+└── CLAUDE.md                 # 项目工作约定
 ```
 
 ## 快速开始
@@ -65,8 +64,8 @@ K-12 多学科 AI 校对工具集 —— 每个学科独立程序，深度定制
 
 - Windows 10+
 - Python 3.12
-- Pandoc（Word 转 Markdown 用）
-- TeX Live（可选，生成 PDF 用）
+- Pandoc（Word 转 Markdown）
+- TeX Live（可选，生成 PDF）
 
 ### 安装依赖
 
@@ -76,21 +75,29 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 运行高中物理
+### 运行
 
 ```bash
-python 高中物理/main.py
-```
-
-### 运行其他学科
-
-```bash
-python 高中语文/main.py
-python 高中数学/main.py
+# 各学科独立运行
+python subjects/高中语文v3.0/main.py
+python subjects/高中物理v3.0/main.py
 # ...
 ```
 
-每个学科独立运行，互不影响。
+## v3.0 核心特性：ReAct 代理模式
+
+v3.0 将 LLM 从"一次性生成"升级为**自主规划-定位-校对**的代理模式：
+
+| 能力 | 工具 | 说明 |
+|------|------|------|
+| 计划管理 | `plan_update` | 校对前声明步骤，进行中更新状态，完成后自检 |
+| 文本定位 | `locate_paragraph` / `read_section` | 在长文中精确搜索和按范围读取文本 |
+| 学科工具 | sympy / 联网搜索等 | 实算验证 + 专业术语检索 |
+| 标注输出 | 内联标记 | 【编号\|原文\|改为】格式 |
+
+**工作流**：声明计划 → 逐项执行 → 定位原文 → 验证证据 → 标记错误 → 全部完成自检输出
+
+ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校对模式。
 
 ## 三层分离架构
 
@@ -104,30 +111,31 @@ python 高中数学/main.py
 
 ### 扩展方式
 
-**添加一个新学科**（以高中语文为例）：
-1. 新建 `高中语文/` 目录
+**添加一个新学科**：
+1. 新建 `subjects/学科名/` 目录
 2. 创建 `config.json`（提示词 + 拆分规则）
-3. 创建 `subject.py`：实现 `SubjectApp` 类
+3. 创建 `agent_prompt.json`（ReAct 模式提示词）
+4. 创建 `subject.py`：实现 `SubjectApp` 类
    - 工具集 → 覆盖 `build_tools()`
    - 调用次数 → 覆盖 `get_max_tool_loops()`
    - 工具指令 → 覆盖 `get_tool_instructions()`
    - 拆分逻辑 → 覆盖 `split_lecture()` / `split_exam()`
    - 校对钩子 → 覆盖 `pre/post_proofread_hook()`
    - 完全自定义校对 → 覆盖 `proofread_one()`
-4. 创建 `app.py`：实现 `SubjectGui` 类
-   - 简单定制：继承 `DefaultApp`，覆盖 `setup_extra_options()` 等扩展点
-   - 深度定制：完全重写，自由组合 `ui/widgets.py` 中的组件
-5. 创建 `main.py`：入口（复制高中物理的，基本不需要改）
-6. 创建 `specs/高中语文.spec`：打包配置
+5. 创建 `app.py`：实现 `SubjectGui` 类
+6. 创建 `main.py`：入口
 7. `core/`、`shared/`、`ui/` **零改动**
 
 ## 已完成学科
 
-| 学科 | 状态 | 工具数 | 拆分模式 | UI | 特色功能 |
-|------|------|--------|---------|-----|---------|
-| 高中物理 v1.8 | ✅ 完成 | 7 个（6个sympy + web_search） | title | 继承默认模板 | 符号计算、公式校验 |
-| 高中语文 v2.0 | ✅ 完成 | 2 个（shidianguji + souyun + web_search） | 4 种（不拆分/规则/智能/人工标记） | 增强版默认模板 | 文言文/诗歌校验、自由校对、批注评审 |
-| 更多学科... | 待施工 | — | — | — | — |
+| 学科 | 版本 | ReAct | 工具数 | 特色功能 |
+|------|------|-------|--------|---------|
+| 高中语文 | v3.0 | ✅ 范例 | 3（plan + navigate + 前置搜索） | 文言文/诗歌校验、批注评审、识典古籍 |
+| 高中物理 | v3.0 | ✅ | 10（6 sympy + web_search + 3 ReAct） | 物理公式求解、量纲分析、向量运算 |
+| 高中化学 | v3.0 | ✅ | 9（6 sympy + 3 ReAct） | 化学方程式配平、化学计量计算 |
+| 小学数学 | v3.0 | ✅ | 7（4 sympy + 3 ReAct） | 算术验证、方程求解、五核校对 |
+| 初中英语 | v3.0 | ✅ | 3（plan + navigate） | 词汇/语法/题型分层校对 |
+| 小学语文 | v3.0 | ✅ | 3（plan + navigate） | 拼音/汉字/古诗词校对、IDML 支持 |
 
 ## 核心功能
 
@@ -156,103 +164,63 @@ python 高中数学/main.py
 |------|------|
 | 不拆分 | 整份文档作为一个单元校对 |
 | 普通规则 | 按标题/题号自动拆分 |
-| 智能分割 | 调用 LLM 自动识别题目边界（XML 标记） |
-| 人工标记 | 按 ###### 题目开始/结束 ###### 标记拆分 |
-
-## 高中语文 v2.0 特色
-
-作为目前功能最完整的学科，高中语文 v2.0 包含以下特色：
-
-### 文言文 & 诗歌校对
-- 自动识别文本类型（文言文 / 诗歌 / 现代文）
-- 自动检索权威来源（诗词名句网、搜韵网）
-- 逐字对比，标注异文和易错字
-
-### 自由校对模式
-- 直接粘贴文本、上传图片或 md 文件
-- 不需要 Word 格式，适合零散内容快速校对
-- 支持四种分割方式选择
-
-### 批注评审模式
-- 提取 Word 文档中的批注内容
-- 逐条评审批注质量（正确/错误/需补充）
-- 自动补充遗漏的错误点
-- 生成逐条展开式 PDF 评审报告
-
-### GUI 增强
-- 动态 UI：不同模式显示不同控件
-- 模式说明：每个选项都有即时文字说明
-- 支持直接上传 .md 文件进行拆分
-- 仅校对模式可选择来源模式决定提示词
+| 智能分割 | 调用 LLM 自动识别题目边界 |
+| 人工标记 | 按 `######` 手动标记拆分 |
 
 ## 开发指南
 
-### 给新学科写 subject.py
-
-最小实现（全部复用默认逻辑，只需指定工具）：
+### 给新学科写 subject.py（v3.0 最低要求）
 
 ```python
-from shared.sympy_tools.tools import EvaluateExpressionTool, SolveEquationTool
+from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture, default_split_exam,
-    default_proofread_one, default_collect_paper_dirs,
+    default_generate_knowledge, default_proofread_one,
+    default_collect_paper_dirs,
 )
 
 class SubjectApp:
-    name = "高中数学"
+    name = "学科名"
+    version = "v3.0"
+    LEVEL = "学段"
+    SUBJECT = "学科"
 
     def __init__(self, subject_dir):
         self.subject_dir = subject_dir
         self.config = load_config(subject_dir)
+        self.react_mode = False          # 由 UI 控制
         self.tools = self.build_tools()
 
     def build_tools(self):
-        return [EvaluateExpressionTool(), SolveEquationTool()]
+        base = []  # 学科专业工具
+        if self.react_mode:
+            from shared.plan_tools import PlanUpdateTool
+            from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
+            base.extend([PlanUpdateTool(), LocateParagraphTool(), ReadSectionTool()])
+        return base
 
     def get_max_tool_loops(self):
-        return 20
-
-    def get_tool_instructions(self):
-        return "..."  # 工具使用说明，追加到提示词末尾
+        return 15 if self.react_mode else 0
 
     def get_question_prompt(self):
-        return self.config["question_prompt_lines"] + self.get_tool_instructions()
+        # ReAct 模式优先读取 agent_prompt.json
+        if self.react_mode:
+            agent_lines = self.config.get("agent_prompt_lines")
+            if agent_lines:
+                return "\n".join(agent_lines)
+        return "\n".join(self.config.get("question_prompt_lines", []))
 
-    def get_knowledge_prompt(self):
-        return self.config["knowledge_prompt_lines"] + self.get_tool_instructions()
-
-    def split_lecture(self, md_file, output_root, base_name, options):
-        return default_split_lecture(md_file, output_root, base_name, options, self.config)
-
-    # ... 其他方法同理
+    # proofread_one 签名必须一致:
+    def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode="试卷"):
+        ...
+        return default_proofread_one(..., react_mode=self.react_mode)
 ```
-
-### 给新学科写 app.py
-
-简单定制（继承默认模板，加几个控件）：
-
-```python
-from ui.default_app import DefaultApp
-import tkinter as tk
-from tkinter import ttk
-
-class SubjectGui(DefaultApp):
-    def setup_extra_options(self, frame):
-        self.verify_original = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame, text="原文联网校验",
-                        variable=self.verify_original).pack(side=tk.LEFT)
-
-    def on_start_proofread(self):
-        self.subject_app.verify_original = self.verify_original.get()
-        super().on_start_proofread()
-```
-
-完全自定义：从零搭建界面，只需通过 `self.subject_app` 调用业务逻辑即可。
 
 ## 相关文档
 
 - [打包指南](docs/packaging.md) — PyInstaller 打包 + 便携 TeX 提取
+- [架构决策记录](docs/adr/) — 各版本关键技术决策
 
 ## 版本
 
-v2.1 — 学科独立架构 + 高中语文 v2.0 完整版（2026-06）
+v3.0 — 全学科 ReAct 代理模式接入（2026-06）

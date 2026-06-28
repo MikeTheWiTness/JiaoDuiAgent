@@ -10,6 +10,9 @@ from core import config_loader
 def _strip_search_from_prompt(prompt: str) -> str:
     """移除系统提示词中的联网搜索指令。在前置搜索成功注入原文后调用，
     避免 LLM 拿到前置参考后仍然反复搜索。
+
+    本阶段 LLM 不配备搜索工具，仅剥离「## 可用的联网搜索工具」说明段，
+    不再追加任何关于搜索的约束说明（避免引用 LLM 没有的工具造成困惑）。
     """
     # 移除 "## 可用的联网搜索工具" 整段（到下一个 ## 标题前）
     cleaned = re.sub(
@@ -20,12 +23,7 @@ def _strip_search_from_prompt(prompt: str) -> str:
     )
     # 清理多余空行
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-    # 追加说明：前置参考已提供原文，禁止再搜索
-    cleaned = cleaned.rstrip() + (
-        "\n\n**注意：上文「前置参考」已提供权威原文和差异对比结果，"
-        "本次校对严禁使用任何搜索工具，请直接基于前置参考和你的知识完成校对。**"
-    )
-    return cleaned
+    return cleaned.rstrip()
 
 
 def fix_latex_escapes(md_file):
@@ -606,10 +604,15 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
 
     try:
         result = call_api(api_url, api_key, model, md_content, images_b64,
-                          q_name, prompt, tools=tools, max_loops=max_loops)
+                          q_name, prompt, tools=tools, max_loops=max_loops,
+                          output_dir=q_dir)
         res = result["content"]
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")
+        # 记录 LLM 最终返回内容摘要
+        log(f"   📥 LLM 最终返回: {res[:150].replace(chr(10), ' ')}...")
+        if reasoning:
+            log(f"   💭 模型思考: {reasoning[:150].replace(chr(10), ' ')}...")
     except Exception as e:
         return {"success": False, "result": "", "error": str(e), "tool_calls": []}
 
@@ -627,6 +630,8 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
             md_path = os.path.join(q_dir, "_校对报告.md")
             try:
                 with open(md_path, "w", encoding="utf-8") as f:
+                    # 加注 API 对话记录路径，方便排查
+                    f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
                     f.write(res)
                     # 追加工具调用摘要，方便排查搜索质量
                     if tool_calls:
@@ -649,6 +654,7 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 artifact_dir.mkdir(parents=True, exist_ok=True)
                 artifact_path = artifact_dir / "_校对报告.md"
                 with open(artifact_path, "w", encoding="utf-8") as f:
+                    f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
                     f.write(res)
                     if tool_calls:
                         f.write(_format_tool_calls_summary(tool_calls))
@@ -661,6 +667,10 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 src_json = os.path.join(q_dir, "_校对数据.json")
                 if os.path.exists(src_json):
                     shutil.copy2(src_json, artifact_dir / "_校对数据.json")
+                # 同步存档 API 对话记录
+                src_api_log = os.path.join(q_dir, "_API对话记录.md")
+                if os.path.exists(src_api_log):
+                    shutil.copy2(src_api_log, artifact_dir / "_API对话记录.md")
             except Exception:
                 pass
         return {"success": True, "result": res, "tool_calls": tool_calls, "error": None}

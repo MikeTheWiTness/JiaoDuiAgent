@@ -1,4 +1,5 @@
-import json, time, re
+import json, time, re, os
+from pathlib import Path
 import requests
 from core.logging_utils import log
 
@@ -36,7 +37,11 @@ def execute_tool(tool_instances, tool_name, arguments):
     for t in tool_instances:
         if t.name == tool_name:
             try:
-                return t._run(**arguments)
+                result = t._run(**arguments)
+                # 如果工具返回 dict，序列化为 JSON 字符串，避免后续切片报错
+                if isinstance(result, dict):
+                    result = json.dumps(result, ensure_ascii=False)
+                return result
             except Exception as e:
                 return f"工具执行错误: {e}"
     return f"未知工具: {tool_name}"
@@ -77,7 +82,8 @@ def _is_empty_or_duplicate(result: str, recent_results: list) -> bool:
     empty_markers = [
         "[搜索结果为空", "[搜索无结果", "[网页抓取失败",
         "[未找到", "[网页内容为空", "[识典古籍未收录",
-        "[搜韵网未收录", "未知工具:",
+        "[搜韵网未收录", "未知工具:", "[not found]",
+        "[error: no text]",
     ]
     for marker in empty_markers:
         if stripped.startswith(marker):
@@ -111,12 +117,88 @@ def _strip_search_instructions(prompt: str) -> str:
     return cleaned
 
 
+def _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools):
+    """将发送给 LLM 的初始请求记录到文件。"""
+    lines = []
+    lines.append(f"# API 请求记录 — {q_title}\n")
+    lines.append(f"## 系统提示词 ({len(system_prompt)} 字符)\n")
+    lines.append("```\n" + system_prompt + "\n```\n")
+    lines.append(f"\n## 用户文本内容 ({len(md_text)} 字符)\n")
+    lines.append("```\n" + md_text[:10000] + ("\n...[截断]" if len(md_text) > 10000 else "") + "\n```\n")
+    if images:
+        lines.append(f"\n## 图片 ({len(images)} 张)\n")
+        for i, img in enumerate(images, 1):
+            url = img.get("image_url", {}).get("url", "")
+            if url:
+                lines.append(f"- 第{i}张: {url[:80]}...\n")
+    if openai_tools:
+        lines.append(f"\n## 可用工具 ({len(openai_tools)} 个)\n")
+        for t in openai_tools:
+            lines.append(f"- **{t['function']['name']}**: {t['function']['description'][:120]}\n")
+    lines.append("\n---\n\n## LLM 对话记录\n\n")
+    return "".join(lines)
+
+
+def _save_conversation_log(messages, output_dir, q_title, initial_header):
+    """将完整对话记录保存到文件。"""
+    if not output_dir:
+        return
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        log_path = os.path.join(output_dir, "_API对话记录.md")
+        lines = [initial_header]
+        turn = 0
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "system":
+                continue  # 已在 initial_header 中记录
+            elif role == "user":
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            lines.append(f"### 用户输入\n\n```\n{part['text'][:5000]}\n```\n\n")
+                        elif isinstance(part, dict) and part.get("type") == "image_url":
+                            lines.append(f"### 用户输入（图片）\n\n[{part.get('image_url', {}).get('url', '')[:80]}...]\n\n")
+                else:
+                    lines.append(f"### 用户输入\n\n```\n{str(content)[:5000]}\n```\n\n")
+            elif role == "assistant":
+                turn += 1
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls:
+                    lines.append(f"### 第{turn}轮 — LLM 请求工具调用\n\n")
+                    if content:
+                        lines.append(f"**思考内容:**\n\n```\n{content[:2000]}\n```\n\n")
+                    for tc in tool_calls:
+                        tc_name = tc.get("function", {}).get("name", "?")
+                        tc_args = tc.get("function", {}).get("arguments", "{}")
+                        lines.append(f"- **工具**: `{tc_name}`\n")
+                        try:
+                            args_obj = json.loads(tc_args)
+                            lines.append(f"- **参数**: `{json.dumps(args_obj, ensure_ascii=False)[:300]}`\n\n")
+                        except Exception:
+                            lines.append(f"- **参数**: `{tc_args[:300]}`\n\n")
+                else:
+                    lines.append(f"### 第{turn}轮 — LLM 最终回复\n\n")
+                    lines.append(f"```\n{content[:10000]}{'...[截断]' if len(str(content)) > 10000 else ''}\n```\n\n")
+            elif role == "tool":
+                lines.append(f"### 工具返回\n\n```\n{str(content)[:5000]}\n```\n\n")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("".join(lines))
+        log(f"   📝 完整对话记录已保存: {log_path}")
+    except Exception as e:
+        log(f"   ⚠️ 保存对话记录失败: {e}")
+
+
 def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
-             tools=None, max_loops=20, max_tokens=32768):
+             tools=None, max_loops=20, max_tokens=32768, output_dir=None):
     err_msg = ""
     tool_calls_log = []
     tool_instances = tools or []
     openai_tools = [tool_to_openai(t) for t in tool_instances] if tool_instances else None
+    # 注入当前校对文本，供 text_nav_tools（locate_paragraph/read_section）使用
+    from shared.text_nav_tools import set_current_text as _set_nav_text
+    _set_nav_text(md_text)
     chat_url = api_url.rstrip("/")
     if not chat_url.endswith("/chat/completions"):
         chat_url += "/chat/completions"
@@ -125,6 +207,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
         tool_calls_log.clear()
         try:
             recent_results = []
+            empty_streak = 0
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": [
@@ -139,6 +222,10 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
             }
             if openai_tools:
                 payload["tools"] = openai_tools
+
+            # 记录发送给 LLM 的初始请求内容
+            log(f"   📤 发送请求 → 模型: {model}, 系统提示词长度: {len(system_prompt)}字符, 文本内容长度: {len(md_text)}字符, 图片: {len(images)}张")
+            initial_header = _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools)
 
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
@@ -162,6 +249,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                     reasoning = choice.get("message", {}).get("reasoning_content", "")
                     content = choice["message"]["content"]
                     messages.append({"role": "assistant", "content": content})
+                    _save_conversation_log(messages, output_dir, q_title, initial_header)
                     return {
                         "content": content,
                         "tool_calls_log": tool_calls_log,
@@ -170,6 +258,10 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                         "stop_reason": StopReason.MAX_TURNS,
                     }
                 messages.append(choice["message"])
+                # 记录 LLM 返回的工具调用请求
+                assistant_text = choice["message"].get("content", "")
+                if assistant_text:
+                    log(f"   🤖 LLM 思考: {assistant_text[:150].replace(chr(10), ' ')}")
                 for tc in choice["message"]["tool_calls"]:
                     tool_name = tc["function"]["name"]
                     try:
@@ -191,12 +283,16 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                     summary = result[:120].replace('\n', ' ').strip()
                     log(f"   🔧 {tool_name}({json.dumps(args, ensure_ascii=False)[:100]}) → {summary}")
 
-                    # 连续空结果检测
+                    # 连续空结果检测（仅对检索/抓取类工具有效）
+                    # plan_update / locate_paragraph / read_section 属于
+                    # 流程控制 / 文本导航工具，结果天然不会"新颖"，不应计入
+                    _NAV_CONTROL_TOOLS = {"plan_update", "locate_paragraph", "read_section"}
                     recent_results.append(result)
-                    if _is_empty_or_duplicate(result, recent_results):
-                        empty_streak += 1
-                    else:
-                        empty_streak = 0
+                    if tool_name not in _NAV_CONTROL_TOOLS:
+                        if _is_empty_or_duplicate(result, recent_results):
+                            empty_streak += 1
+                        else:
+                            empty_streak = 0
 
                     if empty_streak >= 3:
                         log(f"   ⚠️ 连续 {empty_streak} 轮空结果，压缩历史 + 去工具...")
@@ -210,6 +306,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                         reasoning = choice.get("message", {}).get("reasoning_content", "")
                         content = choice["message"]["content"]
                         messages.append({"role": "assistant", "content": content})
+                        _save_conversation_log(messages, output_dir, q_title, initial_header)
                         return {
                             "content": content,
                             "tool_calls_log": tool_calls_log,
@@ -226,6 +323,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
             content = choice["message"]["content"]
             if content:
                 messages.append({"role": "assistant", "content": content})
+            _save_conversation_log(messages, output_dir, q_title, initial_header)
             return {
                 "content": content,
                 "tool_calls_log": tool_calls_log,
@@ -238,6 +336,8 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
             if retry < MAX_RETRY:
                 log(f"⚠️ {q_title} 第{retry+1}次重试...")
                 time.sleep(2)
+    # 所有重试耗尽，记录错误
+    _save_conversation_log([], output_dir, q_title, f"# API 请求记录 — {q_title}\n\n## 错误\n\n{err_msg}\n")
     return {
         "content": f"**API调用失败：**\n{err_msg}",
         "tool_calls_log": [],
@@ -288,11 +388,14 @@ def call_api_continue(
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     try:
+        log(f"   📤 [格式修正] 发送请求: {follow_up_message[:120].replace(chr(10), ' ')}...")
         resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
         resp.raise_for_status()
         choice = resp.json()["choices"][0]
         content = choice["message"]["content"]
         reasoning = choice.get("message", {}).get("reasoning_content", "")
+        log(f"   📥 [格式修正] LLM 返回: {content[:120].replace(chr(10), ' ')}...")
         return {"content": content, "reasoning": reasoning}
     except Exception as e:
+        log(f"   ❌ [格式修正] API 调用失败: {e}")
         return {"content": f"**API调用失败：**\\n{str(e)}", "reasoning": ""}

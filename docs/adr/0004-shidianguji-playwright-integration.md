@@ -80,7 +80,7 @@ shared/shidianguji_playwright.py  ← Playwright 搜索+抓取封装
 core/pandoc_utils.py
    └─ convert_with_pandoc() → 生成 _clean.md
 
-subjects/高中语文v1.1/subject.py
+subjects/高中语文v3.0/subject.py
    └─ _write_problems_to_dirs() → 同步写 _clean.md
 
 core/defaults.py

@@ -70,7 +70,7 @@ class TestE2EShidiangujiIntegration(unittest.TestCase):
             "徙资州司兵。卒，年六十五。"
         )
 
-        extracted = extract_excerpt_from_full(full, excerpt, margin=10)
+        extracted = extract_excerpt_from_full(full, excerpt)
         self.assertIsNotNone(extracted)
 
         clean_extracted = re.sub(r'[#*`\[\]()\s]', '', extracted)

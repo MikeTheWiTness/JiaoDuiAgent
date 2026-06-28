@@ -89,7 +89,7 @@ def search_and_extract(keywords, timeout=60000):
     获取 /book/xxx/chapter/xxx 链接后调用 extract_chapter。
 
     Args:
-        keywords: 搜索关键词（建议取前 10 字）
+        keywords: 搜索关键词（建议取前 20 字）
         timeout: 整体超时（毫秒）
 
     Returns:

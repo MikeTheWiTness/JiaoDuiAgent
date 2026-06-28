@@ -1,8 +1,8 @@
 import re
 
 
-START_MARKER = r"######\s*题目开始\s*######"
-END_MARKER = r"######\s*题目结束\s*######"
+START_MARKER = r"(\\?#){6}\s*题目开始\s*(\\?#){6}"
+END_MARKER = r"(\\?#){6}\s*题目结束\s*(\\?#){6}"
 
 
 class ManualMarkerError(ValueError):

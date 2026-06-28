@@ -31,6 +31,16 @@ def load_config(subject_dir):
     config["question_prompt_lines"] = new_data["question_prompt_lines"]
     config["knowledge_prompt_lines"] = new_data["knowledge_prompt_lines"]
 
+    # 加载可选的 agent_prompt.json（ReAct 模式专用，不存在时不报错）
+    agent_file = os.path.join(subject_dir, "agent_prompt.json")
+    if os.path.exists(agent_file):
+        try:
+            with open(agent_file, 'r', encoding='utf-8') as f:
+                agent_data = json.load(f)
+            config["agent_prompt_lines"] = agent_data.get("agent_prompt_lines", [])
+        except Exception as e:
+            _log.warning(f"加载 agent_prompt.json 失败: {e}")
+
     lecture = new_data.get("lecture_split", {})
     config["lecture_split_mode"] = lecture.get("split_mode", "title")
     config["lecture_section_pattern"] = lecture.get("section_pattern", r"^##\s")

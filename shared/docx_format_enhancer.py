@@ -32,6 +32,7 @@ def extract_special_formats(docx_path):
         }
     """
     Document = None
+    import importlib.util
     try:
         from docx import Document
     except (ImportError, AttributeError):
@@ -41,7 +42,13 @@ def extract_special_formats(docx_path):
         except (ImportError, AttributeError):
             pass
     if Document is None:
-        log("⚠️ python-docx 未安装或版本不兼容，无法提取特殊格式")
+        # 诊断：找出实际加载的 docx 模块位置
+        try:
+            spec = importlib.util.find_spec("docx")
+            loc = spec.origin if spec and spec.origin else "not found"
+        except Exception:
+            loc = "unknown"
+        log(f"\u26a0\ufe0f python-docx \u672a\u5b89\u88c5\u6216\u7248\u672c\u4e0d\u517c\u5bb9 (docx path: {loc})\uff0c\u65e0\u6cd5\u63d0\u53d6\u7279\u6b8a\u683c\u5f0f")
         return []
 
     formats = []

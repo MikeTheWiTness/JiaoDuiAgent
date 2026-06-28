@@ -8,6 +8,9 @@ from shared.docx_comments import (
     parse_comments_xml,
     extract_comment_anchors,
     insert_comments_into_md,
+    insert_comments_from_docx,
+    inject_comment_placeholders,
+    replace_comment_placeholders,
     normalize_text,
     fuzzy_insert_comment,
 )
@@ -197,6 +200,139 @@ class TestEdgeCases(unittest.TestCase):
         self.assertIn("批注 id=1", result)
         self.assertIn("批注 id=2", result)
         self.assertIn("批注 id=3", result)
+
+
+class TestShortAnchorCollision(unittest.TestCase):
+    """短数字锚点不应匹配已插入 <批注 id=N> 标记内部的数字。
+
+    回归 bug：题号批注锚点为单数字 "9"，replace("9",...) 命中已插入
+    <批注 id=9> 标记里的 "9"，把新批注插进旧标记开标签，产出
+    <批注 id=9<批注 id=38>... 破损嵌套，且批注错位到第1题。
+    """
+
+    def test_minimal_digit_anchor_not_nested_into_marker(self):
+        # 甲→id=1，锚点 "1" 应命中 body "1"，不命中 <批注 id=1> 里的 "1"
+        md = "甲1乙"
+        comments = {"a": "批注甲", "b": "批注一"}
+        anchors = [
+            {"id": "a", "text": "甲", "pos": 0},
+            {"id": "b", "text": "1", "pos": 10},
+        ]
+        result = insert_comments_into_md(md, comments, anchors)
+        self.assertNotIn("<批注 id=1<批注", result, "短数字锚点不应嵌进已插入标记")
+        self.assertIn("<批注 id=1><原>甲</原>", result)
+        self.assertIn("<批注 id=2><原>1</原>", result)
+        self.assertEqual(result.count("<批注 id=1><原>甲</原>"), 1)
+        self.assertEqual(result.count("<批注 id=2><原>1</原>"), 1)
+
+    def test_realistic_digit9_anchor_after_id9_marker(self):
+        # 复刻真实 bug：第9个批注(壬)编号 id=9，后续单数字 "9" 锚点
+        md = "甲乙丙丁戊己庚辛壬9题"
+        chars = list("甲乙丙丁戊己庚辛壬")
+        comments = {str(i): f"批注{c}" for i, c in enumerate(chars)}
+        comments["9"] = "题号批注"
+        anchors = [{"id": str(i), "text": c, "pos": i} for i, c in enumerate(chars)]
+        anchors.append({"id": "9", "text": "9", "pos": 100})
+        result = insert_comments_into_md(md, comments, anchors)
+        self.assertNotIn("<批注 id=9<批注", result, "锚点 '9' 不应嵌进 <批注 id=9> 标记")
+        self.assertIn("<批注 id=9><原>壬</原>", result)   # 第9个批注完整
+        self.assertIn("<批注 id=10><原>9</原>", result)   # 题号批注独立、在 body "9" 处
+
+    def test_digit_anchor_absent_from_body_not_misinserted(self):
+        # 锚点 "1" 不在 body 里（只在已插入 <批注 id=1> 标记内）→ 不应错插，应跳过
+        md = "甲乙"
+        comments = {"a": "批注甲", "b": "找不到的批注"}
+        anchors = [
+            {"id": "a", "text": "甲", "pos": 0},
+            {"id": "b", "text": "1", "pos": 10},
+        ]
+        result = insert_comments_into_md(md, comments, anchors)
+        self.assertNotIn("<批注 id=1<批注", result)
+        self.assertNotIn("<批注 id=2>", result)  # 锚点缺失，第二条不插入
+
+
+class TestPlaceholderInsertion(unittest.TestCase):
+    """占位符精确插入：pandoc 前注入 CMTEND{N}Z，转换后按 md 顺序替换为批注标记。
+
+    位置由 docx commentRangeEnd 决定，与锚点文本是否重复无关——彻底解决
+    短/重复锚点错位与 id 乱序。
+    """
+
+    def test_replace_preserves_anchor_text_and_position(self):
+        # 罗阳 在 token 前，主簿 在后；标记应落在 token 位置（罗阳之后、主簿之前）
+        md = "部属罗阳CMTEND11Z主簿"
+        comments = {"11": "洛阳"}
+        anchors = [{"id": "11", "text": "罗阳", "pos": 0}]
+        result = replace_comment_placeholders(md, comments, anchors)
+        self.assertEqual(result,
+                         "部属罗阳<批注 id=1><原>罗阳</原><改>洛阳</改></批注>主簿")
+
+    def test_replace_renumber_by_md_order(self):
+        # 两个 token，按 md 出现顺序编号 1,2（与 docx cid 大小无关）
+        md = "韦凑CMTEND11Z字彦宗CMTEND3Z"
+        comments = {"11": "洛阳", "3": "改为昆虫"}
+        anchors = [{"id": "11", "text": "罗阳", "pos": 0},
+                   {"id": "3", "text": "昆蛟", "pos": 10}]
+        result = replace_comment_placeholders(md, comments, anchors)
+        self.assertIn("<批注 id=1><原>罗阳</原><改>洛阳</改></批注>", result)
+        self.assertIn("<批注 id=2><原>昆蛟</原><改>改为昆虫</改></批注>", result)
+        self.assertNotIn("CMTEND", result)
+
+    def test_replace_skip_unknown_id(self):
+        # cid 99 不在 anchors（空锚点/无 Range）→ 移除占位符、不插标记、不占编号
+        md = "韦凑CMTEND11Z字CMTEND99Z"
+        comments = {"11": "洛阳", "99": "内容"}
+        anchors = [{"id": "11", "text": "罗阳", "pos": 0}]
+        result = replace_comment_placeholders(md, comments, anchors)
+        self.assertIn("<批注 id=1><原>罗阳</原>", result)
+        self.assertNotIn("CMTEND", result)
+        self.assertNotIn("<批注 id=2>", result)
+
+    def test_replace_digit_anchor_not_confused_by_repeated_text(self):
+        # 锚点 "9" 在 md 里多次出现：占位符钉位置，不靠文本搜索，不会错位
+        md = "长辈9完成9CMTEND46Z题"  # 真正批注位在第二个 9 之后
+        comments = {"46": "题号标注9-12题断裂"}
+        anchors = [{"id": "46", "text": "9", "pos": 0}]
+        result = replace_comment_placeholders(md, comments, anchors)
+        self.assertEqual(result,
+                         "长辈9完成9<批注 id=1><原>9</原><改>题号标注9-12题断裂</改></批注>题")
+
+    def test_inject_inserts_token_after_comment_range_end(self):
+        import tempfile
+        import zipfile
+        doc_xml = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                   '<w:body><w:p><w:r><w:t>罗阳</w:t></w:r>'
+                   '<w:commentRangeEnd w:id="11"/>'
+                   '<w:r><w:commentReference w:id="11"/></w:r></w:p></w:body></w:document>')
+        fd, docx_path = tempfile.mkstemp(suffix='.docx')
+        os.close(fd)
+        with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('word/document.xml', doc_xml)
+        try:
+            temp = inject_comment_placeholders(docx_path)
+            self.assertIsNotNone(temp, "有 commentRangeEnd 应生成 temp docx")
+            with zipfile.ZipFile(temp) as z:
+                new_xml = z.read('word/document.xml').decode('utf-8')
+            self.assertIn(
+                '<w:commentRangeEnd w:id="11"/><w:r><w:t xml:space="preserve">CMTEND11Z</w:t></w:r>',
+                new_xml)
+            os.unlink(temp)
+        finally:
+            os.unlink(docx_path)
+
+    def test_inject_no_comment_range_returns_none(self):
+        import tempfile
+        import zipfile
+        doc_xml = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                   '<w:body><w:p><w:r><w:t>无批注</w:t></w:r></w:p></w:body></w:document>')
+        fd, docx_path = tempfile.mkstemp(suffix='.docx')
+        os.close(fd)
+        with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('word/document.xml', doc_xml)
+        try:
+            self.assertIsNone(inject_comment_placeholders(docx_path))
+        finally:
+            os.unlink(docx_path)
 
 
 class TestNormalizeText(unittest.TestCase):

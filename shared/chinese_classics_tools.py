@@ -1,11 +1,11 @@
 """文言文/诗歌校对工具集 —— 文本类型识别、前置搜索、自动 diff。"""
 import re
+import os
 import difflib
 import requests
 import json
 
 from core.logging_utils import log
-
 
 CLASSICAL_PARTICLES = [
     "之", "乎", "者", "也", "矣", "焉", "哉",
@@ -37,7 +37,6 @@ _LEADIN_PATTERNS = [
     re.compile(r'\*\*[\d一二三四五六七八九十]+、[^*]+\*\*'),
 ]
 
-
 def _clean_annotations(text):
     """清理文本中的批注标记、格式标记，方便后续正则匹配。
 
@@ -61,7 +60,6 @@ def _clean_annotations(text):
     text = re.sub(r'\s{2,}', ' ', text)
     return text
 
-
 def _strip_leadin(text):
     """去掉试题引导语，返回正文开头的纯文本片段。"""
     # 先清理批注标记，否则会干扰引导语正则匹配
@@ -72,7 +70,6 @@ def _strip_leadin(text):
     result = re.sub(r'^[\(（].*?[\)）]', '', result)
     result = re.sub(r'^[\d一二三四五六七八九十]+[、．.．]\s*', '', result)
     return result.strip()
-
 
 def extract_text_start_via_api(text, api_url, api_key, model, timeout=15):
     """使用 API 从试题文本中提取文言文/诗歌正文的开头 20 字。
@@ -147,7 +144,6 @@ def extract_text_start_via_api(text, api_url, api_key, model, timeout=15):
         log(f"   ⚠️ API 提取正文开头失败：{e}")
         return None
 
-
 def detect_text_type(text):
     if not text or not text.strip():
         return "modern"
@@ -173,7 +169,6 @@ def detect_text_type(text):
 
     return "modern"
 
-
 def _particle_density(clean_text):
     if not clean_text:
         return 0
@@ -181,7 +176,6 @@ def _particle_density(clean_text):
     for p in CLASSICAL_PARTICLES:
         count += clean_text.count(p)
     return count / len(clean_text)
-
 
 def _is_poetry(lines, clean_text, particle_density=0):
     chinese_lines = [l for l in lines if len(l) >= 3]
@@ -220,15 +214,16 @@ def _is_poetry(lines, clean_text, particle_density=0):
     if total == 1:
         l = lengths[0]
         if l in [20, 28, 40, 56]:
-            # 额外检查：虚词密度 < 0.03 才可能是诗歌，否则是短文言文传记
+            # 额外检查：虚词密度 < 0.06 且无传记人名模式才可能是诗歌
+            # 「字彦宗」「字XX」是典型传记开头，不应判为诗歌
             if particle_density < 0.06 and _has_poetry_markers(clean_text):
-                return True
+                if not re.search(r'[一-鿿]{1,4}字[一-鿿]{1,4}', clean_text):
+                    return True
         if l >= 8 and l <= 60:
             if _is_clear_poetry_line(clean_text):
                 return True
 
     return False
-
 
 def _has_poetry_markers(text):
     markers = ["。", "，", "、", "；", "？", "！"]
@@ -236,7 +231,6 @@ def _has_poetry_markers(text):
     if len(text) > 0 and count / len(text) > 0.05:
         return True
     return False
-
 
 def _is_clear_poetry_line(text):
     clean = re.sub(r'[^\u4e00-\u9fff]', '', text)
@@ -267,7 +261,6 @@ def _is_clear_poetry_line(text):
         return False
 
     return False
-
 
 def _is_classical(clean_text, particle_density=None):
     if len(clean_text) < 10:
@@ -312,8 +305,20 @@ def _is_classical(clean_text, particle_density=None):
 
     return False
 
-
 def diff_characters(original, given):
+    """n-gram 逐段比对：用多尺度 n-gram 标记匹配位置，聚合未匹配区域为差异。
+
+    不依赖 difflib 全局序列对齐——difflib 在两个序列长度差异大或存在
+    结构性增删时会导致后续对齐全部错位。n-gram 逐段比对天然不受长度差异
+    和中间增删的干扰。
+
+    Args:
+        original: 权威原文（纯汉字）
+        given: 待校稿（纯汉字）
+
+    Returns:
+        {"identical": bool, "differences": [{"position": int, "original": str, "given": str, "type": str}]}
+    """
     if not original and not given:
         return {"identical": True, "differences": []}
     if not original or not given:
@@ -322,23 +327,87 @@ def diff_characters(original, given):
             "differences": [{"original": original or "(空)", "given": given or "(空)", "position": 0, "type": "replace"}]
         }
 
-    orig_chars = list(original)
-    given_chars = list(given)
+    # 步骤1: 用较长 n-gram (7~12字) 在 original 中标记 given 的匹配区域
+    MIN_N, MAX_N, STEP = 7, 12, 2
+    matched = [False] * len(given)
 
-    s = difflib.SequenceMatcher(None, orig_chars, given_chars)
+    # 生成 given 的 n-gram 索引（去重以加速）
+    seen = set()
+    for n in range(MAX_N, MIN_N - 1, -1):  # 从长到短，长匹配优先
+        for i in range(0, len(given) - n + 1, STEP):
+            ng = given[i:i + n]
+            if ng in seen:
+                continue
+            seen.add(ng)
+            if ng in original:
+                # 在 given 中标记所有此 n-gram 的位置
+                pos = 0
+                while True:
+                    idx = given.find(ng, pos)
+                    if idx == -1:
+                        break
+                    for p in range(idx, idx + n):
+                        matched[p] = True
+                    pos = idx + 1
+
+    # 步骤2: 用较短 n-gram (3~6字) 覆盖剩余未匹配位置
+    MIN_N2, MAX_N2, STEP2 = 3, 6, 2
+    for n in range(MAX_N2, MIN_N2 - 1, -1):
+        for i in range(0, len(given) - n + 1):
+            # 只处理包含未匹配位置的窗口
+            if all(matched[i + k] for k in range(n)):
+                continue
+            ng = given[i:i + n]
+            if ng in original:
+                for k in range(n):
+                    matched[i + k] = True
+
+    # 步骤3: 聚合未匹配位置为差异块
     diffs = []
+    i = 0
+    while i < len(matched):
+        if not matched[i]:
+            j = i
+            while j < len(matched) and not matched[j]:
+                j += 1
+            unmatched_text = given[i:j]
 
-    for tag, i1, i2, j1, j2 in s.get_opcodes():
-        if tag == 'equal':
-            continue
-        orig_part = "".join(orig_chars[i1:i2])
-        given_part = "".join(given_chars[j1:j2])
-        diffs.append({
-            "position": i1,
-            "original": orig_part,
-            "given": given_part,
-            "type": tag,
-        })
+            # 在 original 中找这段未匹配文本的最佳对应
+            # 先尝试在 original 中找到包含这些字的大致区域
+            original_snippet = ""
+            diff_type = "replace"
+            if len(unmatched_text) <= 3:
+                # 短差异：可能是单字/双字差异
+                # 在 original 中搜索附近匹配区间的对应位置
+                search_start = max(0, i - 20)
+                search_end = min(len(given), j + 20)
+                context = given[search_start:search_end]
+                # 找 context 中已匹配的部分在 original 中的位置
+                for k in range(search_start, search_end - 6):
+                    if all(matched[k + m] for m in range(6)):
+                        ref_pos = original.find(given[k:k + 6])
+                        if ref_pos != -1:
+                            # 根据偏移推算差异对应的 original 区域
+                            offset = i - k
+                            orig_start = ref_pos + offset
+                            orig_end = orig_start + len(unmatched_text)
+                            if 0 <= orig_start < len(original) and 0 <= orig_end <= len(original):
+                                original_snippet = original[orig_start:orig_end]
+                            break
+                diff_type = "replace"
+            else:
+                diff_type = "delete_from_original"  # 大段不匹配 = 结构性增删
+                original_snippet = ""
+
+            diffs.append({
+                "position": i,
+                "original": original_snippet,
+                "given": unmatched_text,
+                "type": diff_type,
+            })
+            i = j
+        else:
+            i += 1
 
     return {
         "identical": len(diffs) == 0,
@@ -346,61 +415,216 @@ def diff_characters(original, given):
     }
 
 
-def extract_excerpt_from_full(full_text, excerpt_text, margin=20):
-    """从识典全文(full_text)中，截取出与节选(excerpt_text)对应的区间。
+def _chi_pos_to_raw(raw_text, chi_target, default):
+    """将仅汉字文本的索引映射回原始（带标点）文本的索引。"""
+    chi_pos = 0
+    for i, ch in enumerate(raw_text):
+        if chi_pos == chi_target:
+            return i
+        if '一' <= ch <= '鿿':
+            chi_pos += 1
+    return default
 
-    用 difflib 对齐全文与节选（去标点版），保留匹配区间的两端各 margin 字。
-    可多不可少——确保不因为截断而漏掉节选边缘文字。
+def _clean_for_matching(text: str) -> str:
+    """将文本清洗为仅保留汉字的归一化形式，用于模糊匹配。"""
+    if not text:
+        return ""
+    s = re.sub(r'\[([^\]]*)\]\{[^}]*\}', r'\1', text)
+    s = _FORMATTING_MARKER_RE.sub('', s)
+    s = _ANNOTATION_RE.sub('', s)
+    s = re.sub(r'\*\*([^*]+)\*\*', r'\1', s)
+    s = re.sub(r'__([^_]+)__', r'\1', s)
+    s = re.sub(r'<[^>]+>', '', s)
+    s = re.sub(r'[^一-鿿]', '', s)
+    return s
 
-    Args:
-        full_text: 识典古籍全文（带标点）
-        excerpt_text: 试卷节选文本（带标点）
-        margin: 两端各保留的额外字数，默认 20
 
-    Returns:
-        str: 截取后的原文区间，或 None（节选在全文找不到匹配时）
+# 正文段切分用的行级正则（extract_body_segment）
+# 引导语行：阅读下面的(文言文|古诗|…)…完成 —— 只匹配文言文/诗歌引导语，
+# 不含"文字/作品/文章"（那是现代文引导语）；现代文题由 detect_text_type 在上游拦截，
+# 此处再守一道：若被误用于现代文，返回 None 而非切出现代文正文。
+_LEADIN_LINE_RE = re.compile(
+    r'阅读下面的(?:文言文|古诗|唐诗|宋词|词|诗歌|元曲|散曲|这首词|这首诗)'
+    r'[，。,\.、\s]*完成'
+)
+# 出处行：（节选自《…》 / (节选自…
+_SOURCE_LINE_RE = re.compile(r'^\s*[（(]节选自')
+# 题干行：N．/N. + 可选转义反斜杠 + 下列/对下列
+_STEM_LINE_RE = re.compile(r'^\s*\d{1,2}[．.](?:\\)?\s*(?:下列|对下列)')
+
+
+def extract_body_segment(md_text):
+    """从题目 md 中切出「文言文/诗歌正文段」。
+
+    返回引导语行之后、出处行/第一题干行之前的原始正文（保留批注与格式标记，未清洗），
+    由调用方按需清洗。找不到引导语或终点行 → 返回 None，由调用方回退到整道题逻辑。
+
+    设计要点：
+    - 逐行定位，正文起点不依赖首字为汉字（兼容 <波浪线> 起头）。
+    - 粗体标题行（如 **二、文言文阅读**）不是引导语行，不计为正文起点。
+    - 终点优先出处行 `（节选自…）`，兜底题干行 `N．下列…` / `N. 对下列…`。
+    """
+    if not md_text or not md_text.strip():
+        return None
+
+    lines = md_text.splitlines()
+
+    # 1) 定位引导语行（"阅读下面的…完成…"），容忍批注内嵌与粗体标题前缀
+    leadin_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() and _LEADIN_LINE_RE.search(_clean_annotations(line)):
+            leadin_idx = i
+            break
+    if leadin_idx is None:
+        return None
+
+    # 2) 正文起点 = 引导语行后首个非空行
+    start_idx = None
+    for j in range(leadin_idx + 1, len(lines)):
+        if lines[j].strip():
+            start_idx = j
+            break
+    if start_idx is None:
+        return None
+
+    # 3) 正文终点 = 自起点向下首个「出处行」或「题干行」，取其前
+    end_idx = len(lines)
+    for j in range(start_idx + 1, len(lines)):
+        if not lines[j].strip():
+            continue
+        cleaned = _clean_annotations(lines[j])
+        if _SOURCE_LINE_RE.match(cleaned) or _STEM_LINE_RE.match(cleaned):
+            end_idx = j
+            break
+
+    body = "\n".join(lines[start_idx:end_idx]).strip()
+    return body or None
+
+
+def _find_best_excerpt_range(n_full: str, n_excerpt: str):
+    """n-gram 密度匹配：将 excerpt 切成 n-gram，在全文找匹配位置，
+    滑动窗口找到命中密度最高的区域。比 difflib 多块聚合更鲁棒——
+    n-gram 天然过滤了 excerpt 中的非原文内容（如题目文本在古籍中找不到匹配）。
+
+    返回 (start, end, total_hits) 或 None。
+    """
+    if not n_full or not n_excerpt or len(n_excerpt) == 0 or len(n_full) == 0:
+        return None
+
+    # 步骤1: 生成 n-gram 集合（5~12 字，步长 3）
+    MIN_N, MAX_N, STEP = 5, 12, 3
+    ngrams = set()
+    # 用原始文本（含标点）分句，再对每句纯汉字部分生成 n-gram，
+    # 避免把「之乎者也」和后面的现代文「下列对文中」粘成无意义的 n-gram
+    sentences = re.split(r'[，。；？！、：\n\s]+', n_excerpt)
+    for sent in sentences:
+        s = sent.strip()
+        if len(s) < MIN_N:
+            continue
+        for n in range(MIN_N, MAX_N + 1):
+            if len(s) < n:
+                continue
+            for i in range(0, len(s) - n + 1, STEP):
+                ngrams.add(s[i:i + n])
+
+    if len(ngrams) < 3:
+        log(f"   ⚠️ excerpt 中仅 {len(ngrams)} 个 n-gram，不足以匹配")
+        return None
+
+    # 步骤2: 在 n_full 中标记每个 n-gram 的所有命中位置
+    positions = []
+    for ng in ngrams:
+        start = 0
+        while True:
+            idx = n_full.find(ng, start)
+            if idx == -1:
+                break
+            positions.append(idx)
+            start = idx + 1
+
+    if not positions:
+        log(f"   ⚠️ 所有 n-gram 在全文无命中")
+        return None
+
+    positions.sort()
+    total_hits = len(positions)
+    unique_hits = len(set(positions))
+    log(f"   🔬 n-gram 命中: {total_hits} 次 ({unique_hits} 个唯一位置, {len(ngrams)} 个 n-gram)")
+
+    # 步骤3: 滑动窗口 (500字) 找命中密度峰值
+    WINDOW = 500
+    step = max(1, WINDOW // 5)
+    best_cnt = 0
+    best_center = positions[0]
+    search_end = min(positions[-1] + 1, len(n_full))
+
+    for center in range(positions[0], search_end, step):
+        lo = max(0, center - WINDOW // 2)
+        hi = min(len(n_full), center + WINDOW // 2)
+        cnt = sum(1 for p in positions if lo <= p <= hi)
+        if cnt > best_cnt:
+            best_cnt = cnt
+            best_center = center
+
+    # 步骤4: 从最佳窗口内取第一个 → 最后一个命中的区间
+    lo = max(0, best_center - WINDOW // 2)
+    hi = min(len(n_full), best_center + WINDOW // 2)
+    in_win = [p for p in positions if lo <= p <= hi]
+    start_idx = max(0, min(in_win) - 30)
+    end_idx = min(len(n_full), max(in_win) + MAX_N + 30)
+
+    # 步骤5: 覆盖率——窗口内唯一命中 n-gram 数 / 总 n-gram 数
+    matched_ngrams = set()
+    for ng in ngrams:
+        if n_full.find(ng, start_idx, min(end_idx + len(ng), len(n_full))) != -1:
+            matched_ngrams.add(ng)
+    coverage = len(matched_ngrams) / len(ngrams) if ngrams else 0
+
+    log(f"   🎯 密度匹配: 窗口 {WINDOW} 字内 {best_cnt} 次命中, 区间 [{start_idx}, {end_idx}], 覆盖率 {coverage:.1%}")
+
+    # 阈值:
+    # - 短文本 (< 30汉字) 放宽到 3 次命中
+    # - 长文本至少 10 次命中
+    # - 覆盖率放宽到 5%（clean.md 含大量现代文文本，天然命中率低）
+    min_hits = 3 if len(n_excerpt) < 30 else 10
+    if best_cnt < min_hits:
+        log(f"   ⚠️ 最佳窗口仅 {best_cnt} 次命中 (< {min_hits})，不相关")
+        return None
+    if coverage < 0.05:
+        log(f"   ⚠️ n-gram 覆盖率仅 {coverage:.1%} < 5%，搜索文本与待校稿不相关")
+        return None
+
+    return (start_idx, end_idx, best_cnt)
+
+def extract_excerpt_from_full(full_text, excerpt_text):
+    """n-gram 密度匹配版：将 excerpt 打碎为 n-gram，在全文找匹配最密集的区间。
+
+    优势：excerpt 中非原文内容（现代文题目、选项等）的 n-gram 在古籍全文
+    中找不到匹配，自动被过滤；只有真实古籍原文的 n-gram 会命中。
+    匹配质量不足时返回 None，调用方跳过前置 diff。
     """
     if not full_text or not excerpt_text:
         return None
 
-    def _norm(s):
-        return re.sub(r'[^一-鿿]', '', s)
-
-    n_full = _norm(full_text)
-    n_excerpt = _norm(excerpt_text)
+    n_full = _clean_for_matching(full_text)
+    n_excerpt = _clean_for_matching(excerpt_text)
 
     if len(n_excerpt) == 0 or len(n_full) == 0:
         return None
 
-    matcher = difflib.SequenceMatcher(None, n_full, n_excerpt)
-    blocks = matcher.get_matching_blocks()
-
-    real_blocks = [b for b in blocks if b.size > 0]
-    if not real_blocks:
+    best = _find_best_excerpt_range(n_full, n_excerpt)
+    if best is None:
         return None
 
-    first_start = real_blocks[0].a
-    last_end = real_blocks[-1].a + real_blocks[-1].size
+    start_idx, end_idx, best_cnt = best
+    coverage = best_cnt / len(n_excerpt) if len(n_excerpt) > 0 else 0
 
-    start = max(0, first_start - margin)
-    end = min(len(n_full), last_end + margin)
+    log(f"   🔍 n-gram 节选: 区间 [{start_idx}, {end_idx}] ({end_idx - start_idx} 字), 覆盖率 {coverage:.1%}")
 
-    # 映射去标点位置 → 原始带标点位置
-    chi_pos = 0
-    full_start = full_end = 0
-    for i, ch in enumerate(full_text):
-        if full_start == 0 and chi_pos == start:
-            full_start = i
-        if chi_pos == end:
-            full_end = i
-            break
-        if '一' <= ch <= '鿿':
-            chi_pos += 1
-    else:
-        full_end = len(full_text)
+    full_start = _chi_pos_to_raw(full_text, start_idx, 0)
+    full_end = _chi_pos_to_raw(full_text, end_idx, len(full_text))
 
     return full_text[full_start:full_end]
-
 
 def build_reference_section(text_type, original, diffs):
     type_label = {
@@ -450,19 +674,7 @@ def build_reference_section(text_type, original, diffs):
         lines.append("> 请仅检查：标点符号、注释编号、格式标记是否与原文匹配。")
     lines.append("")
 
-    # 硬性约束：前置搜索已提供权威原文+差异列表时，禁止 LLM 重复检索同段原文。
-    # 位于 user 消息顶部，以与 config 同强度的「严禁/不得」压制 system 层「必须用工具」，
-    # 避免 LLM 在前置搜索成功后仍反复调 web_search/web_fetch 搜同一原文。
-    lines.append("---")
-    lines.append("")
-    lines.append("⚠️ **硬性约束**：本段原文已由程序自动从识典古籍/搜韵网检索并完成字面比对，")
-    lines.append("权威原文与差异列表均已在上方给出。**严禁再使用 web_search 或 web_fetch 检索本段文言文/诗歌的原文**，")
-    lines.append("仅需基于上方「权威原文」与「字面差异」逐条判断即可。")
-    lines.append("如需验证典故出处、作者生平、字词释义等前置未覆盖的信息，可按需搜索，但不得搜索本段原文本身。")
-    lines.append("")
-
     return "\n".join(lines)
-
 
 def search_original_text(text_type, sample_text):
     """搜索权威原文。
@@ -482,8 +694,8 @@ def search_original_text(text_type, sample_text):
     sample = sample_text.strip()
     sample = _strip_leadin(sample)
     sample = re.sub(r'[#*`\[\]()\s]', '', sample)
-    if len(sample) > 10:
-        sample = sample[:10]
+    if len(sample) > 20:
+        sample = sample[:20]
     if len(sample) < 4:
         return None
 
@@ -569,7 +781,6 @@ def search_original_text(text_type, sample_text):
 
     return None
 
-
 def _extract_first_poem(text):
     if not text:
         return None
@@ -586,7 +797,6 @@ def _extract_first_poem(text):
     if poem_lines:
         return "\n".join(poem_lines)
     return None
-
 
 def _extract_first_classical(text):
     """从网页文本中提取文言文正文。跳过导航、页眉等噪音。"""
@@ -626,8 +836,7 @@ def _extract_first_classical(text):
         return "\n".join(result_lines)
     return None
 
-
-def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
+def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None, q_dir=None):
     """前置处理：检测文本类型 → 搜索权威原文 → diff → 注入参考资料。
 
     Args:
@@ -646,19 +855,54 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
 
     log(f"   📖 检测到文本类型: {'文言文' if text_type == 'classical' else '诗歌'}，启动前置搜索...")
 
+    # 步骤A：切出正文段（引导语后、出处/题干行前），用于节选与 diff。
+    # 失败时回退到整道题匹配（零回归，但会引入题干/选项/批注 diff 噪音）。
+    from shared.docx_format_enhancer import strip_format_markers
+    body_segment = extract_body_segment(md_text)
+    if body_segment is not None:
+        log(f"   ✂️ 已切出正文段 ({len(body_segment)} 字)，用于节选与 diff")
+    else:
+        log(f"   ⚠️ 未能切出正文段，回退整道题匹配（可能引入 diff 噪音）")
+
+    # 步骤0：确定用于匹配的干净文本
+    # 优先用正文段清洗版（不含题干/选项/批注答案）；切分失败时回退 _clean.md / 现场清洗
+    match_text = None
+    if body_segment is not None:
+        m = _clean_annotations(body_segment)
+        m = strip_format_markers(m)
+        match_text = m
+        log(f"   📄 正文段清洗版用于节选匹配 ({len(match_text)} 字)")
+    if not match_text and q_dir:
+        q_name = os.path.basename(q_dir)
+        clean_path = os.path.join(q_dir, f"{q_name}_clean.md")
+        if os.path.exists(clean_path):
+            try:
+                with open(clean_path, 'r', encoding='utf-8') as f:
+                    match_text = f.read()
+                log(f"   📄 已读取 _clean.md 用于匹配 ({len(match_text)} 字)")
+            except Exception:
+                match_text = None
+    if not match_text:
+        # 回退：对原始 md_text 做与 _clean.md 相同的清洗
+        clean = _clean_annotations(md_text)
+        clean = strip_format_markers(clean)
+        clean = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', clean, flags=re.DOTALL)
+        clean = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean)
+        clean = re.sub(r'__([^_]+)__', r'\1', clean)
+        match_text = clean
+        log(f"   📄 使用现场清洗文本用于匹配 ({len(match_text)} 字)")
+
     # 步骤1：生成搜索关键词（正则去除引导语后取前 10 汉字）
     search_key = None
-
-    from shared.docx_format_enhancer import strip_format_markers
     clean = _clean_annotations(md_text)
     clean = strip_format_markers(clean)
     clean = re.sub(r'[#*`\[\]()]', '', clean)
     clean = re.sub(r'\s+', '', clean)
     clean = re.sub(r'^第\d+题[：:.,，。、\s]*', '', clean)
     search_key = _strip_leadin(clean)
-    if len(search_key) > 10:
-        search_key = search_key[:10]
-    log(f"   📝 回退正则提取关键词: {search_key}")
+    if len(search_key) > 20:
+        search_key = search_key[:20]
+    log(f"   📝 正则提取关键词（前20字）: {search_key}")
 
     # 步骤2：去权威来源搜索原文
     original = search_original_text(text_type, search_key)
@@ -667,14 +911,26 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None):
         log(f"   ⚠️ 未找到权威原文，跳过前置 diff")
         return md_text
 
-    # 步骤3：从全文截取节选范围（可多不可少），再做字符级 diff
-    original_excerpt = extract_excerpt_from_full(original, md_text, margin=20)
+    # 步骤3：从全文截取节选范围（使用清理后的 match_text，而非原始 md_text）
+    original_excerpt = extract_excerpt_from_full(original, match_text)
     if original_excerpt:
         log(f"   ✂️ 从全文({len(original)}字)中截取节选范围({len(original_excerpt)}字)")
         original = original_excerpt
+    else:
+        # 节选匹配失败：搜索到的文本与待校稿可能不相关（如搜到了错误的书），
+        # 不应继续用全文做 diff，否则会产生大量无意义差异条目干扰 LLM 判断
+        log(f"   ⚠️ 节选匹配失败，搜索到的文本与待校稿无法对齐，跳过前置 diff")
+        return md_text
 
-    clean_given = re.sub(r'[#*`\[\]()\s]', '', md_text)
-    clean_orig = re.sub(r'[#*`\[\]()\s]', '', original)
+    # 步骤4：字面 diff。正文段切分成功时两侧统一用 _clean_for_matching（只留纯汉字，
+    # 不比标点——古文原本无句读，标点校对由 LLM 在题目正文上独立做）；
+    # 切分失败时保留原 re.sub 兜底逻辑（零回归）。
+    if body_segment is not None:
+        clean_given = _clean_for_matching(body_segment)
+        clean_orig = _clean_for_matching(original)
+    else:
+        clean_given = re.sub(r'[#*`\[\]()\s]', '', md_text)
+        clean_orig = re.sub(r'[#*`\[\]()\s]', '', original)
 
     diff_result = diff_characters(clean_orig, clean_given)
     reference = build_reference_section(text_type, original, diff_result["differences"])

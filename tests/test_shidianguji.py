@@ -68,7 +68,7 @@ class TestChineseSubjectHasFetchTool(unittest.TestCase):
         import importlib.util
         subject_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "subjects", "高中语文v1.1"
+            "subjects", "高中语文v3.0"
         )
         spec = importlib.util.spec_from_file_location(
             "yuwen_subject",
@@ -84,7 +84,7 @@ class TestChineseSubjectHasFetchTool(unittest.TestCase):
         import importlib.util
         subject_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "subjects", "高中语文v1.1"
+            "subjects", "高中语文v3.0"
         )
         spec = importlib.util.spec_from_file_location(
             "yuwen_subject",

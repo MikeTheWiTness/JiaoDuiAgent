@@ -83,7 +83,7 @@ spec_file = os.path.abspath(SPECPATH)
 project_root = os.path.dirname(spec_file)
 sys.path.insert(0, project_root)
 
-subject_dir = os.path.join(project_root, 'subjects', '小学数学v1.1')
+subject_dir = os.path.join(project_root, 'subjects', '小学数学v3.0')
 
 a = Analysis(
     [os.path.join(subject_dir, 'main.py')],
@@ -186,7 +186,7 @@ coll = COLLECT(
 
 1. **动态路径解析**：spec 文件中使用 `SPECPATH`（PyInstaller 内置变量）获取 spec 文件所在目录，从而定位项目根目录。不要使用 `sys.argv[0]`，因为其路径可能不准确。
 
-2. **学科目录统一放在 `subjects/` 下**：所有学科放在 `subjects/` 目录下，命名格式为 `{学段}{学科}v{版本号}`（如 `小学数学v1.1`）。
+2. **学科目录统一放在 `subjects/` 下**：所有学科放在 `subjects/` 目录下，命名格式为 `{学段}{学科}v{版本号}`（如 `小学数学v3.0`）。
 
 3. **必需的 datas 配置**：除了 `config.json`，还必须包含 `subject.py` 和 `app.py`，因为 `main.py` 通过 `importlib.util` 动态加载这两个模块。
 
@@ -333,7 +333,7 @@ Fandol Song 是宋体风格，视觉上与 SimSun 基本一致。如需完全一
 | `get_ui_features` | 无此方法 | `()` 返回 UI 功能开关字典 |
 
 **解决办法**：
-升级学科的 `subject.py`，使其方法签名与 v2.0 兼容。可参考 `subjects/高中物理v1.8/subject.py` 或 `subjects/高中语文v1.1/subject.py` 的实现。
+升级学科的 `subject.py`，使其方法签名与 v2.0 兼容。可参考 `subjects/高中物理v3.0/subject.py` 或 `subjects/高中语文v3.0/subject.py` 的实现。
 
 ---
 

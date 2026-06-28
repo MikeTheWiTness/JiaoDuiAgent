@@ -155,5 +155,62 @@ class TestManualSplitEdgeCases(unittest.TestCase):
         self.assertIn("正文里提到了", result[0]["content"])
 
 
+class TestManualSplitPandocEscaped(unittest.TestCase):
+    """pandoc 转换会把行首 # 转义成 \\#，标记变成 \\###### 题目开始 \\######。
+
+    正则需容忍转义，否则匹配不到 → 抛 ManualMarkerError → 调用方未捕获
+    → 转换线程静默死亡、UI 卡住。回归 bug：试卷模式 post_process_md_zw
+    不还原 \\#（讲义模式 fix_latex_escapes 会还原，故讲义不触发）。
+    """
+
+    def test_pandoc_escaped_first_hash(self):
+        # pandoc 实际行为：每组首个 # 前加反斜杠
+        md = (
+            r"\###### 题目开始 \######" "\n"
+            "第一题内容\n"
+            r"\###### 题目结束 \######" "\n"
+        )
+        result = split_by_manual_markers(md)
+        self.assertEqual(len(result), 1)
+        self.assertIn("第一题内容", result[0]["content"])
+
+    def test_unescaped_markers_still_work(self):
+        # 回归保护：未转义标记仍正常切
+        md = (
+            "###### 题目开始 ######\n"
+            "第一题内容\n"
+            "###### 题目结束 ######\n"
+        )
+        result = split_by_manual_markers(md)
+        self.assertEqual(len(result), 1)
+        self.assertIn("第一题内容", result[0]["content"])
+
+    def test_per_hash_escaped(self):
+        # 防御：每个 # 都被转义的形态（\\#\\#\\#\\#\\#\\#）
+        md = (
+            r"\#\#\#\#\#\# 题目开始 \#\#\#\#\#\#" "\n"
+            "第一题内容\n"
+            r"\#\#\#\#\#\# 题目结束 \#\#\#\#\#\#" "\n"
+        )
+        result = split_by_manual_markers(md)
+        self.assertEqual(len(result), 1)
+        self.assertIn("第一题内容", result[0]["content"])
+
+    def test_mixed_escaped_and_unescaped_problems(self):
+        # 一题转义、一题未转义，都应切出
+        md = (
+            r"\###### 题目开始 \######" "\n"
+            "第一题\n"
+            r"\###### 题目结束 \######" "\n"
+            "###### 题目开始 ######\n"
+            "第二题\n"
+            "###### 题目结束 ######\n"
+        )
+        result = split_by_manual_markers(md)
+        self.assertEqual(len(result), 2)
+        self.assertIn("第一题", result[0]["content"])
+        self.assertIn("第二题", result[1]["content"])
+
+
 if __name__ == "__main__":
     unittest.main()

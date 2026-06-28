@@ -1,8 +1,9 @@
 import sys, os, importlib.util
+from typing import Any
 
-def _get_resource_path(relative_path):
+def _get_resource_path(relative_path: str) -> str:
     try:
-        base_path = sys._MEIPASS
+        base_path: str = getattr(sys, "_MEIPASS")
     except Exception:
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
@@ -12,8 +13,10 @@ import tkinter as tk
 
 _here = _get_resource_path("")
 
-def _load_module(name, path):
+def _load_module(name: str, path: str) -> Any:
     spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {name} ({path})")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

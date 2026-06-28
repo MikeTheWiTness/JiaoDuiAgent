@@ -173,13 +173,13 @@ LLM 首轮调用 `plan_update` 声明计划步骤，后续每完成一步调用�
 |--------|------|------|
 | P0 | `core/api_client.py` | State/Config 分离；返回值扩展；压缩历史机制；StopReason 枚举；`call_api_continue` 新增 |
 | P0 | `core/defaults.py` | `_enforce_format` 重写；`_llm_format_fix` 新增；中间产物落盘新增 |
-| P0 | `subjects/高中语文v1.1/config.json` | 新增 `agent_prompt_lines` |
+| P0 | `subjects/高中语文v3.0/config.json` | 新增 `agent_prompt_lines` |
 | P0 | `shared/plan_tools.py` | **新增**：`PlanUpdateTool` |
-| P1 | `subjects/高中语文v1.1/subject.py` | `react_mode` 属性；prompt 切换；max_loops 15；前置搜索协调 |
+| P1 | `subjects/高中语文v3.0/subject.py` | `react_mode` 属性；prompt 切换；max_loops 15；前置搜索协调 |
 | P1 | `core/config_loader.py` | 加载 `agent_prompt_lines` |
 | P1 | `shared/text_nav_tools.py` | **新增**：`LocateParagraphTool`、`ReadSectionTool` |
 | P1 | `shared/chinese_classics_tools.py` | 约束行措辞修改 |
-| P1 | `subjects/高中物理v1.8/` | `agent_prompt_lines`；max_loops 30 |
+| P1 | `subjects/高中物理v3.0/` | `agent_prompt_lines`；max_loops 30 |
 | P2 | `ui/default_app.py` | ReAct 复选框（默认开启） |
 
 ---
