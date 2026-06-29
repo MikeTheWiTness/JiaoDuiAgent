@@ -1,7 +1,7 @@
 # CONTEXT.md — 校对工具 ReAct 机制设计上下文
 
-> 最后更新：2026-06-27
-> 状态：设计阶段（grill 完成，issue 已拆分，PRD 已发布；参考 Claude Code v2.1.88 源码深化）
+> 最后更新：2026-06-29
+> 状态：物理校对 ReAct 学科化重构设计完成（ADR-0006，待落地）；物理自主解题 agent 另立 ADR-0007（仅设计）；语文校对节点图重构设计完成（ADR-0008，待落地）；通用 ReAct 机制已上线
 
 ## 1. 问题与目标
 
@@ -211,9 +211,147 @@ docs/
     └── react-mechanism.md
 ```
 
-## 8. 不纳入范围
+## 8. 物理学科化重构（ADR-0006）
+
+通用 ReAct 机制（ADR-0005）以"文本校对"为心智模型，未覆盖物理校对最难的"答案正确性"维度，且缺独立解题手段，导致物理大题准确率低。详见 [ADR-0006](docs/adr/0006-physics-react-subject-specialization.md)。完整 ReAct 自主解题 agent（多轮纠错闭环）另立 [ADR-0007](docs/adr/0007-physics-autonomous-solving-agent.md)，仅设计不实现。
+
+### 8.1 根因
+
+| # | 问题 | 位置 |
+|---|------|------|
+| 1 | PlanUpdateTool 计划模板是文本校对模板，未覆盖"答案正确性"维度 | [plan_tools.py:84-99](shared/plan_tools.py#L84-L99) |
+| 2 | prompt 是"代入验证已有答案"范式，缺乏"独立重算"范式 | [agent_prompt.json:33](subjects/高中物理v3.0/agent_prompt.json#L33) |
+| 3 | 缺"独立解题"手段，主 agent 已见答案、判断被污染 | — |
+
+### 8.2 设计原则
+
+**校对是主任务，解题是手段**。计划结构是校对检查项 todolist（错词/格式/解析正确性/…），非解题链路。仅当校对到"解析正确性"且判定为难题时，才触发"独立解题"作为答案校对手段。**独立解题用可替换接口实现**：早期轻量（单次 API），未来 ADR-0007 替换内部实现，主流程零改动。
+
+### 8.3 核心决策（ADR-0006）
+
+1. **校对检查项 todolist + 难题独立解题**：计划模板为校对 todolist，第6步"独立解题"仅难题插入。
+2. **PlanUpdateTool 物理专用化**：nudge 聚焦校对完整性（解析是否实算验证、独立答案是否比对、量纲是否校验）；通用工具加 `nudge_template` 注入点，语文 nudge 不变。
+3. **`independent_solve` 可替换接口**：主 agent 调用，传入去答案题目+解题 prompt，工具内部新开干净上下文（无主对话历史）发起单次 API 解题，返回独立答案。**签名稳定**，未来 ADR-0007 只替换 `_run` 内部实现。
+4. **新增 `_物理求解.md`**：落盘独立解题输入/独立答案/答案比对，排查大题答案判错。
+5. **工具循环阈值微调**：物理 `max_loops` 25→30；`independent_solve` 加入 `_NAV_CONTROL_TOOLS` 白名单。激进阈值放宽随 ADR-0007。
+6. **prompt 重写**：区分"代入验证"（第5步默认）与"独立解题"（第6步难题），LLM 自判难题（多过程/电磁场/能量动量转化/复杂受力）。
+7. **为 ADR-0007 预留接口**：`independent_solve` 签名稳定 + `_物理求解.md` 预留扩展位 + 工具集分层（通用 sympy 留主 agent，编排/建模工具归 ADR-0007）。
+
+### 8.4 物理专用计划模板（校对 todolist）
+
+```
+1. 错词错字校对
+2. 格式问题校对
+3. 公式符号/单位/矢量符号校对
+4. 题干严谨性/物理情景描述校对
+5. 解析正确性校对（sympy 工具实算验证解析计算）
+6.【若难题】剪掉答案与上下文，independent_solve 独立解题
+7.【若难题】独立答案 vs 题目答案 综合评判
+8. 生成校对报告（标记原文 + 修改原因）
+9. 检查报告格式，bash 修改格式
+```
+
+### 8.5 物理中间产物
+
+| 文件 | 内容 | 状态 |
+|------|------|------|
+| `_物理求解.md` | 独立解题输入 + 独立答案 + 答案比对（ADR-0007 扩展为多轮求解记录） | **新增** |
+
+### 8.6 待落地清单（issue 拆分基础）
+
+| 优先级 | 文件 | 改动 |
+|--------|------|------|
+| P0 | `shared/physics_tools.py` | **新增**：`IndependentSolveTool`（轻量单次 API，内部可替换） |
+| P0 | `subjects/高中物理v3.0/agent_prompt.json` | 重写：校对 todolist + 难题独立解题步骤 + 双场景工具规则 |
+| P0 | `shared/plan_tools.py` | `nudge_template` 注入点 |
+| P1 | `subjects/高中物理v3.0/subject.py` | 接入 independent_solve + max_loops 30 |
+| P1 | `core/api_client.py` | `_NAV_CONTROL_TOOLS` 扩展 + independent_solve |
+| P1 | `core/defaults.py` | `_物理求解.md` 落盘协调 |
+| P2 | 测试 | 校对 todolist E2E（大题/小题各一例）+ independent_solve 单测 + 白名单兼容性 |
+
+---
+
+## 9. 物理自主解题 Agent（ADR-0007，仅设计）
+
+完整 ReAct 自主解题 agent（多轮纠错闭环），作为 ADR-0006 `independent_solve` 工具**内部实现**的未来替换方案。详见 [ADR-0007](docs/adr/0007-physics-autonomous-solving-agent.md)。
+
+### 9.1 动机
+
+轻量独立解题（单次 API）继承单次错误率天花板，极复杂大题单次解可能也错。但多轮交流大模型基本能纠错——用工具调用把纠错固化为结构化闭环。
+
+### 9.2 三闭环
+
+```
+plan_update（规划做题顺序）
+    ↓
+┌─→ 求解一步 → verify_result（强制验证）
+│       ├ ok=true  → 下一过程
+│       └ ok=false → plan_update 插入重解 → 回到求解（纠错）
+└── 全部 completed
+    ↓
+finalize_result（可信度门槛）→ ok=true 才返回答案
+```
+
+- **自主规划**：`plan_update` 多过程分步，验证失败动态插入/重排。
+- **自主排查**：`verify_result` 工具内部自动检查（量纲/守恒/边界/衔接），`issue` 硬反馈驱动重解。
+- **自主验证**：`finalize_result` 硬门槛。
+- **局限**：自动检查只拦可程序化错误，拦不住"物理模型选错"——靠 `_物理求解.md` 落盘 + 人类抽查兜底。
+
+### 9.3 工具归属切分
+
+| 工具 | 归属 |
+|------|------|
+| 通用 sympy（evaluate/solve_equation/solve_physics_formula/dimensional_analysis/vector/circle） | ADR-0006 主 agent + ADR-0007 解题 agent 共用 |
+| `independent_solve` | ADR-0006（接口，内部实现待 ADR-0007 替换） |
+| `verify_result`/`finalize_result`/`physics_model_record`/`physics_solve_chain` | ADR-0007（仅解题 agent） |
+
+### 9.4 实施时机
+
+不在当前迭代实施。触发条件：ADR-0006 轻量独立解题上线后，观察到极复杂大题单次解题错误率仍是瓶颈 + `independent_solve` 接口稳定无回归。满足后仅替换 `independent_solve._run` 内部实现。
+
+---
+
+## 10. 语文学科化重构 —— 节点图（ADR-0008）
+
+物理用单线固定流程（ADR-0006），但语文的文本类型决定校对策略——文言文不做错别字识别（通假字≠错字），默写题核心是逐字比对而非内容判断。**单线固定流程在语文场景是错误抽象**。详见 [ADR-0008](docs/adr/0008-chinese-node-graph-proofreading.md)。
+
+### 10.1 节点图架构
+
+```
+第 0 步：LLM 识别文本类型（唯一前置判断点）
+  │
+  ├─ ① 论述类文本阅读（选择题）
+  ├─ ② 文学类文本阅读（散文/小说）
+  ├─ ③ 实用类文本阅读（新闻/报告/传记）
+  ├─ ④ 文言文阅读 — 不做错别字识别，仅做前置参考逐字比对
+  ├─ ⑤ 古诗词鉴赏
+  ├─ ⑥ 名篇名句默写
+  ├─ ⑦ 语言文字运用（成语/病句/修辞/衔接）
+  └─ ⑧ 写作题
+```
+
+### 10.2 核心设计原则
+
+- **每个分支是独立的小型固定 todolist**：机械检查（标点、题号、格式）在前，主内容校对在后，格式自检 + 输出收尾。
+- **`plan_update` 用于进度标记，不做自主规划**：第 1 轮 LLM 声明对应分支的 todolist，后续逐步标记 completed。
+- **`nudge_template` 置空**（与物理一致）：自检靠 prompt 固定步骤，`nudge_template` 参数保留以备未来使用。
+- **反思仅做格式自检**：bash 能修的直接修，修不了的打回重做。语文无 sympy 可程序化验证工具，不做内容层打回。
+- **允许分支切换**：LLM 怀疑类型有误时，先声明理由 + 重新审视原文特征，确认后才切换分支（两阶段确认）。
+- **`max_loops` 保持 15**：最长分支 ~8 步，加反思/切换缓冲充足。
+- **不需要 `independent_solve`**：语文无客观可计算验证的答案。文言文/诗歌的独立验证已通过 `pre_proofread_hook` 前置参考注入实现。
+
+### 10.3 改动面
+
+仅重写 `agent_prompt.json`（纯 prompt 层改动），`subject.py`、`plan_tools.py`、`api_client.py` 全部不变。保留旧 prompt 作 fallback 方便 AB 对比。
+
+---
+
+## 11. 不纳入范围
 
 - Phase 2 独立自审轮次（PlanUpdateTool 的 nudge 机制已覆盖）
 - 流式响应（streaming）
-- 其他学科 agent_prompt_lines（高中物理除外）
 - 子 Agent 跨学科校审
+- 物理前置搜索（无类似语文识典古籍的权威原文源）
+- 物理图像/图表内容自动解析（受力图/电路图/v-t 图仍靠 LLM 多模态）
+- **完整 ReAct 自主解题 agent（多轮纠错闭环）**：另立 ADR-0007，仅设计；ADR-0006 用轻量独立解题 + 可替换接口先行，待验证后实施 ADR-0007
+- 其他学科（化学/数学等）的学科化重构——待物理 + 语文验证后再推广
