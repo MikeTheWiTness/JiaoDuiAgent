@@ -50,13 +50,16 @@ class SubjectApp:
         if self.react_mode:
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            base.append(PlanUpdateTool())
+            from shared.physics_tools import IndependentSolveTool
+            # 物理 nudge 置空：自检靠 prompt 第 8 步，不依赖工具 nudge（ADR-0006 决策 2）
+            base.append(PlanUpdateTool(nudge_template=""))
             base.append(LocateParagraphTool())
             base.append(ReadSectionTool())
+            base.append(IndependentSolveTool())
         return base
 
     def get_max_tool_loops(self):
-        return 25 if self.react_mode else 20
+        return 30 if self.react_mode else 20
 
     def get_tool_instructions(self):
         sympy_tools = [t for t in self.tools if t.name not in ("web_search", "web_fetch",

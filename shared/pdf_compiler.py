@@ -8,6 +8,7 @@ xelatex 查找优先级：
 3. 内嵌便携版（PyInstaller 打包时随 exe 分发）
 """
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -337,9 +338,15 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 log_text = f.read()
 
-        fatal_markers = ("Emergency stop", "Runaway argument",
-                         "No pages of output")
-        has_fatal_error = any(m in log_text for m in fatal_markers)
+        # 使用行首匹配避免子串误判：
+        # "I've just inserted will cause me to report a runaway argument"
+        # 是 TeX 解释性文本，并非真实的 Runaway argument 错误。
+        # 真正的致命错误以 "!" 开头且独占一行或以 "Runaway argument?" 开头。
+        has_fatal_error = (
+            re.search(r'^Runaway argument\?', log_text, re.MULTILINE) is not None
+            or re.search(r'^Emergency stop', log_text, re.MULTILINE) is not None
+            or re.search(r'^No pages of output', log_text, re.MULTILINE) is not None
+        )
 
         if retcode2 != 0 or is_stub_pdf or has_fatal_error:
             diagnostic_lines = []

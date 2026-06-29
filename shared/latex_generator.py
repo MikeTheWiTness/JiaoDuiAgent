@@ -770,6 +770,15 @@ def build_paracol_content(md_content: str, corrections: list[dict],
     # 修复 </批注> 后面的多余 > 字符
     md_content = re.sub(r'</批注>\s*>', '</批注>', md_content)
 
+    # 0.3 剥离 Markdown 反斜杠转义（\. → . 、\_ → _ 等），
+    # 避免后续 _escape_text 把 \ 双重转义为 \textbackslash。
+    # 只剥离反斜杠后跟标点字符的情况，保留 \textbf 等 LaTeX 命令。
+    # 分两步：先用 str.replace 处理高频场景（\. 和 \_），再用正则处理其余标点。
+    md_content = md_content.replace(r'\.', '.')
+    md_content = md_content.replace(r'\_', '_')
+    md_content = md_content.replace(r'\*', '*')
+    md_content = md_content.replace(r'\#', '#')
+
     if comments is None:
         comments = extract_comments_from_md(md_content)
 

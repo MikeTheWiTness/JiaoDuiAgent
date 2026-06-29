@@ -190,6 +190,59 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header):
         log(f"   ⚠️ 保存对话记录失败: {e}")
 
 
+def _save_conversation_log_full(messages, output_dir, q_title, initial_header):
+    """与 _save_conversation_log 相同，但保存到 _API对话记录_full.md。
+
+    用于在压缩历史前保留完整的工具调用记录，便于排查问题。
+    """
+    if not output_dir:
+        return
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        log_path = os.path.join(output_dir, "_API对话记录_full.md")
+        lines = [initial_header]
+        turn = 0
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "system":
+                continue
+            elif role == "user":
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            lines.append(f"### 用户输入\n\n```\n{part['text'][:5000]}\n```\n\n")
+                        elif isinstance(part, dict) and part.get("type") == "image_url":
+                            lines.append(f"### 用户输入（图片）\n\n[{part.get('image_url', {}).get('url', '')[:80]}...]\n\n")
+                else:
+                    lines.append(f"### 用户输入\n\n```\n{str(content)[:5000]}\n```\n\n")
+            elif role == "assistant":
+                turn += 1
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls:
+                    lines.append(f"### 第{turn}轮 — LLM 请求工具调用\n\n")
+                    if content:
+                        lines.append(f"**思考内容:**\n\n```\n{content[:2000]}\n```\n\n")
+                    for tc in tool_calls:
+                        tc_name = tc.get("function", {}).get("name", "?")
+                        tc_args = tc.get("function", {}).get("arguments", "{}")
+                        lines.append(f"- **工具**: `{tc_name}`\n")
+                        try:
+                            args_obj = json.loads(tc_args)
+                            lines.append(f"- **参数**: `{json.dumps(args_obj, ensure_ascii=False)[:300]}`\n\n")
+                        except Exception:
+                            lines.append(f"- **参数**: `{tc_args[:300]}`\n\n")
+                else:
+                    lines.append(f"### 第{turn}轮 — LLM 最终回复\n\n")
+                    lines.append(f"```\n{content[:10000]}{'...[截断]' if len(str(content)) > 10000 else ''}\n```\n\n")
+            elif role == "tool":
+                lines.append(f"### 工具返回\n\n```\n{str(content)[:5000]}\n```\n\n")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("".join(lines))
+    except Exception:
+        pass  # 完整的日志保存失败不应影响主流程
+
+
 def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
              tools=None, max_loops=20, max_tokens=32768, output_dir=None):
     err_msg = ""
@@ -236,6 +289,9 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
             while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
                 if loop >= max_loops:
                     log(f"   ⚠️ 工具调用超限（{max_loops}轮），压缩历史 + 去工具...")
+                    # 保存压缩前的完整日志（含工具调用）
+                    _save_conversation_log_full(
+                        messages, output_dir, q_title, initial_header)
                     messages = _compress_history(messages, len(tool_calls_log))
                     openai_tools = None  # 关闭工具调用
                     payload = {
@@ -284,9 +340,12 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                     log(f"   🔧 {tool_name}({json.dumps(args, ensure_ascii=False)[:100]}) → {summary}")
 
                     # 连续空结果检测（仅对检索/抓取类工具有效）
-                    # plan_update / locate_paragraph / read_section 属于
-                    # 流程控制 / 文本导航工具，结果天然不会"新颖"，不应计入
-                    _NAV_CONTROL_TOOLS = {"plan_update", "locate_paragraph", "read_section"}
+                    # read_file / write_file / plan_update / locate_paragraph /
+                    # read_section 属于流程控制 / 文本 / 文件工具，不应计入
+                    _NAV_CONTROL_TOOLS = {
+                        "plan_update", "locate_paragraph", "read_section",
+                        "read_file", "write_file", "independent_solve",
+                    }
                     recent_results.append(result)
                     if tool_name not in _NAV_CONTROL_TOOLS:
                         if _is_empty_or_duplicate(result, recent_results):
@@ -296,6 +355,9 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
 
                     if empty_streak >= 3:
                         log(f"   ⚠️ 连续 {empty_streak} 轮空结果，压缩历史 + 去工具...")
+                        # 保存压缩前的完整日志（含工具调用），_full 后缀避免被后续覆盖
+                        _save_conversation_log_full(
+                            messages, output_dir, q_title, initial_header)
                         messages = _compress_history(messages, len(tool_calls_log))
                         openai_tools = None
                         payload["tools"] = None
@@ -306,7 +368,6 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                         reasoning = choice.get("message", {}).get("reasoning_content", "")
                         content = choice["message"]["content"]
                         messages.append({"role": "assistant", "content": content})
-                        _save_conversation_log(messages, output_dir, q_title, initial_header)
                         return {
                             "content": content,
                             "tool_calls_log": tool_calls_log,

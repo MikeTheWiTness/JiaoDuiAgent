@@ -26,6 +26,22 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
     if marker_pos:
         marked_section = marked_section[marker_pos.end():]
 
+    # 剥离前置参考段落（## 前置参考 → 权威原文 → 字面差异 → ⚠️ → ---）
+    # 无论 ### 标记原文 标题放在什么位置，前置参考都不应进入 marked_text
+    # 否则 PDF 左栏会灌入大量与校对无关的搜索中间产物
+    marked_section = re.sub(
+        r'##\s*前置参考[^\n]*\n.*?\n---\n',
+        '',
+        marked_section,
+        count=1,
+        flags=re.DOTALL,
+    )
+    # 如果前置参考后面没有 ---（异常情况），用更激进的方式清理
+    marked_section = re.sub(r'^##\s*前置参考[^\n]*\n', '', marked_section)
+    marked_section = re.sub(r'^###\s*(?:权威原文|字面差异)[^\n]*\n', '', marked_section)
+    marked_section = re.sub(r'^⚠️[^\n]*\n?', '', marked_section)
+    marked_section = marked_section.strip()
+
     marked_section = re.sub(r'^编号：.+\n?', '', marked_section)
     marked_section = re.sub(r'^内容：\n?', '', marked_section)
 
@@ -135,6 +151,14 @@ def parse_proofread_md(text: str):
             break
 
     if "### 标记原文" in text and re.search(r'【\d+\|.*\|[^】]*】', text):
+        result = _parse_inline_format(text, summary)
+        if result:
+            return result
+
+    # 兜底：即使缺少 ### 标记原文 标题，只要有 【N|原文|改为】 标记 +
+    # ### 修改原因 段落，也能提取校对数据。格式修正 LLM 常常忘记加
+    # 标记原文标题但实际内容已在文中。
+    if re.search(r'【\d+\|.*\|[^】]*】', text) and re.search(r'###\s*修改原因', text):
         result = _parse_inline_format(text, summary)
         if result:
             return result

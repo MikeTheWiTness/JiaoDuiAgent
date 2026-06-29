@@ -372,32 +372,65 @@ def diff_characters(original, given):
                 j += 1
             unmatched_text = given[i:j]
 
-            # 在 original 中找这段未匹配文本的最佳对应
-            # 先尝试在 original 中找到包含这些字的大致区域
+            # 推算 original 中对应区域：用未匹配段前后的已匹配锚点
             original_snippet = ""
             diff_type = "replace"
-            if len(unmatched_text) <= 3:
-                # 短差异：可能是单字/双字差异
-                # 在 original 中搜索附近匹配区间的对应位置
+
+            # 找左侧锚点（未匹配段之前最近的一串已匹配字符）
+            left_anchor_start = i - 1
+            while left_anchor_start >= 0 and matched[left_anchor_start]:
+                left_anchor_start -= 1
+            left_anchor_start += 1
+            left_anchor_len = i - left_anchor_start
+
+            # 找右侧锚点（未匹配段之后最近的一串已匹配字符）
+            right_anchor_end = j
+            while right_anchor_end < len(matched) and matched[right_anchor_end]:
+                right_anchor_end += 1
+            right_anchor_len = right_anchor_end - j
+
+            # 尝试用锚点在 original 中定位对应区间
+            if left_anchor_len >= 3:
+                left_anchor = given[left_anchor_start:left_anchor_start + left_anchor_len]
+                left_pos_in_orig = original.find(left_anchor)
+                if left_pos_in_orig != -1:
+                    # 从左侧锚点末尾推算差异区间在 original 中的位置
+                    orig_start = left_pos_in_orig + left_anchor_len
+                    if right_anchor_len >= 3:
+                        # 双侧锚点：精确定位区间
+                        right_anchor = given[j:j + right_anchor_len]
+                        right_pos_in_orig = original.find(right_anchor, orig_start)
+                        if right_pos_in_orig != -1:
+                            orig_end = right_pos_in_orig
+                            original_snippet = original[orig_start:orig_end]
+                            if len(original_snippet) == 0:
+                                diff_type = "delete_from_original"
+                            elif len(unmatched_text) > 3:
+                                diff_type = "replace" if len(original_snippet) < 20 else "delete_from_original"
+                    else:
+                        # 仅左侧锚点：估算 original 对应区域
+                        orig_end = min(orig_start + len(unmatched_text) + 10, len(original))
+                        original_snippet = original[orig_start:orig_end]
+                        if len(unmatched_text) > 3 and len(original_snippet) > 20:
+                            diff_type = "delete_from_original"
+
+            if not original_snippet and len(unmatched_text) <= 3:
+                # 短差异回退：用旧算法推算
                 search_start = max(0, i - 20)
                 search_end = min(len(given), j + 20)
-                context = given[search_start:search_end]
-                # 找 context 中已匹配的部分在 original 中的位置
                 for k in range(search_start, search_end - 6):
-                    if all(matched[k + m] for m in range(6)):
+                    if k >= 0 and k + 6 <= len(given) and all(matched[k + m] for m in range(6)):
                         ref_pos = original.find(given[k:k + 6])
                         if ref_pos != -1:
-                            # 根据偏移推算差异对应的 original 区域
                             offset = i - k
-                            orig_start = ref_pos + offset
-                            orig_end = orig_start + len(unmatched_text)
-                            if 0 <= orig_start < len(original) and 0 <= orig_end <= len(original):
-                                original_snippet = original[orig_start:orig_end]
+                            orig_s = ref_pos + offset
+                            orig_e = orig_s + len(unmatched_text)
+                            if 0 <= orig_s < len(original) and 0 <= orig_e <= len(original):
+                                original_snippet = original[orig_s:orig_e]
                             break
                 diff_type = "replace"
-            else:
-                diff_type = "delete_from_original"  # 大段不匹配 = 结构性增删
-                original_snippet = ""
+            elif not original_snippet:
+                diff_type = "delete_from_original"
 
             diffs.append({
                 "position": i,
@@ -425,8 +458,56 @@ def _chi_pos_to_raw(raw_text, chi_target, default):
             chi_pos += 1
     return default
 
+
+def _build_chi_index_map(raw_text):
+    """构建「第 N 个汉字 → 原始文本位置」的映射表。
+
+    用于将 diff_characters 返回的清洗后坐标系的 position 映射回
+    带标点和格式标记的原始文本中的可定位位置。
+
+    会先去除 _clean_for_matching 会移除的标签字符（HTML 标签、格式标记、
+    批注块等），保证汉字计数与清洗后的文本一致。
+    """
+    # 预清理：去除 _clean_for_matching 步骤 2/3/6 会移除的标签字符，
+    # 避免标签名中的汉字（如「着」「重」「批」「注」）污染汉字计数
+    s = _FORMATTING_MARKER_RE.sub('', raw_text)
+    s = _ANNOTATION_RE.sub('', s)
+    s = re.sub(r'\*\*([^*]+)\*\*', r'\1', s)
+    s = re.sub(r'__([^_]+)__', r'\1', s)
+    s = re.sub(r'<[^>]+>', '', s)
+    # 现在 s 中的汉字序列与 _clean_for_matching 输出的前几步一致
+    mapping = []  # mapping[clean_idx] = position_in_precleaned_text
+    for i, ch in enumerate(s):
+        if '一' <= ch <= '鿿':
+            mapping.append(i)
+    return mapping
+
+
+def _map_diff_positions_to_raw(diffs, raw_text):
+    """将 diff 结果中的 position 从清洗后坐标系映射到 raw_text 坐标系。
+
+    清洗流程 _clean_for_matching 会做两件事：
+    1. 移除 HTML 标签/格式标记/批注块中的汉字（如「着重」「批注」）
+    2. 去除非汉字字符 + 简转繁（长度不变）
+
+    本函数先对 raw_text 做与步骤 1 相同的标签剥离，再构建汉字→位置映射表，
+    保证 diff position 能正确定位到 raw_text（标签剥离后）中的对应汉字。
+    映射失败时保留原始 position 并追加 raw_position=-1 标记。
+    """
+    chi_map = _build_chi_index_map(raw_text)
+    for d in diffs:
+        pos = d.get("position", 0)
+        if pos < len(chi_map):
+            d["raw_position"] = chi_map[pos]
+        else:
+            d["raw_position"] = -1  # 映射失败标记
+    return diffs
+
 def _clean_for_matching(text: str) -> str:
-    """将文本清洗为仅保留汉字的归一化形式，用于模糊匹配。"""
+    """将文本清洗为仅保留汉字的归一化形式，用于模糊匹配。
+
+    同时将简体中文转换为繁体中文，以匹配识典古籍/搜韵网的繁体原文。
+    """
     if not text:
         return ""
     s = re.sub(r'\[([^\]]*)\]\{[^}]*\}', r'\1', text)
@@ -436,6 +517,12 @@ def _clean_for_matching(text: str) -> str:
     s = re.sub(r'__([^_]+)__', r'\1', s)
     s = re.sub(r'<[^>]+>', '', s)
     s = re.sub(r'[^一-鿿]', '', s)
+    # 简体→繁体转换，以匹配古籍原文的繁体字符
+    try:
+        import zhconv
+        s = zhconv.convert(s, 'zh-hant')
+    except ImportError:
+        pass
     return s
 
 
@@ -501,23 +588,27 @@ def extract_body_segment(md_text):
     return body or None
 
 
-def _find_best_excerpt_range(n_full: str, n_excerpt: str):
-    """n-gram 密度匹配：将 excerpt 切成 n-gram，在全文找匹配位置，
+def _find_best_excerpt_range(n_full: str, n_sentences: list):
+    """n-gram 密度匹配：在每个句子内生成 n-gram，在全文找匹配位置，
     滑动窗口找到命中密度最高的区域。比 difflib 多块聚合更鲁棒——
     n-gram 天然过滤了 excerpt 中的非原文内容（如题目文本在古籍中找不到匹配）。
 
+    n_sentences 应为已清洗（纯汉字）的句子片段列表，n-gram 仅在句内生成，
+    避免跨句边界的无意义 n-gram（原书上句末+下句首的组合不存在）。
+
     返回 (start, end, total_hits) 或 None。
     """
-    if not n_full or not n_excerpt or len(n_excerpt) == 0 or len(n_full) == 0:
+    if not n_full or not n_sentences or len(n_full) == 0:
         return None
 
-    # 步骤1: 生成 n-gram 集合（5~12 字，步长 3）
+    total_chars = sum(len(s) for s in n_sentences)
+    if total_chars == 0:
+        return None
+
+    # 步骤1: 在每个句子内生成 n-gram 集合（5~12 字，步长 3）
     MIN_N, MAX_N, STEP = 5, 12, 3
     ngrams = set()
-    # 用原始文本（含标点）分句，再对每句纯汉字部分生成 n-gram，
-    # 避免把「之乎者也」和后面的现代文「下列对文中」粘成无意义的 n-gram
-    sentences = re.split(r'[，。；？！、：\n\s]+', n_excerpt)
-    for sent in sentences:
+    for sent in n_sentences:
         s = sent.strip()
         if len(s) < MIN_N:
             continue
@@ -528,7 +619,7 @@ def _find_best_excerpt_range(n_full: str, n_excerpt: str):
                 ngrams.add(s[i:i + n])
 
     if len(ngrams) < 3:
-        log(f"   ⚠️ excerpt 中仅 {len(ngrams)} 个 n-gram，不足以匹配")
+        log(f"   ⚠️ excerpt 中仅 {len(ngrams)} 个 n-gram（{total_chars} 字），不足以匹配")
         return None
 
     # 步骤2: 在 n_full 中标记每个 n-gram 的所有命中位置
@@ -585,19 +676,24 @@ def _find_best_excerpt_range(n_full: str, n_excerpt: str):
     # 阈值:
     # - 短文本 (< 30汉字) 放宽到 3 次命中
     # - 长文本至少 10 次命中
-    # - 覆盖率放宽到 5%（clean.md 含大量现代文文本，天然命中率低）
-    min_hits = 3 if len(n_excerpt) < 30 else 10
+    # - 覆盖率阈值 30%（短文本 20%）——之前 5% 太低，不同古文的共享短 n-gram
+    #   也能达到 5%，导致搜到错误的书/章节也能通过质检
+    min_hits = 3 if total_chars < 30 else 10
+    min_coverage = 0.20 if total_chars < 50 else 0.30
     if best_cnt < min_hits:
         log(f"   ⚠️ 最佳窗口仅 {best_cnt} 次命中 (< {min_hits})，不相关")
         return None
-    if coverage < 0.05:
-        log(f"   ⚠️ n-gram 覆盖率仅 {coverage:.1%} < 5%，搜索文本与待校稿不相关")
+    if coverage < min_coverage:
+        log(f"   ⚠️ n-gram 覆盖率仅 {coverage:.1%} < {min_coverage:.0%}，搜索文本与待校稿不相关")
         return None
 
     return (start_idx, end_idx, best_cnt)
 
 def extract_excerpt_from_full(full_text, excerpt_text):
     """n-gram 密度匹配版：将 excerpt 打碎为 n-gram，在全文找匹配最密集的区间。
+
+    先在原始文本上按标点分句，再对每句清洗并生成句内 n-gram——这样 n-gram
+    不会跨越句边界，避免生成原书中不存在的人工组合（如上句末+下句首）。
 
     优势：excerpt 中非原文内容（现代文题目、选项等）的 n-gram 在古籍全文
     中找不到匹配，自动被过滤；只有真实古籍原文的 n-gram 会命中。
@@ -607,17 +703,25 @@ def extract_excerpt_from_full(full_text, excerpt_text):
         return None
 
     n_full = _clean_for_matching(full_text)
-    n_excerpt = _clean_for_matching(excerpt_text)
 
-    if len(n_excerpt) == 0 or len(n_full) == 0:
+    # 在清洗前按标点分句，避免跨句边界的无意义 n-gram
+    raw_sentences = re.split(r'[，。；？！、：\n\s]+', excerpt_text)
+    n_sentences = []
+    for sent in raw_sentences:
+        cleaned = _clean_for_matching(sent)
+        if len(cleaned) >= 5:  # MIN_N，过短片段不产生有效 n-gram
+            n_sentences.append(cleaned)
+
+    if len(n_full) == 0 or not n_sentences:
         return None
 
-    best = _find_best_excerpt_range(n_full, n_excerpt)
+    best = _find_best_excerpt_range(n_full, n_sentences)
     if best is None:
         return None
 
     start_idx, end_idx, best_cnt = best
-    coverage = best_cnt / len(n_excerpt) if len(n_excerpt) > 0 else 0
+    total_chars = sum(len(s) for s in n_sentences)
+    coverage = best_cnt / total_chars if total_chars > 0 else 0
 
     log(f"   🔍 n-gram 节选: 区间 [{start_idx}, {end_idx}] ({end_idx - start_idx} 字), 覆盖率 {coverage:.1%}")
 
@@ -653,7 +757,11 @@ def build_reference_section(text_type, original, diffs):
             dtype = d.get("type", "replace")
             orig = d.get("original", "")
             giv = d.get("given", "")
-            pos = d.get("position", 0)
+            # 优先使用映射后的 raw_position（可在原始文档中定位），
+            # 回退到清洗后坐标系的 position
+            pos = d.get("raw_position", d.get("position", 0))
+            if pos == -1:
+                pos = d.get("position", 0)
             if dtype == "replace":
                 lines.append(f"{i}. 第{pos}位：「{orig}」→「{giv}」（替换）")
             elif dtype == "delete":
@@ -820,10 +928,14 @@ def _extract_first_classical(text):
         if len(chinese) < 4:
             continue
 
-        # 检测"正文开始"信号：出现高密度文言虚词或连续中文
+        # 检测"正文开始"信号：需要同时满足文言虚词密度和连续中文长度，
+        # 避免将现代文网页（古诗文网知识讲解、百度百科等）误判为文言原文。
         density = _particle_density(''.join(chinese)) if chinese else 0
         if not started:
-            if density >= 0.03 or len(chinese) >= 15:
+            # 严苛模式：两个条件必须同时满足，防止单条件误触发
+            # - 密度 >= 0.05（古诗文网讲解页的现代文密度通常在 0.01-0.03）
+            # - 连续中文 >= 15 字
+            if density >= 0.05 and len(chinese) >= 15:
                 started = True
             else:
                 continue
@@ -933,6 +1045,14 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None, q_
         clean_orig = re.sub(r'[#*`\[\]()\s]', '', original)
 
     diff_result = diff_characters(clean_orig, clean_given)
+
+    # 将 diff position 从清洗后坐标系映射回原始 body_segment 的可定位位置
+    # （清洗去掉了标点/格式标记，导致 position 在原始文档中找不到对应字）
+    if body_segment is not None and diff_result.get("differences"):
+        diff_result["differences"] = _map_diff_positions_to_raw(
+            diff_result["differences"], body_segment
+        )
+
     reference = build_reference_section(text_type, original, diff_result["differences"])
 
     if diff_result["identical"]:

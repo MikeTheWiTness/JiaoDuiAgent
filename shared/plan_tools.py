@@ -37,7 +37,12 @@ class PlanUpdateTool(BaseTool):
     用法：
     - 首轮校对：LLM 调用 plan_update 声明计划步骤，首项为 in_progress
     - 每完成一步：调用 plan_update 标记该项 completed，下一项 in_progress
-    - 全部完成：工具返回值中追加自查 nudge
+    - 全部完成：工具返回值中追加自查 nudge（若 nudge_template 非 None）
+
+    nudge_template:
+    - None：跳过 nudge（物理场景，自检靠 prompt）
+    - 非空字符串：全部 completed 时使用该模板生成 nudge
+    - 默认值（未传参）：使用原有 hardcoded 文本校对 nudge（向后兼容语文等）
     """
 
     name: str = "plan_update"
@@ -47,6 +52,20 @@ class PlanUpdateTool(BaseTool):
         "全部 completed 时系统会提示自查。"
     )
     args_schema: type[BaseModel] = PlanUpdateParams
+
+    nudge_template: str | None = None
+    """自定义自查 nudge 模板。
+    - None（默认）→ 使用原有 hardcoded 文本校对 nudge
+    - ""（空串）→ 跳过 nudge（物理场景用）
+    - 非空 → 直接作为 nudge 文本
+    """
+
+    _DEFAULT_NUDGE: str = (
+        "\n\n⚡ 所有校对步骤已完成。在输出最终结果前，请自检：\n"
+        "1. 标记原文中的标记数量是否等于修改原因中的条目数量？\n"
+        "2. ### 标记原文 和 ### 修改原因 两个段落是否都存在？\n"
+        "3. 是否有遗漏的错误类型（如只改了错别字漏了标点）？"
+    )
 
     def _run(self, todos: list[dict]) -> dict:
         """执行计划更新，返回状态摘要和可选的自查提示。
@@ -91,12 +110,13 @@ class PlanUpdateTool(BaseTool):
         all_done = completed == total
         nudge = ""
         if all_done and total >= 3:
-            nudge = (
-                "\n\n⚡ 所有校对步骤已完成。在输出最终结果前，请自检：\n"
-                "1. 标记原文中的标记数量是否等于修改原因中的条目数量？\n"
-                "2. ### 标记原文 和 ### 修改原因 两个段落是否都存在？\n"
-                "3. 是否有遗漏的错误类型（如只改了错别字漏了标点）？"
-            )
+            if self.nudge_template is None:
+                # 默认行为：使用 hardcoded 文本校对 nudge（语文等学科）
+                nudge = self._DEFAULT_NUDGE
+            elif self.nudge_template:
+                # 自定义 nudge 模板（学科专用）
+                nudge = self.nudge_template
+            # else: nudge_template == "" → 跳过 nudge（物理场景：自检靠 prompt）
 
         return {
             "ok": True,

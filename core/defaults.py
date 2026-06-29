@@ -1,9 +1,9 @@
 import os, re, base64, shutil
 from pathlib import Path
 from core.parsing import save_proofread_json
-from core.api_client import call_api, call_api_continue, MAX_FILE_SIZE
+from core.api_client import call_api, MAX_FILE_SIZE
 from core.logging_utils import log
-from core.format_enforcement import _enforce_format, _llm_format_fix
+from core.format_enforcement import _enforce_format, enforce_and_fix
 from core import config_loader
 
 
@@ -603,6 +603,14 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 continue
 
     try:
+        # ReAct 模式：注入 API 配置供 IndependentSolveTool 等内部工具使用
+        if react_mode:
+            try:
+                from shared.physics_tools import set_physics_api_config
+                set_physics_api_config(api_url, api_key, model, output_dir=q_dir)
+            except ImportError:
+                pass  # 非物理学科无 physics_tools 模块，忽略
+
         result = call_api(api_url, api_key, model, md_content, images_b64,
                           q_name, prompt, tools=tools, max_loops=max_loops,
                           output_dir=q_dir)
@@ -617,15 +625,22 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
         return {"success": False, "result": "", "error": str(e), "tool_calls": []}
 
     if "API调用失败" not in res:
+        # ---- 格式审查 + bash 直接编辑文件修正 ----
         format_ok, format_issues = _enforce_format(res)
-        if not format_ok:
+        if not format_ok and generate_pdf:
+            # 先把原始输出写入文件（不含头部元信息），供 LLM 用 bash 直接编辑
+            md_path = os.path.join(q_dir, "_校对报告.md")
+            try:
+                os.makedirs(q_dir, exist_ok=True)
+                with open(md_path, "w", encoding="utf-8") as f:
+                    f.write(res)
+            except Exception:
+                pass
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}")
-            fixed = _llm_format_fix(res, format_issues, api_url, api_key, model)
-            if fixed and _enforce_format(fixed)[0]:
-                log("   \u2705 LLM 格式修正成功")
-                res = fixed
-            else:
-                log("   \u26a0\ufe0f 格式修正失败，使用原始输出")
+            res, was_fixed, _ = enforce_and_fix(md_path, res, api_url, api_key, model)
+        elif not format_ok:
+            log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
+
         if generate_pdf:
             md_path = os.path.join(q_dir, "_校对报告.md")
             try:
