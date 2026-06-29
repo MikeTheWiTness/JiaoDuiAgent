@@ -116,8 +116,8 @@ class DefaultApp:
             self.frame_split_mode.pack(fill=tk.X, pady=(6, 0))
             ttk.Label(self.frame_split_mode, text="分割方式：").pack(side=tk.LEFT)
             self.combo_split = ttk.Combobox(self.frame_split_mode, textvariable=self.split_mode,
-                                            values=["rule", "none", "smart", "manual"],
-                                            state="readonly", width=12)
+                                            values=["rule", "none", "smart", "manual", "knowledge_smart", "knowledge_manual"],
+                                            state="readonly", width=16)
             self.combo_split.pack(side=tk.LEFT, padx=4)
             self.lbl_split_desc = ttk.Label(self.frame_split_mode, text="（普通规则）", foreground="gray")
             self.lbl_split_desc.pack(side=tk.LEFT, padx=4)
@@ -236,7 +236,9 @@ class DefaultApp:
             "rule": "（普通规则 - 按标题/题号拆分）",
             "none": "（不拆分 - 整份作为一个单元）",
             "smart": "（智能分割 - LLM 自动识别题目）",
-            "manual": "（人工标记 - 按 ###### 标记拆分）",
+            "manual": "（人工标记 - 按 ###### 题目标记拆分）",
+            "knowledge_smart": "（知识智能分割 - LLM 自动识别知识单元）",
+            "knowledge_manual": "（知识人工标记 - 按 ###### 知识标记拆分）",
         }
         desc = desc_map.get(mode, "")
         if hasattr(self, 'lbl_split_desc'):
@@ -801,7 +803,7 @@ class DefaultApp:
                         shutil.copy2(file_path, raw_md)
                         ok = True
                         needs_post = False
-                        log("   📄 直接使用 Markdown 文件")
+                        log("   📄 直接使用 Markdown 文件（跳过转换，后处理保持原样）")
                     except Exception as e:
                         log(f"   ❌ 复制 md 文件失败: {e}")
                         ok = False
@@ -889,13 +891,18 @@ class DefaultApp:
                     split_ok = False
 
                 if split_ok:
-                    if source == "讲义" and self.knowledge_enabled.get():
+                    # 知识分割模式（knowledge_smart / knowledge_manual）已自动处理
+                    # 知识/题目的分离，无需再走旧版"提取知识文件夹"逻辑
+                    is_knowledge_split = self.split_mode.get() in ("knowledge_smart", "knowledge_manual")
+                    if source == "讲义" and self.knowledge_enabled.get() and not is_knowledge_split:
                         from core import config_loader
                         config_split_mode = config_loader.get_lecture_split_mode(self.subject_app.config)
                         if config_split_mode != "section":
                             self.subject_app.generate_knowledge(raw_md, split_root, basename)
                         else:
                             log("   📘 section 模式：跳过知识提取（版块即单元）")
+                    elif is_knowledge_split:
+                        log("   📘 知识分割模式：知识/题目已自动分离，跳过旧版知识提取")
 
                     converted_dir = os.path.join(split_root, basename)
                     converted_dirs.append(converted_dir)

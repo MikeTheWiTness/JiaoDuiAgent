@@ -113,6 +113,16 @@ class SubjectApp:
         return base_prompt
 
     def get_knowledge_prompt(self):
+        if self.react_mode:
+            # ReAct 统一入口：agent_prompt 已含知识维度叠加 + 题目节点图
+            agent_lines = self.config.get("agent_prompt_lines")
+            if agent_lines:
+                base_prompt = "\n".join(agent_lines)
+                tool_instructions = self.get_tool_instructions()
+                if tool_instructions:
+                    return base_prompt + "\n\n" + tool_instructions
+                return base_prompt
+        # 非 ReAct 模式：使用旧版 knowledge_prompt_lines
         base_prompt = "\n".join(self.config.get("knowledge_prompt_lines", []))
         tool_instructions = self.get_tool_instructions()
         if tool_instructions:
@@ -135,6 +145,15 @@ class SubjectApp:
             problems = [{"content": md_content}]
         elif split_mode == "manual":
             problems = split_by_manual_markers(md_content)
+        elif split_mode == "knowledge_manual":
+            from core.manual_split import split_by_knowledge_markers
+            problems = split_by_knowledge_markers(md_content)
+        elif split_mode == "knowledge_smart":
+            api_url = options.get("api_url", "")
+            api_key = options.get("api_key", "")
+            model = options.get("model", "")
+            from shared.knowledge_split import knowledge_split_smart
+            problems = knowledge_split_smart(md_content, api_url, api_key, model, md_file=md_file)
         elif split_mode == "smart":
             api_url = options.get("api_url", "")
             api_key = options.get("api_key", "")

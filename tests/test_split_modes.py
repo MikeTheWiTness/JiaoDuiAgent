@@ -195,5 +195,101 @@ class TestSplitModesLecture(unittest.TestCase):
         self.assertTrue(result)
 
 
+class TestKnowledgeManualMarker(unittest.TestCase):
+    """测试知识手工标记（###### 知识开始/结束 ######）"""
+
+    def test_knowledge_marker_basic(self):
+        from core.manual_split import split_by_knowledge_markers
+        content = (
+            "开头\n"
+            "###### 知识开始 ######\n"
+            "第一块知识\n"
+            "###### 知识结束 ######\n"
+            "结尾\n"
+        )
+        results = split_by_knowledge_markers(content)
+        self.assertEqual(len(results), 1)
+        self.assertIn("第一块知识", results[0]["content"])
+
+    def test_knowledge_marker_multiple(self):
+        from core.manual_split import split_by_knowledge_markers
+        content = (
+            "开头\n"
+            "###### 知识开始 ######\n"
+            "块一\n"
+            "###### 知识结束 ######\n"
+            "中间\n"
+            "###### 知识开始 ######\n"
+            "块二\n"
+            "###### 知识结束 ######\n"
+            "结尾\n"
+        )
+        results = split_by_knowledge_markers(content)
+        self.assertEqual(len(results), 2)
+        self.assertIn("块一", results[0]["content"])
+        self.assertIn("块二", results[1]["content"])
+
+    def test_knowledge_marker_unpaired_start(self):
+        from core.manual_split import split_by_knowledge_markers, KnowledgeMarkerError
+        content = (
+            "###### 知识开始 ######\n"
+            "内容\n"
+        )
+        with self.assertRaises(KnowledgeMarkerError):
+            split_by_knowledge_markers(content)
+
+    def test_knowledge_marker_unpaired_end(self):
+        from core.manual_split import split_by_knowledge_markers, KnowledgeMarkerError
+        content = (
+            "内容\n"
+            "###### 知识结束 ######\n"
+        )
+        with self.assertRaises(KnowledgeMarkerError):
+            split_by_knowledge_markers(content)
+
+    def test_knowledge_marker_no_markers(self):
+        from core.manual_split import split_by_knowledge_markers, KnowledgeMarkerError
+        content = "只是普通文本，没有任何标记"
+        with self.assertRaises(KnowledgeMarkerError):
+            split_by_knowledge_markers(content)
+
+    def test_knowledge_marker_empty_block(self):
+        from core.manual_split import split_by_knowledge_markers
+        content = (
+            "###### 知识开始 ######\n"
+            "\n"
+            "###### 知识结束 ######\n"
+        )
+        results = split_by_knowledge_markers(content)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["content"].strip(), "")
+
+    def test_knowledge_and_problem_markers_independent(self):
+        """知识标记和题目标记互不干扰"""
+        from core.manual_split import split_by_knowledge_markers, split_by_manual_markers
+        content = (
+            "###### 知识开始 ######\n"
+            "知识内容\n"
+            "###### 题目开始 ######\n"
+            "嵌入题目\n"
+            "###### 题目结束 ######\n"
+            "更多知识\n"
+            "###### 知识结束 ######\n"
+        )
+        knowledge_results = split_by_knowledge_markers(content)
+        self.assertEqual(len(knowledge_results), 1)
+        self.assertIn("嵌入题目", knowledge_results[0]["content"])
+
+        # 题目标记也能独立解析
+        problem_only = (
+            "###### 题目开始 ######\n"
+            "单独题目\n"
+            "###### 题目结束 ######\n"
+        )
+        problem_results = split_by_manual_markers(problem_only)
+        self.assertEqual(len(problem_results), 1)
+        self.assertIn("单独题目", problem_results[0]["content"])
+
+
 if __name__ == "__main__":
     unittest.main()
