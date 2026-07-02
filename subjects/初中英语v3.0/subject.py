@@ -113,41 +113,6 @@ class SubjectApp(BaseSubjectApp):
 
         return self._write_problems_to_dirs(md_file, output_root, base_name, problems)
 
-    def _write_problems_to_dirs(self, md_file, output_root, base_name, problems):
-        if not problems:
-            log("⚠️ 没有题目可写入")
-            return False
-
-        md_dir = Path(md_file).parent
-        src_media = md_dir / f"{base_name}_images" / "media"
-        target_root = Path(output_root) / base_name
-        target_root.mkdir(parents=True, exist_ok=True)
-
-        for idx, prob in enumerate(problems, start=1):
-            content = prob.get("content", "")
-            q_dir = target_root / f"第{idx}题"
-            q_dir.mkdir(exist_ok=True)
-            img_dir = q_dir / "images"
-            img_dir.mkdir(exist_ok=True)
-
-            img_result = copy_md_images(content, [src_media, md_dir], img_dir)
-            new_content = img_result.content
-
-            (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
-
-            # 同步生成 _clean.md
-            try:
-                from shared.docx_format_enhancer import strip_format_markers
-                clean = strip_format_markers(new_content)
-                clean = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', clean, flags=re.DOTALL)
-                clean = re.sub(r'\*\*([^*]+)\*\*', r'', clean)
-                clean = re.sub(r'__([^_]+)__', r'', clean)
-                (q_dir / f"第{idx}题_clean.md").write_text(clean, encoding='utf-8')
-            except Exception:
-                pass
-
-        log(f"📂 拆分完成: {len(problems)} 题")
-        return True
 
 
     def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode="试卷"):

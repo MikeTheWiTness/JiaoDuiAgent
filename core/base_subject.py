@@ -4,11 +4,16 @@
 get_max_tool_loops / prompt 方法 / split 方法 / proofread_one），
 零差异方法自动继承。
 """
+import re
+import shutil
+from pathlib import Path
 from core.config_loader import load_config
 from core.defaults import (
     default_generate_knowledge,
     default_collect_paper_dirs,
 )
+from core.logging_utils import log
+from shared.image_utils import copy_md_images
 
 
 class BaseSubjectApp:
@@ -22,6 +27,7 @@ class BaseSubjectApp:
 
     # ---- 子类可覆盖的类属性 ----
     _show_knowledge_option: bool = True
+    _clean_bold_replacement: str = "\x01"  # 高中历史覆盖为 "\1" 保留粗体文本
 
     def __init__(self, subject_dir):
         self.subject_dir = subject_dir
@@ -117,3 +123,43 @@ class BaseSubjectApp:
     def get_supported_extensions(self):
         """支持的文件扩展名 —— 默认实现。"""
         return {".docx", ".doc", ".md"}
+
+    # ---- _write_problems_to_dirs（7 科最大重复源） ----
+
+    def _write_problems_to_dirs(self, md_file, output_root, base_name, problems):
+        """将拆分后的题目写入目录，含图片复制和 _clean.md 生成。"""
+        if not problems:
+            log("⚠️ 没有题目可写入")
+            return False
+
+        md_dir = Path(md_file).parent
+        src_media = md_dir / f"{base_name}_images" / "media"
+        target_root = Path(output_root) / base_name
+        target_root.mkdir(parents=True, exist_ok=True)
+
+        for idx, prob in enumerate(problems, start=1):
+            content = prob.get("content", "")
+            q_dir = target_root / f"第{idx}题"
+            q_dir.mkdir(exist_ok=True)
+            img_dir = q_dir / "images"
+            img_dir.mkdir(exist_ok=True)
+
+            img_result = copy_md_images(content, [src_media, md_dir], img_dir)
+            new_content = img_result.content
+
+            (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
+
+            # 同步生成 _clean.md
+            try:
+                from shared.docx_format_enhancer import strip_format_markers
+                clean = strip_format_markers(new_content)
+                clean = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', clean, flags=re.DOTALL)
+                repl = self._clean_bold_replacement
+                clean = re.sub(r'\*\*([^*]+)\*\*', repl, clean)
+                clean = re.sub(r'__([^_]+)__', repl, clean)
+                (q_dir / f"第{idx}题_clean.md").write_text(clean, encoding='utf-8')
+            except Exception:
+                pass
+
+        log(f"📂 拆分完成: {len(problems)} 题")
+        return True
