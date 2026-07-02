@@ -12,6 +12,7 @@ from core.defaults import (
     default_generate_knowledge,
     default_collect_paper_dirs,
     default_split_exam,
+    default_proofread_one,
 )
 from core.manual_split import split_by_manual_markers
 from core.logging_utils import log
@@ -125,6 +126,31 @@ class BaseSubjectApp:
     def get_supported_extensions(self):
         """支持的文件扩展名 —— 默认实现。"""
         return {".docx", ".doc", ".md"}
+
+    # ---- proofread_one（模板方法，语文覆盖 _build_pre_hook） ----
+
+    def proofread_one(self, api_url, api_key, model, q_dir, q_name,
+                      is_knowledge, generate_pdf, source_mode="试卷"):
+        """校对入口 —— 所有学科共用骨架。高中语文覆盖 _build_pre_hook 注入文言文搜索。"""
+        if is_knowledge:
+            prompt = self.get_knowledge_prompt()
+        elif source_mode == "批注评审":
+            prompt = self.get_review_prompt()
+        else:
+            prompt = self.get_question_prompt()
+
+        pre_hook = self._build_pre_hook(api_url, api_key, model, q_dir)
+
+        return default_proofread_one(
+            api_url, api_key, model, q_dir, q_name, is_knowledge,
+            prompt, self.tools, self.get_max_tool_loops(), generate_pdf,
+            pre_hook=pre_hook,
+            react_mode=self.react_mode,
+        )
+
+    def _build_pre_hook(self, api_url, api_key, model, q_dir):
+        """构建前置校对钩子。默认返回 None。高中语文覆盖此方法注入文言文搜索。"""
+        return None
 
     # ---- split_exam（所有学科完全相同） ----
 

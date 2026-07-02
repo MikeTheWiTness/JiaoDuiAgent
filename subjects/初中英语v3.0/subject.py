@@ -87,20 +87,6 @@ class SubjectApp(BaseSubjectApp):
         return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
 
-    def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode="试卷"):
-        if is_knowledge:
-            prompt = self.get_knowledge_prompt()
-        elif source_mode == "批注评审":
-            prompt = self.get_review_prompt()
-        else:
-            prompt = self.get_question_prompt()
-
-        return default_proofread_one(
-            api_url, api_key, model, q_dir, q_name, is_knowledge,
-            prompt, self.tools, self.get_max_tool_loops(), generate_pdf,
-            react_mode=self.react_mode
-        )
-
 
 
 
