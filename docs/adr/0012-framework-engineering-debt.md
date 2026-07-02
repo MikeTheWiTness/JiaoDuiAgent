@@ -1,9 +1,11 @@
 # ADR 0012：框架工程债识别与修复路线
 
-**状态**：提议中
+**状态**：已实现（Issue 1-3 完成）
 **日期**：2026-06-30
+**实现日期**：2026-07-02
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0010 Harness/ReAct/Plan Mode 升级]](0010-harness-react-planmode-upgrade.md)、[[ADR 0011 学科代码重复消除]](0011-subject-code-dedup.md)
+**GitHub Issues**：[#38](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/38) [#39](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/39) [#40](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/40)
 
 ---
 
@@ -104,3 +106,26 @@ Claude Code 参考：`categorizeRetryableAPIError`、`PROMPT_TOO_LONG_ERROR_MESS
 ADR-0010 是**设计升级**（新增能力），本 ADR 是**工程修正**（修复已有缺陷）。
 
 本 ADR 的 1-3 项（全局状态、用量追踪、错误分层）与 ADR-0010 的实现有关联（都涉及 `call_api` 和 `default_proofread_one` 的改动），建议在 ADR-0010 实现时一并处理，但不写在 ADR-0010 的"决策"中——以保持 ADR-0010 纯粹聚焦于设计方向。
+
+---
+
+## 实现记录（2026-07-02）
+
+### ✅ Issue 010：全局状态污染 — 已修复
+- `shared/text_nav_tools.py`：模块级 `_current_text` → `threading.local()` 线程局部存储
+- 新增 `tests/test_text_nav_concurrency.py`：5 个并发测试全部通过
+
+### ✅ Issue 011：API 用量追踪 — 已实现
+- `core/api_client.py`：`_extract_usage()` / `_accumulate_usage()`，4 个 API 请求点自动累加
+- `core/defaults.py`：`_format_usage_summary()` 写入 `_校对报告.md` 末尾
+- 新增 `tests/test_api_usage_tracking.py`：5 个测试全部通过
+
+### ✅ Issue 012：错误处理分层 — 已实现
+- 异常层级：`ProofreadError` → `APITimeoutError` / `APIRateLimitError` / `APIAuthError` / `FormatError` / `ToolExecutionError`
+- 指数退避：2s → 4s → 8s（上限 30s），限流基准 5s
+- 熔断器：连续 3 次同类型错误停止重试；认证错误立即停止
+- 新增 `tests/test_error_handling.py`：20 个测试全部通过
+
+### 待实施
+- Issue 013-015（🟡 下期）：日志结构化 / SessionContext / Schema 验证
+- Issue 016-018（🟢 远期）：Provider 抽象 / Session 持久化 / 测试架构
