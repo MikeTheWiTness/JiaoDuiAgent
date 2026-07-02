@@ -93,6 +93,23 @@ class TestIsEmptyOrDuplicate(unittest.TestCase):
         recent = ["result A", "result B"]
         self.assertFalse(_is_empty_or_duplicate("result C", recent))
 
+    def test_sympy_json_success_not_empty(self):
+        """SymPy 工具返回的 JSON（含 "success" 字段）不应被判为空"""
+        # 模拟 evaluate_expression 返回
+        sympy_result = '{"success": true, "result": 0.4, "error": null, "code": "..."}'
+        self.assertFalse(_is_empty_or_duplicate(sympy_result, []))
+
+    def test_sympy_json_failure_not_empty(self):
+        """SymPy 工具即使失败也返回结构化 JSON，不应被判为空"""
+        sympy_result = '{"success": false, "result": null, "error": "division by zero", "code": "..."}'
+        self.assertFalse(_is_empty_or_duplicate(sympy_result, []))
+
+    def test_sympy_json_still_checks_duplicate(self):
+        """SymPy JSON 结果不参与空结果检测，但仍可检查真正空白/标记"""
+        # 确保空白和标记检查在 sympy JSON 跳过之后仍然有效
+        self.assertTrue(_is_empty_or_duplicate("", []))
+        self.assertTrue(_is_empty_or_duplicate("[搜索结果为空]", []))
+
 
 if __name__ == "__main__":
     unittest.main()

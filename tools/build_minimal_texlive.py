@@ -38,16 +38,22 @@ def parse_args():
 # ---- Test .tex content exercising ALL required packages ----
 
 TEST_TEX = r"""
-\documentclass[12pt,a4paper]{ctexart}
+\documentclass[12pt,a4paper]{article}
+\usepackage{xeCJK}
 
 % Fonts — use filenames so kpathsea can find them without fontconfig
 \setCJKmainfont{FandolSong-Regular.otf}[
   BoldFont=FandolSong-Bold.otf,
   ItalicFont=FandolKai-Regular.otf]
+\setCJKsansfont{FandolHei-Regular.otf}[
+  BoldFont=FandolHei-Bold.otf]
+\setCJKmonofont{FandolKai-Regular.otf}
 \setmainfont{texgyretermes-regular.otf}[
   BoldFont=texgyretermes-bold.otf,
   ItalicFont=texgyretermes-italic.otf,
   BoldItalicFont=texgyretermes-bolditalic.otf]
+\setsansfont{texgyretermes-regular.otf}
+\setmonofont{DejaVuSans.ttf}
 \newfontfamily{\fallbacksymbols}{DejaVuSans.ttf}[Scale=MatchUppercase]
 
 \usepackage{amsmath}
@@ -59,6 +65,8 @@ TEST_TEX = r"""
 \usepackage{fancyhdr}
 \usepackage{geometry}
 \usepackage{tikz}
+\usepackage[normalem]{ulem}        % \sout, \uwave, \uline, \dout
+\usepackage{xeCJKfntef}      % \CJKunderdot
 
 \newcommand{\redcircled}[1]{%
   \tikz[baseline=(char.base)]{%
@@ -82,6 +90,19 @@ TEST_TEX = r"""
 }
 \newcommand{\lt}{{<}}
 \newcommand{\gt}{{>}}
+
+% 双删除线命令（基于 ulem）
+\makeatletter
+\newcommand{\dout}{%
+  \bgroup
+  \markoverwith{%
+    \rule[-0.8ex]{0.1pt}{2.5ex}%
+    \hskip-0.1pt
+    \rule[0.2ex]{0.1pt}{2.5ex}%
+  }%
+  \ULon
+}
+\makeatother
 
 \pagestyle{fancy}
 \fancyhf{}
@@ -132,6 +153,13 @@ Text with no correction.
 
 \section{Fallback Symbols}
 {\fallbacksymbols \char"2605\char"2606\char"2460\char"2461\char"2462}
+
+\section{Format Markers (ulem + xeCJKfntef)}
+\uline{下划线文本} \sout{删除线} \uwave{波浪线}
+
+\dout{双删除线}
+
+\CJKunderdot{着重号文本}
 
 \end{document}
 """

@@ -31,6 +31,10 @@ def load_config(subject_dir):
     config["question_prompt_lines"] = new_data["question_prompt_lines"]
     config["knowledge_prompt_lines"] = new_data["knowledge_prompt_lines"]
 
+    # 加载可选的知识校对 ReAct prompt（知识场景专用，不存在时不报错）
+    if "knowledge_agent_prompt_lines" in new_data:
+        config["knowledge_agent_prompt_lines"] = new_data["knowledge_agent_prompt_lines"]
+
     # 加载可选的 agent_prompt.json（ReAct 模式专用，不存在时不报错）
     agent_file = os.path.join(subject_dir, "agent_prompt.json")
     if os.path.exists(agent_file):

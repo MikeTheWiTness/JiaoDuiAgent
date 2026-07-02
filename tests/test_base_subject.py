@@ -48,8 +48,9 @@ class _MinimalSubject(BaseSubjectApp):
 
 
 class _HistorySubject(_MinimalSubject):
-    """模拟高中历史：关闭知识提取选项。"""
+    """模拟高中历史：关闭知识提取选项 + 保留粗体文本。"""
     _show_knowledge_option = False
+    _clean_bold_replacement = r"\1"  # 历史保留粗体内容
 
 
 @pytest.fixture

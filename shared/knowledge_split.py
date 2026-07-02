@@ -3,7 +3,7 @@
 管线：
   步骤 1（Python）：全文结构编目 → 列出所有结构信号（标题/编号/段头/嵌入题目标记）
   步骤 2（LLM）：基于结构清单 + 原文头尾，决定切分方案 + 类型标注
-  步骤 3（Python）：校验 → bash 逆序插入标签 → 复核
+  步骤 3（Python）：校验 → 按 LLM 方案切分 → 复核
 
 中间产物（全部落盘到 output/中间产物/{文档名}/）：
   - _knowledge_catalog.json       步骤 1 结构编目清单
@@ -70,7 +70,7 @@ _THEME_SIGNAL_RE = re.compile(r'^\*\*主题[一二三四五六七八九十\d]+�
 
 
 def _scan_structure(content: str) -> dict:
-    """全文结构编目：列出所有可识别的结构信号，不做切割、不做置信度评判。
+    """全文结构编目：列出所有可识别的结构信号，不做切割。
 
     返回一份"文档目录清单"，每条记录包含：
       - line: 行号（0-based）
@@ -161,7 +161,7 @@ def _scan_structure(content: str) -> dict:
 
 
 # ============================================================================
-# 步骤 2 原稿保留（暂不改，后续调整 LLM prompt 使用新 catalog 格式）
+# 步骤 2：LLM 切分方案决策
 # ============================================================================
 
 _LLM_SPLIT_PROMPT = """你是语文教辅结构分析专家。系统已为一份知识讲义做了全文结构编目。
@@ -239,7 +239,6 @@ def _build_llm_input(catalog: list[dict], content: str) -> str:
         e["line"] for e in catalog
         if e["type"] in ("heading", "item_number", "exam_marker")
     ))
-    boundary_indices_set = set(boundary_indices)
     for idx in boundary_indices:
         eid = f'L{idx:04d}'
         start = max(0, idx - 1)
@@ -251,58 +250,8 @@ def _build_llm_input(catalog: list[dict], content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 步骤 2：LLM 块分类（仅处理 LOW + NONE 块）
+# 工具函数
 # ---------------------------------------------------------------------------
-
-ANCHOR_CLASSIFY_PROMPT = """你是语文教辅结构分析专家。系统已将文档分为若干区块，部分区块置信度较低，需要你帮忙识别其内容类型和边界。
-
-## 输入格式
-
-每个待分析区块格式为：
-```
-[BLOCK id=N from=L起始行]
-{区块内容的前 500 字符 + 后 500 字符}
-```
-
-## 输出格式
-
-严格输出 JSON，不要加任何解释：
-
-```json
-{
-  "blocks": [
-    {
-      "id": "区块编号（整数）",
-      "type": "knowledge | problem_strip | skip",
-      "sub_blocks": [
-        {"anchor": "子块锚点文本（原文中出现的唯一标题行或开头句，15-40字）",
-         "type": "knowledge | problem_strip"}
-      ]
-    }
-  ]
-}
-```
-
-## 分类规则
-
-- **knowledge**：素材条目（含典故/寓意/例句）、方法讲解、概念定义——这些需要知识类校对
-- **problem_strip**：纯例题模块（含完整题目+解析+答案），无素材讲解——应拆出走题目校对
-- **skip**：页眉页脚、版权信息、纯管理信息（如"分班型：目标清北班"）——不需要校对
-
-## 子边界规则
-
-- 如果区块内包含多个独立的知识单元（如多个素材条目），请用 sub_blocks 标注每个子块的锚点和类型
-- 锚点必须是**原文中出现的原文行**，15-40 字，在该块内唯一。用锚点在原文中 grep 必须精确匹配一次
-- 如果整个区块是单一类型、不需要细分，sub_blocks 为空数组
-- 相邻子块的边界在下一个子块锚点的前一行
-
-## 重要
-
-- 锚点必须一字不差来自原文，确保可以在原文中 grep 精确定位
-- 不确定类型时选 knowledge（宁可多校对，不可漏校对）
-- 不要输出不全——如果区块包含 N 个字块，sub_blocks 必须有 N 个条目
-"""
-
 
 def _dump_intermediate(filename: str, content: str, doc_name: str = "") -> None:
     """保存中间产物到 output/中间产物/{doc_name}/ 目录。"""
@@ -318,182 +267,9 @@ def _dump_intermediate(filename: str, content: str, doc_name: str = "") -> None:
         log(f"   ⚠️ 保存中间产物失败: {e}")
 
 
-def _extract_block_snippet(content: str, blk: dict, context_lines: int = 2) -> str:
-    """提取块的头尾各 context_lines 行作为上下文。"""
-    lines = content.split("\n")
-    start, end = max(0, blk["from"] - context_lines), min(len(lines), blk["to"] + context_lines)
-    snippet_lines = lines[start:end]
-    # 截取前 500 和后 500 字符
-    snippet = "\n".join(snippet_lines)
-    if len(snippet) <= 1000:
-        return snippet
-    return snippet[:500] + "\n\n...（中间省略）...\n\n" + snippet[-500:]
-
-
-def _classify_low_blocks(content: str, low_blocks: list[dict],
-                         llm_callable, doc_name: str = "") -> list[dict]:
-    """调用 LLM 对 LOW + NONE 置信度块进行分类。
-
-    Args:
-        content: 原始全文
-        low_blocks: 步骤 1 输出的 LOW/NONE 置信度块列表
-        llm_callable: LLM 调用函数，签名为 (user_text, system_prompt) -> str
-        doc_name: 文档名（用于中间产物路径）
-
-    Returns:
-        与 low_blocks 一一对应的分类结果列表
-    """
-    if not low_blocks:
-        return []
-
-    # 构建 LLM 输入
-    input_parts = []
-    for blk in low_blocks:
-        snippet = _extract_block_snippet(content, blk)
-        input_parts.append(
-            f"[BLOCK id={blk.get('id', '?')} from=L{blk['from']}]\n{snippet}\n"
-        )
-    user_text = "\n---\n".join(input_parts)
-
-    # 保存 LLM 输入
-    _dump_intermediate("_knowledge_scan_tree.json",
-                       json.dumps({"low_blocks": low_blocks}, ensure_ascii=False, indent=2),
-                       doc_name)
-    _dump_intermediate("_knowledge_llm_input.txt", user_text, doc_name)
-
-    log(f"   🤖 步骤 2：调用 LLM 分类 {len(low_blocks)} 个低置信度块...")
-
-    try:
-        raw = llm_callable(user_text, ANCHOR_CLASSIFY_PROMPT)
-    except Exception as e:
-        log(f"   ❌ 步骤 2 LLM 调用失败: {e}")
-        _dump_intermediate("_knowledge_llm_error.txt",
-                           f"调用异常: {e}\n\n{traceback.format_exc() if 'traceback' in dir() else str(e)}",
-                           doc_name)
-        raise
-
-    _dump_intermediate("_knowledge_llm_raw.txt", raw, doc_name)
-
-    # 解析 JSON
-    try:
-        # 提取 JSON 块（容错 LLM 可能在前后加了说明文字）
-        json_match = re.search(r'\{[\s\S]*\}', raw)
-        if json_match:
-            parsed = json.loads(json_match.group(0))
-        else:
-            raise ValueError("未找到 JSON 块")
-        _dump_intermediate("_knowledge_llm_parsed.json",
-                           json.dumps(parsed, ensure_ascii=False, indent=2),
-                           doc_name)
-        return parsed.get("blocks", [])
-    except (json.JSONDecodeError, ValueError) as e:
-        log(f"   ⚠️ LLM 返回 JSON 解析失败: {e}")
-        _dump_intermediate("_knowledge_llm_parse_error.txt",
-                           f"解析错误: {e}\n\n原始返回:\n{raw}", doc_name)
-        # 降级：所有 LOW 块标记为 knowledge，不做细分
-        fallback = []
-        for blk in low_blocks:
-            fallback.append({
-                "id": blk.get("id", 0),
-                "type": "knowledge",
-                "sub_blocks": [],
-            })
-        return fallback
-
-
-# ---------------------------------------------------------------------------
-# 步骤 3：锚点合并 + 校验
-# ---------------------------------------------------------------------------
-
-def _merge_and_validate(content: str, high_blocks: list[dict],
-                        classified_low_blocks: list[dict],
-                        doc_name: str = "") -> list[dict]:
-    """合并 HIGH + LOW/NONE 块的分类结果，生成最终锚点列表并校验。
-
-    Returns:
-        [{ "anchor": "...", "action": "start", "type": "knowledge" }, ...]
-    """
-    all_anchors = []
-
-    # 处理 HIGH 块：类型按结构信号推断
-    for blk in high_blocks:
-        snippet = "\n".join(content.split("\n")[blk["from"]:blk["to"]])
-        blk_type = _infer_block_type(snippet)
-        all_anchors.append({
-            "anchor": blk["anchor"],
-            "action": "start",
-            "type": blk_type,
-            "from": blk["from"],
-            "to": blk["to"],
-            "source": "HIGH",
-        })
-
-    # 处理 LOW/NONE 分类结果
-    for cls_blk in classified_low_blocks:
-        if cls_blk.get("sub_blocks"):
-            for sub in cls_blk["sub_blocks"]:
-                all_anchors.append({
-                    "anchor": sub["anchor"],
-                    "action": "start",
-                    "type": sub.get("type", "knowledge"),
-                    "source": "LLM_sub",
-                })
-        elif cls_blk.get("type") != "skip":
-            all_anchors.append({
-                "anchor": cls_blk.get("anchor", ""),
-                "action": "start",
-                "type": cls_blk.get("type", "knowledge"),
-                "source": "LLM_block",
-            })
-
-    # 按锚点在原文中最早出现的行号排序
-    lines_list = content.split("\n")
-
-    def _anchor_line(anchor_info):
-        anchor = anchor_info["anchor"]
-        # 优先精确匹配
-        for i, line in enumerate(lines_list):
-            if line.strip() == anchor.strip():
-                return i
-        # 回退：包含匹配
-        for i, line in enumerate(lines_list):
-            if anchor in line:
-                return i
-        return 999999
-
-    all_anchors.sort(key=_anchor_line)
-
-    # 校验：每个 anchor 在原文中唯一
-    deduped = all_anchors
-
-    # 校验：每个 anchor 在原文中唯一
-    errors = []
-    for a in deduped:
-        count = content.count(a["anchor"])
-        if count == 0:
-            errors.append(f"锚点不存在: {a['anchor'][:60]}")
-        elif count > 1 and a["source"] != "HIGH":
-            errors.append(f"锚点出现 {count} 次（不唯一）: {a['anchor'][:60]}")
-
-    _dump_intermediate("_knowledge_anchors.json",
-                       json.dumps({"anchors": deduped, "errors": errors},
-                                  ensure_ascii=False, indent=2),
-                       doc_name)
-
-    if errors:
-        log(f"   ⚠️ 锚点校验发现 {len(errors)} 个问题，使用降级策略")
-        # 降级：返回单单元
-        return [{"anchor": content.split("\n")[0].strip() if content else "全文",
-                 "action": "start", "type": "knowledge", "source": "fallback"}]
-
-    return deduped
-
-
 def _infer_block_type(snippet: str) -> str:
     """从块内容的结构信号推断类型。"""
-    # 纯例题信号
     problem_signals = ["【详解】", "**审题：**", "**立意：**", "【参考例文】"]
-    # 知识信号
     knowledge_signals = ["【寓意】", "【适用角度】", "【事例句运用】", "【标签化引用】"]
 
     p_score = sum(1 for s in problem_signals if s in snippet)
@@ -505,109 +281,166 @@ def _infer_block_type(snippet: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 步骤 4：bash 逆序插入 + Python 复核
+# 步骤 3：切分执行 + 标签插入 + 复核
 # ---------------------------------------------------------------------------
 
-def _bash_insert_tags(content: str, anchors: list[dict],
-                      doc_name: str = "") -> str:
-    """用 bash (sed) 逆序在锚点位置插入知识标签。
+def _execute_split(content: str, catalog: list[dict],
+                   units: list[dict], doc_name: str = "") -> list[dict]:
+    """根据 LLM 返回的 units 执行切分。
 
-    逆序处理保证前面的插入不影响后面锚点的行号。
+    每个 unit 的 id 对应 catalog 中一条记录的行号，
+    切分边界在相邻 unit 的起始行之间。
 
-    返回插入标签后的全文。
+    Returns:
+        [{ "content": "...", "type": "knowledge" | "problem_strip" }, ...]
     """
     lines = content.split("\n")
+    total_lines = len(lines)
 
-    # 按锚点在原文中出现的行号逆序排列
-    anchor_positions = []
-    for i, line in enumerate(lines):
-        for a in anchors:
-            if a["anchor"] in line and a["anchor"] == line.strip():
-                anchor_positions.append((i, a))
+    # 构建 catalog id → line 映射
+    id_to_line = {}
+    for entry in catalog:
+        eid = entry.get("id", f'L{entry["line"]:04d}')
+        id_to_line[eid] = entry["line"]
+
+    # 获取每个 unit 的起始行和类型，按行号排序
+    unit_boundaries = []
+    for u in units:
+        uid = u.get("id", "")
+        line_no = id_to_line.get(uid)
+        if line_no is not None:
+            unit_boundaries.append({
+                "line": line_no,
+                "type": u.get("type", "knowledge"),
+                "id": uid,
+            })
+
+    if not unit_boundaries:
+        # LLM 没返回有效 unit → 全文作为一个单元
+        return [{"content": content, "type": _infer_block_type(content)}]
+
+    unit_boundaries.sort(key=lambda u: u["line"])
+
+    # 切分：每个 unit 从它的起始行到下一个 unit 的起始行之前
+    results = []
+    for i, ub in enumerate(unit_boundaries):
+        start_line = ub["line"]
+        end_line = unit_boundaries[i + 1]["line"] if i + 1 < len(unit_boundaries) else total_lines
+        # 不包含下一个 unit 的起始行
+        slice_lines = lines[start_line:end_line]
+        slice_content = "\n".join(slice_lines).strip()
+        if slice_content:
+            results.append({
+                "content": slice_content,
+                "type": ub["type"],
+            })
+
+    # 如果第一个 unit 不是从第 0 行开始，把前面的引导内容也加入
+    if unit_boundaries and unit_boundaries[0]["line"] > 0:
+        preamble_lines = lines[:unit_boundaries[0]["line"]]
+        preamble = "\n".join(preamble_lines).strip()
+        if preamble:
+            # 前面导语并入第一个单元
+            results[0]["content"] = preamble + "\n" + results[0]["content"]
+
+    # ---- 尾部标题修剪：将 unit 末尾的容器标题/分割线剥离，归入下一个 unit 头部 ----
+    # 收集 LLM 未作为 unit 边界的 heading 行号（即被跳过的容器标题）
+    boundary_line_set = set(ub["line"] for ub in unit_boundaries)
+    skipped_headings = [
+        e for e in catalog
+        if e["type"] == "heading" and e["line"] not in boundary_line_set
+    ]
+    skipped_heading_texts = set(e["text"] for e in skipped_headings)
+
+    _HEADING_LINE_RE = re.compile(r'^(#{1,6})\s+')
+    # 加粗节标题（如 **1．希腊神话经典** / **主题一：xxx**）
+    _BOLD_SECTION_RE = re.compile(r'^\*\*[\d一二三四五六七八九十]+[．、].+\*\*$')
+
+    def _is_tail_header(line_stripped: str) -> bool:
+        """判断一行是否为应剥离的尾部标题/分割线。"""
+        if not line_stripped:
+            return True  # 空行跟随标题一起剥离
+        if _HEADING_LINE_RE.match(line_stripped):
+            return True
+        if line_stripped in skipped_heading_texts:
+            return True
+        if _BOLD_SECTION_RE.match(line_stripped):
+            return True
+        return False
+
+    for i in range(len(results) - 1):
+        unit_lines = results[i]["content"].split("\n")
+        tail_trim = []
+        # 从尾部向上找，剥离连续的标题/空行
+        while unit_lines:
+            last = unit_lines[-1].strip()
+            if _is_tail_header(last):
+                tail_trim.append(unit_lines.pop())
+            else:
                 break
+        # 如果剥离后尾部全是空行，也剥掉
+        while unit_lines and not unit_lines[-1].strip():
+            tail_trim.append(unit_lines.pop())
 
-    # 去重 + 逆序
-    seen_lines = set()
-    unique_positions = []
-    for lno, a in reversed(anchor_positions):
-        if lno not in seen_lines:
-            unique_positions.append((lno, a))
-            seen_lines.add(lno)
-    unique_positions.sort(key=lambda x: x[0], reverse=True)
+        if tail_trim:
+            tail_trim.reverse()
+            tail_text = "\n".join(tail_trim).rstrip()
+            results[i]["content"] = "\n".join(unit_lines).rstrip()
+            if tail_text:
+                results[i + 1]["content"] = tail_text + "\n" + results[i + 1]["content"]
 
-    # 逆序插入标签：在每个锚点切换位置插入 </knowledge><knowledge>
-    # 按行号从高到低逆序处理，保证插入不影响前面锚点的行号
-    result_lines = list(lines)
-
-    # 逆序：从最远的锚点开始处理
-    unique_positions.sort(key=lambda x: x[0], reverse=True)
-
-    for lno, a in unique_positions:
-        tag_type = a.get("type", "knowledge")
-        # 在锚点行之前插入开始标签
-        if tag_type == "problem_strip":
-            result_lines.insert(lno, "<problem-strip>")
-        else:
-            result_lines.insert(lno, "<knowledge>")
-        # 在锚点行之后插入上一个块的结束标签
-        if tag_type == "problem_strip":
-            result_lines.insert(lno + 2, "</problem-strip>")
-        else:
-            result_lines.insert(lno + 2, "</knowledge>")
-
-    # 在最开头插入第一个开始标签（如果第一个锚点不在第 0 行）
-    first_lno = unique_positions[-1][0] if unique_positions else 0  # 最小行号
-    first_type = unique_positions[-1][1].get("type", "knowledge") if unique_positions else "knowledge"
-    if first_lno > 0:
-        if first_type == "problem_strip":
-            result_lines.insert(0, "<problem-strip>")
-        else:
-            result_lines.insert(0, "<knowledge>")
-
-    tagged = "\n".join(result_lines)
-    _dump_intermediate("_knowledge_tagged.md", tagged, doc_name)
-
-    return tagged
-
-
-def _verify_tags(tagged: str, doc_name: str = "") -> dict:
-    """复核标签配对 + 空单元检查。"""
-    opens = tagged.count("<knowledge>")
-    closes = tagged.count("</knowledge>")
-    problems = tagged.count("<problem>")
-    problem_closes = tagged.count("</problem>")
-
-    result = {
-        "knowledge_open": opens,
-        "knowledge_close": closes,
-        "paired": opens == closes,
-        "problem_open": problems,
-        "problem_close": problem_closes,
-        "problem_paired": problems == problem_closes,
-        "has_empty_unit": False,
-        "ok": True,
-    }
-
-    # 检查空单元
-    for start_tag in ["<knowledge>", "<problem>"]:
-        end_tag = start_tag.replace("<", "</")
-        pattern = re.escape(start_tag) + r"\s*" + re.escape(end_tag)
-        if re.search(pattern, tagged):
-            result["has_empty_unit"] = True
-            break
-
-    result["ok"] = result["paired"] and result["problem_paired"] and not result["has_empty_unit"]
-
-    _dump_intermediate("_knowledge_verify.json",
-                       json.dumps(result, ensure_ascii=False, indent=2),
+    _dump_intermediate("_knowledge_anchors.json",
+                       json.dumps({"units": units, "boundaries": unit_boundaries,
+                                   "result_count": len(results)},
+                                  ensure_ascii=False, indent=2),
                        doc_name)
 
-    if not result["paired"]:
-        log(f"   ⚠️ 标签不配对: {opens} 开 {closes} 闭")
-    if result["has_empty_unit"]:
-        log(f"   ⚠️ 存在空单元")
+    return results
 
-    return result
+
+def _rule_fallback_split(content: str, catalog: list[dict]) -> list[dict]:
+    """规则降级切分（无 LLM 时使用）。
+
+    以 item_number 为主要边界切分，无 item_number 则以 heading 为边界。
+    """
+    lines = content.split("\n")
+    total_lines = len(lines)
+
+    # 优先用 item_number 边界
+    boundaries = sorted(set(
+        e["line"] for e in catalog
+        if e["type"] == "item_number"
+    ))
+
+    # 无 item_number → 用 heading
+    if not boundaries:
+        boundaries = sorted(set(
+            e["line"] for e in catalog
+            if e["type"] == "heading"
+        ))
+
+    # 仍无边界 → 全文单单元
+    if not boundaries:
+        return [{"content": content, "type": _infer_block_type(content)}]
+
+    results = []
+    for i, start_line in enumerate(boundaries):
+        end_line = boundaries[i + 1] if i + 1 < len(boundaries) else total_lines
+        slice_lines = lines[start_line:end_line]
+        slice_content = "\n".join(slice_lines).strip()
+        if slice_content:
+            results.append({
+                "content": slice_content,
+                "type": _infer_block_type(slice_content),
+            })
+
+    # 第一个边界前的内容并入第一个单元
+    if boundaries[0] > 0:
+        preamble = "\n".join(lines[:boundaries[0]]).strip()
+        if preamble and results:
+            results[0]["content"] = preamble + "\n" + results[0]["content"]
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -618,10 +451,15 @@ def knowledge_split(content: str, llm_callable=None,
                     doc_name: str = "") -> list[dict]:
     """知识讲义智能切割完整管线。
 
+    步骤：
+      1. 程序粗拆：全文结构编目（列出所有结构信号）
+      2. LLM 决策：发送 catalog + 段头尾 → LLM 决定切分方案
+      3. 程序执行：按 LLM 方案切分 + 校验
+
     Args:
         content: 原始 Markdown 文本
         llm_callable: LLM 调用函数，签名为 (user_text, system_prompt) -> str
-                      为 None 时跳过低置信度分类（纯 Python 切割）
+                      为 None 时使用规则降级切分
         doc_name: 文档名（用于中间产物路径）
 
     Returns:
@@ -629,100 +467,68 @@ def knowledge_split(content: str, llm_callable=None,
     """
     log("📐 知识切割管线启动...")
 
-    # 步骤 1
-    log("   📊 步骤 1：结构扫描 + 置信度分层...")
+    # ---- 步骤 1：程序粗拆 - 结构编目 ----
+    log("   📊 步骤 1：结构扫描 + 编目...")
     scan = _scan_structure(content)
-    high_blocks = [b for b in scan["blocks"] if b["confidence"] == "HIGH"]
-    low_blocks = [b for b in scan["blocks"] if b["confidence"] != "HIGH"]
+    catalog = scan["catalog"]
+    log(f"   📊 编目完成: {len(catalog)} 条信号, {scan['total_lines']} 行")
 
-    # 为 low_blocks 添加 id
-    for idx, blk in enumerate(low_blocks):
-        blk["id"] = idx
-
-    log(f"   📊 HIGH: {len(high_blocks)} 块, LOW/NONE: {len(low_blocks)} 块")
-    _dump_intermediate("_knowledge_scan_tree.json",
+    _dump_intermediate("_knowledge_catalog.json",
                        json.dumps(scan, ensure_ascii=False, indent=2),
                        doc_name)
 
-    # 步骤 2（仅当有 LOW/NONE 块且有 LLM 调用函数时）
-    classified = []
-    if low_blocks and llm_callable:
-        log(f"   🤖 步骤 2：LLM 处理 {len(low_blocks)} 个低置信度块...")
+    # ---- 步骤 2：LLM 决策 - 发送 catalog + 段头尾 ----
+    units = []
+    if llm_callable:
+        log("   🤖 步骤 2：发送编目 + 段头尾给 LLM 决策切分方案...")
+        llm_input = _build_llm_input(catalog, content)
+        _dump_intermediate("_knowledge_llm_input.txt", llm_input, doc_name)
+
         try:
-            classified = _classify_low_blocks(content, low_blocks, llm_callable, doc_name)
+            raw = llm_callable(llm_input, _LLM_SPLIT_PROMPT)
+            _dump_intermediate("_knowledge_llm_raw.txt", raw, doc_name)
+
+            # 解析 JSON
+            json_match = re.search(r'\{[\s\S]*\}', raw)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                units = parsed.get("units", [])
+                _dump_intermediate("_knowledge_llm_parsed.json",
+                                   json.dumps(parsed, ensure_ascii=False, indent=2),
+                                   doc_name)
+                log(f"   🤖 LLM 返回 {len(units)} 个切分单元")
+            else:
+                log("   ⚠️ LLM 返回中未找到 JSON，降级为规则切分")
+                _dump_intermediate("_knowledge_llm_parse_error.txt",
+                                   f"未找到 JSON 块\n\n原始返回:\n{raw}", doc_name)
         except Exception as e:
-            log(f"   ⚠️ LLM 分类失败: {e}，降级为单单元")
-            return [{"content": content, "type": "knowledge"}]
-    elif low_blocks:
-        log(f"   ⚠️ {len(low_blocks)} 个低置信度块但无 LLM 调用函数，全部按 knowledge 处理")
+            log(f"   ⚠️ LLM 调用失败: {e}，降级为规则切分")
+            _dump_intermediate("_knowledge_llm_error.txt",
+                               f"调用异常: {e}\n\n{traceback.format_exc()}",
+                               doc_name)
+            units = []
+    else:
+        log("   📋 步骤 2：无 LLM，使用规则降级切分")
 
-    # 步骤 3
-    log("   🔗 步骤 3：锚点合并 + 校验...")
-    anchors = _merge_and_validate(content, high_blocks, classified, doc_name)
+    # ---- 步骤 3：执行切分 + 校验 ----
+    log("   🔗 步骤 3：执行切分 + 校验...")
 
-    # 单单元情况（锚点 ≤ 1）
-    if len(anchors) <= 1:
-        log("   📄 单单元模式：全文作为一个校对单元")
-        # 推断整体类型
-        blk_type = _infer_block_type(content)
-        return [{"content": content, "type": blk_type}]
+    if units:
+        results = _execute_split(content, catalog, units, doc_name)
+    else:
+        results = _rule_fallback_split(content, catalog)
 
-    # 步骤 4
-    log("   🔧 步骤 4：bash 逆序插入 + 复核...")
-    try:
-        tagged = _bash_insert_tags(content, anchors, doc_name)
-    except Exception as e:
-        log(f"   ⚠️ bash 插入失败: {e}，降级为单单元")
-        return [{"content": content, "type": "knowledge"}]
-
-    _ = _verify_tags(tagged, doc_name)
-
-    # 解析切割结果
-    problems = _parse_knowledge_tags(tagged)
-
-    if not problems:
-        log("   ⚠️ 切割未产生有效单元，降级为单单元")
-        return [{"content": content, "type": "knowledge"}]
+    # 校验：确保至少有一个单元
+    if not results:
+        log("   ⚠️ 切分未产生有效单元，降级为单单元")
+        results = [{"content": content, "type": _infer_block_type(content)}]
 
     # 类型统计
     type_counts = {}
-    for p in problems:
-        t = p.get("type", "knowledge")
+    for r in results:
+        t = r.get("type", "knowledge")
         type_counts[t] = type_counts.get(t, 0) + 1
-    log(f"   ✅ 切割完成: {len(problems)} 个单元 ({type_counts})")
-
-    return problems
-
-
-def _parse_knowledge_tags(tagged: str) -> list[dict]:
-    """从带标签的文本中解析知识单元。
-
-    支持 <knowledge>...</knowledge> 和 <problem-strip>...</problem-strip> 两种标签。
-    """
-    results = []
-
-    # 解析 <knowledge> 标签
-    knowledge_pattern = re.compile(r'<knowledge>(.*?)</knowledge>', re.DOTALL)
-    for m in knowledge_pattern.finditer(tagged):
-        content = m.group(1).strip()
-        if content:
-            # 检查内部是否有 <problem> 嵌套（无需单独拆，保留在原块中）
-            results.append({"content": content, "type": "knowledge"})
-
-    # 解析 <problem-strip> 标签（单独的题目块）
-    ps_pattern = re.compile(r'<problem-strip>(.*?)</problem-strip>', re.DOTALL)
-    for m in ps_pattern.finditer(tagged):
-        content = m.group(1).strip()
-        if content:
-            results.append({"content": content, "type": "problem_strip"})
-
-    # 如果以上都未匹配，回退：整篇作为一个 knowledge 块
-    if not results and tagged.strip():
-        # 移除可能残留的标签
-        clean = re.sub(r'</?knowledge>', '', tagged)
-        clean = re.sub(r'</?problem-strip>', '', clean)
-        if clean.strip():
-            results.append({"content": clean.strip(), "type": "knowledge"})
+    log(f"   ✅ 切割完成: {len(results)} 个单元 ({type_counts})")
 
     return results
 
@@ -757,7 +563,6 @@ def knowledge_split_smart(md_content: str, api_url: str, api_key: str,
                 output_dir=str(Path("output") / "中间产物" / doc_name) if doc_name else None,
             )
             content = result.get("content", "")
-            # 保存 LLM 工具调用记录
             if result.get("tool_calls_log"):
                 _dump_intermediate("_knowledge_llm_tool_calls.json",
                                    json.dumps(result["tool_calls_log"],

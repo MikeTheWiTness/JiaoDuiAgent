@@ -150,6 +150,13 @@ def parse_proofread_md(text: str):
             summary = kw
             break
 
+    # "无问题" 快速通道：仅当 LLM 真只输出"无问题"（无标记、无修改原因）时生效。
+    # 若有标记混在文中，走正常内联解析流程，避免丢失校正数据。
+    has_markers = bool(re.search(r'【\d+\|.*\|[^】]*】', text))
+    has_reasons = bool(re.search(r'###\s*修改原因', text))
+    if summary == "无问题" and not has_markers and not has_reasons:
+        return {"corrections": [], "summary": "无问题", "marked_text": ""}
+
     if "### 标记原文" in text and re.search(r'【\d+\|.*\|[^】]*】', text):
         result = _parse_inline_format(text, summary)
         if result:

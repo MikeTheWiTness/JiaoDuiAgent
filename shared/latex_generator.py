@@ -136,6 +136,25 @@ def _newline_to_latex(text: str) -> str:
     return "".join(result)
 
 
+def _extract_quotes_to_placeholders(text: str, placeholder_map: dict[str, str]) -> str:
+    """将中文双引号转为 fallbacksymbols 占位符。
+
+    必须在 _process_inline_markers 和 _escape_preserve_math 之前调用，
+    避免 " 被包裹进已恢复的 LaTeX 命令内部（如 \\corrmark{{\\fallbacksymbols "}text}）。
+    """
+    def _repl(m):
+        key = f"QUOTE{next(_counter)}"
+        # 中文双引号 "（U+0022）在所有字体中均可用，直接渲染无需 fallback。
+        # 原生的 " 比 \fallbacksymbols{"} 更可靠，避免便携版 TeX Live 缺
+        # DejaVuSans.ttf 时 fallbacksymbols 未定义导致命令名泄漏到 PDF。
+        placeholder_map[key] = '"'
+        return key
+    return _QUOTE_RE.sub(_repl, text)
+
+
+_QUOTE_RE = re.compile(r'"')
+
+
 def _extract_images(text: str) -> tuple[str, dict[str, str]]:
     """提取图片为占位符，返回 (处理后文本, {占位符: LaTeX代码})。
 
@@ -430,7 +449,7 @@ def _apply_markers(md_content: str, corrections: list[dict]) -> tuple[str, list[
     return result, numbered
 
 
-def _format_right_entry(corr: dict) -> str:
+def _format_right_entry(corr: dict, placeholder_map: dict[str, str] | None = None) -> str:
     num = corr["num"]
     reason = corr.get("reason", "")
     corrected = corr.get("correction", "")
@@ -443,9 +462,17 @@ def _format_right_entry(corr: dict) -> str:
         return s
     reason = _fmt_md(reason)
     corrected = _fmt_md(corrected)
+    # 剥离残留的 Pandoc 转义（\" → " 等），必须在 _escape_preserve_math 之前
+    reason = reason.replace(r'\"', '"').replace(r'\.', '.').replace(r'\_', '_')
+    corrected = corrected.replace(r'\"', '"').replace(r'\.', '.').replace(r'\_', '_')
 
     reason = _escape_preserve_math(reason)
     corrected = _escape_preserve_math(corrected)
+
+    # 还原 QUOTE 占位符：必须在 escaping 之后，避免 \fallbacksymbols 被转义
+    if placeholder_map:
+        reason = _restore_placeholders(reason, placeholder_map)
+        corrected = _restore_placeholders(corrected, placeholder_map)
     cc = r"\redcircled{" + str(num) + r"}"
     corrected = _fix_missing_chars(corrected)
     reason = _fix_missing_chars(reason)
@@ -692,6 +719,8 @@ def _fix_missing_chars(text: str) -> str:
     """
     # 先剥离已有的 \fallbacksymbols 包裹，避免双重嵌套
     text = re.sub(r'\{\\fallbacksymbols ([^}]*)\}', r'\1', text)
+    # 兜底：移除仍残留的反斜杠+引号序列（\" → "）
+    text = text.replace('\\"', '"')
     # 星号 ★☆（U+2605 / U+2606）—— DejaVuSans 含此字符
     text = text.replace('★', r'{\fallbacksymbols ★}')
     text = text.replace('☆', r'{\fallbacksymbols ☆}')
@@ -701,8 +730,8 @@ def _fix_missing_chars(text: str) -> str:
     # 省略号 …（U+2026）—— DejaVuSans 含此字符
     if '…' in text:
         text = text.replace('…', r'{\fallbacksymbols …}')
-    # 双引号
-    text = text.replace('"', r'{\fallbacksymbols "}')
+    # 双引号已在 _extract_quotes_to_placeholders 阶段转为占位符，
+    # 此处不再处理，避免包裹 LaTeX 命令内部的引号。
 
     # 兜底：剥离便携版回退字体（DejaVuSans）不含的 emoji 字符。
     # DejaVuSans 只覆盖 BMP 内的部分区段，不含 emoji 平面（U+1F000+）
@@ -750,9 +779,11 @@ def build_paracol_content(md_content: str, corrections: list[dict],
     #    当 marked_text 存在时，LLM 可能丢弃了批注标记，此时用原始 md 的批注
     # 0. 剥离核查用的思考内容（仅出现在 _校对报告.md 中，不应进入 PDF）
     md_content = re.sub(r'\n*---\n## 📋 模型思考过程.*$', '', md_content, flags=re.DOTALL)
+    # 工具调用日志同样包含未转义的 JSON 片段，不应进入 PDF
+    md_content = re.sub(r'\n*---\n## 📋 工具调用日志.*$', '', md_content, flags=re.DOTALL)
 
     # 0.1 清理 Pandoc 原生 span 语法: [text]{.underline} → text
-    md_content = re.sub(r'\[([^\]]+)\]\{\.(?:underline|smallcaps|center|rtl|ltr)\}', r'\1', md_content)
+    md_content = re.sub(r'\[([^\]]+)\]\{\.(?:underline|smallcaps|center|rtl|ltr|mark)\}', r'\1', md_content)
     # 0.2 修复破损 XML 标签
     # 格式标签：允许标签名后有额外字符（如 < 下划线 7 > → <下划线>）
     md_content = re.sub(
@@ -778,32 +809,46 @@ def build_paracol_content(md_content: str, corrections: list[dict],
     md_content = md_content.replace(r'\_', '_')
     md_content = md_content.replace(r'\*', '*')
     md_content = md_content.replace(r'\#', '#')
+    # 剥离 Pandoc 单边方括号转义
+    md_content = md_content.replace(r'\[', '[')
+    md_content = md_content.replace(r'\]', ']')
+    # 剥离 Pandoc 双引号转义（\" → "），避免 PDF 中显示为 \" 字面值
+    md_content = md_content.replace(r'\"', '"')
 
     if comments is None:
         comments = extract_comments_from_md(md_content)
 
     md_processed, placeholder_map = _extract_images(md_content)
 
-    # 2. 将批注替换为上标圆圈数字占位符（必须在 escaping 之前完成）
+    # 2. 将中文双引号转为 fallbacksymbols 占位符（必须在 _process_inline_markers
+    #    和 _escape_preserve_math 之前），避免后续在 LaTeX 命令内部误包裹 "。
+    md_processed = _extract_quotes_to_placeholders(md_processed, placeholder_map)
+
+    # 3. 将批注替换为上标圆圈数字占位符（必须在 escaping 之前完成）
     md_processed = _extract_comments_to_placeholders(md_processed, comments, placeholder_map)
+
+    # 修复 Pandoc 转义残留：非数学内容的 \[...\] → [...]
+    # 必须在 _process_inline_markers 之前执行，避免 \[ 被捕获进 \corrmark 的 orig
+    # 参数，导致 \textcolor{red}{...\[...\]...} 中显示数学模式破坏颜色作用域。
+    md_processed = _fix_escaped_brackets(md_processed)
 
     # 检测新格式：内联标记 【N原文|改为】（必须在格式化之前）
     has_inline = bool(_INLINE_MARKER_RE.search(md_processed))
     if has_inline:
         md_processed, numbered = _process_inline_markers(md_processed, corrections, placeholder_map)
 
+    # 将 ### heading 转为 **heading**（Markdown 粗体），后续由 _extract_md_formatting
+    # 转为 \textbf{...} 并放入 placeholder_map 保护，避免被 _escape_text 破坏。
+    # 放在 _extract_md_formatting 之前，让粗体提取逻辑复用。
+    md_processed = re.sub(r'^#{1,4}\s+(.+)', r'**\1**', md_processed, flags=re.MULTILINE)
+
     md_processed = _extract_md_formatting(md_processed, placeholder_map)
     md_processed = _convert_format_markers(md_processed, placeholder_map)
-    md_processed = re.sub(r'^#{1,4}\s+(.+)', r'\\textbf{\1}', md_processed, flags=re.MULTILINE)
-
-    # 修复 Pandoc 转义残留：非数学内容的 \[...\] → [...]
-    md_processed = _fix_escaped_brackets(md_processed)
 
     escaped = _escape_preserve_math(md_processed)
     escaped = _restore_placeholders(escaped, placeholder_map)
     # 缺失字符用回退字体包裹（必须在 escaping 之后，避免 \fallbacksymbols 命令被转义）
     escaped = _fix_missing_chars(escaped)
-    escaped = escaped.replace('"', r'{\fallbacksymbols "}')
     # 单换行 → LaTeX 换行
     escaped = _newline_to_latex(escaped)
 
@@ -814,6 +859,21 @@ def build_paracol_content(md_content: str, corrections: list[dict],
 
     lines = [r"\begin{paracol}{2}", ""]
     lines.append(marked)
+
+    # 若右栏完全为空（无批注、无修改、无补充、无工具调用），
+    # 显示「校对无问题」提示，保持左右双栏布局完整。
+    right_empty = _is_right_column_empty(numbered, comments, review_judgments,
+                                          review_supplements, tool_calls)
+    if right_empty:
+        lines.append(r"\switchcolumn")
+        lines.append("")
+        lines.append(r"\textbf{\Large ✅ 校对无问题}")
+        lines.append("")
+        lines.append(r"\switchcolumn*")
+        lines.append("")
+        lines.append(r"\end{paracol}")
+        return "\n".join(lines)
+
     lines.append(r"\switchcolumn")
     lines.append("")
 
@@ -889,7 +949,7 @@ def build_paracol_content(md_content: str, corrections: list[dict],
         lines.append(r"\\")
         lines.append("")
         for corr in numbered:
-            lines.append(r"\correctionbox{" + _format_right_entry(corr) + "}")
+            lines.append(r"\correctionbox{" + _format_right_entry(corr, placeholder_map) + "}")
             lines.append(r"\bigskip")
             lines.append("")
 
@@ -911,6 +971,11 @@ def build_paracol_content(md_content: str, corrections: list[dict],
     lines.append("")
     lines.append(r"\end{paracol}")
     return "\n".join(lines)
+
+
+def _is_right_column_empty(numbered, comments, review_judgments, review_supplements, tool_calls):
+    """判断右栏是否完全为空（无批注、无修改意见、无补充发现、无工具调用）。"""
+    return not (comments or numbered or review_supplements or tool_calls)
 
 
 def generate_tex(json_path: str, md_path: str, output_path: str) -> str:
@@ -950,8 +1015,13 @@ def _find_md_file(subdir: str) -> str | None:
 
 
 def _get_section_name(q_dir: str) -> str:
-    """从目录名提取用于显示的名称"""
+    """从目录名提取用于显示的名称，转义 LaTeX 特殊字符"""
     name = os.path.basename(q_dir.rstrip("/\\"))
+    # 转义在 LaTeX 中有特殊含义的字符
+    for char, repl in [('_', r'\_'), ('&', r'\&'), ('%', r'\%'),
+                        ('$', r'\$'), ('#', r'\#'), ('~', r'\textasciitilde '),
+                        ('^', r'\textasciicircum ')]:
+        name = name.replace(char, repl)
     return name
 
 
@@ -1011,8 +1081,10 @@ def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -
         review_judgments = data.get("review_judgments", [])
         review_supplements = data.get("review_supplements", [])
         section_title = _get_section_name(subdir)
-        para_content = build_paracol_content(md_content, corrections, tool_calls,
-                                             review_judgments=review_judgments,
+        para_content = build_paracol_content(md_content, corrections,
+                                              # tool_calls 不传入 LaTeX，与 generate_tex 行为对齐，
+                                              # 避免 ReAct 工具名中的特殊字符破坏 paracol 环境。
+                                              review_judgments=review_judgments,
                                              review_supplements=review_supplements,
                                              comments=orig_comments)
 

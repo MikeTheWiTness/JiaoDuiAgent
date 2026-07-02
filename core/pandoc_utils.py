@@ -97,8 +97,10 @@ def check_pandoc():
 
 def convert_with_pandoc(input_path, output_md, img_dir, use_mathjax=False):
     pandoc = find_pandoc()
+    # -t markdown-smart: 禁用 pandoc 的“智能引号”扩展，
+    # 防止中文弯引号 "" 被转换为英文直引号 ""
     cmd = [
-        pandoc, "-f", "docx", "-t", "markdown",
+        pandoc, "-f", "docx", "-t", "markdown-smart",
         "--extract-media", img_dir, "--wrap", "none",
         "--markdown-headings", "atx",
     ]

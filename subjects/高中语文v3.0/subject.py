@@ -168,34 +168,6 @@ class SubjectApp(BaseSubjectApp):
 
         return self._write_problems_to_dirs(md_file, output_root, base_name, problems)
 
-    def split_exam(self, md_file, output_root, base_name, options=None):
-        if options is None:
-            options = {}
-        split_mode = options.get("split_mode", "rule")
-
-        if split_mode == "rule":
-            return default_split_exam(md_file, output_root, base_name, self.config)
-
-        with open(md_file, 'r', encoding='utf-8') as f:
-            md_content = f.read()
-
-        if split_mode == "none":
-            problems = [{"content": md_content}]
-        elif split_mode == "manual":
-            problems = split_by_manual_markers(md_content)
-        elif split_mode == "smart":
-            api_url = options.get("api_url", "")
-            api_key = options.get("api_key", "")
-            model = options.get("model", "")
-            from shared.smart_split import smart_split
-            problems = smart_split(md_content, api_url, api_key, model, md_file=md_file)
-        else:
-            log(f"⚠️ 未知分割模式: {split_mode}，使用规则模式")
-            return default_split_exam(md_file, output_root, base_name, self.config)
-
-        return self._write_problems_to_dirs(md_file, output_root, base_name, problems)
-
-
 
     def get_review_prompt(self):
         from shared.review_mode import build_review_prompt

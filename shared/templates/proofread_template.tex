@@ -15,8 +15,11 @@
 \setCJKmonofont{FandolKai-Regular.otf}
 
 % === CJK 缺字回退（FandolSong 缺少的字符自动用 FandolHei 补上）===
-\xeCJKsetup{AutoFallBack=true}
-\setCJKfallbackfamilyfont{\CJKfallbackfont}{FandolHei-Regular.otf}
+% 注意：AutoFallBack 需要 xeCJK 3.x+ 且字体支持 fallback 特性。
+% 若编译报 \CJKfallbackfont undefined，说明当前 xeCJK 版本/字体不支持，
+% 注释掉回退配置即可（主字体 FandolSong 已覆盖绝大多数 CJK 字符）。
+%\xeCJKsetup{AutoFallBack=true}
+%\setCJKfallbackfamilyfont{\CJKfallbackfont}{FandolHei-Regular.otf}
 
 \setmainfont{texgyretermes-regular.otf}[
   BoldFont=texgyretermes-bold.otf,

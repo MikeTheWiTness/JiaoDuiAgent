@@ -7,11 +7,11 @@ from sympy import Symbol, symbols, expand, simplify, sqrt, pi, oo, I
 from sympy import sin, cos, tan, log, exp, factorial, Rational
 from sympy import Matrix, Piecewise, solveset, solve, Eq, limit, diff, integrate
 from sympy import factor, trigsimp, together, apart, S
-from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
+from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication
 import sympy as _sp
 E = Symbol('E')
 _LOCALS = dict(locals())
-_transforms = standard_transformations + (implicit_multiplication_application,)
+_transforms = standard_transformations + (implicit_multiplication,)
 
 def _safe_sympify(expr_str, local_dict=None):
     return parse_expr(expr_str, local_dict=local_dict, transformations=_transforms)
@@ -51,13 +51,15 @@ print(json.dumps(output, ensure_ascii=False))
 _TEMPLATES: dict[str, Template] = {
     "evaluate": Template(
         _SAFE_IMPORTS
-        + "\nresult = _safe_sympify($expression)\n"
+        + "\n$var_declarations\n"
+        + "result = _safe_sympify($expression, local_dict=_LOCALS)\n"
         + "$subs_call\n"
         + _SERIALIZER
     ),
     "simplify": Template(
         _SAFE_IMPORTS
-        + "\nresult = _safe_sympify($expression)\n"
+        + "\n$var_declarations\n"
+        + "result = _safe_sympify($expression, local_dict=_LOCALS)\n"
         + "$subs_call\n"
         + "result = $method(result)\n"
         + _SERIALIZER
@@ -162,7 +164,6 @@ _TEMPLATES: dict[str, Template] = {
     "chemistry_balance": Template(
         _SAFE_IMPORTS
         + "\n"
-        + "import re as _re\n"
         + "_eq = $equation_str\n"
         + "_sides = _eq.split('->')\n"
         + "_reactants = [s.strip() for s in _sides[0].split('+')]\n"
@@ -170,13 +171,40 @@ _TEMPLATES: dict[str, Template] = {
         + "_all_species = _reactants + _products\n"
         + "_n_react = len(_reactants)\n"
         + "\n"
-        + "_elem_pattern = _re.compile(r'([A-Z][a-z]?)(\\d*)')\n"
         + "def _parse_formula(f):\n"
         + "    _counts = {}\n"
-        + "    for _m in _elem_pattern.finditer(f):\n"
-        + "        _el = _m.group(1)\n"
-        + "        _n = int(_m.group(2)) if _m.group(2) else 1\n"
-        + "        _counts[_el] = _counts.get(_el, 0) + _n\n"
+        + "    _i = 0\n"
+        + "    _n = len(f)\n"
+        + "    def _parse_group():\n"
+        + "        nonlocal _i\n"
+        + "        _gc = {}\n"
+        + "        while _i < _n and f[_i] != ')':\n"
+        + "            if f[_i] == '(':\n"
+        + "                _i += 1\n"
+        + "                _inner = _parse_group()\n"
+        + "                if _i < _n and f[_i] == ')':\n"
+        + "                    _i += 1\n"
+        + "                _num_start = _i\n"
+        + "                while _i < _n and f[_i].isdigit():\n"
+        + "                    _i += 1\n"
+        + "                _mult = int(f[_num_start:_i]) if _i > _num_start else 1\n"
+        + "                for _el, _cnt in _inner.items():\n"
+        + "                    _gc[_el] = _gc.get(_el, 0) + _cnt * _mult\n"
+        + "            elif f[_i].isupper():\n"
+        + "                _el_start = _i\n"
+        + "                _i += 1\n"
+        + "                while _i < _n and f[_i].islower():\n"
+        + "                    _i += 1\n"
+        + "                _el = f[_el_start:_i]\n"
+        + "                _num_start = _i\n"
+        + "                while _i < _n and f[_i].isdigit():\n"
+        + "                    _i += 1\n"
+        + "                _cnt = int(f[_num_start:_i]) if _i > _num_start else 1\n"
+        + "                _gc[_el] = _gc.get(_el, 0) + _cnt\n"
+        + "            else:\n"
+        + "                _i += 1\n"
+        + "        return _gc\n"
+        + "    _counts = _parse_group()\n"
         + "    return _counts\n"
         + "\n"
         + "_elements = set()\n"
@@ -265,6 +293,16 @@ def build_code(operation: str, **params) -> str:
         raise ValueError(f"Unknown operation type: {operation}")
 
     substitutions = params.get("substitutions", {}) or {}
+
+    # 生成变量声明：将 substitution 中的每个变量名注册为 Symbol，
+    # 避免变量名（如 E1, d0）与 SymPy 全局命名空间冲突导致解析失败。
+    var_declarations = ""
+    if substitutions:
+        var_lines = []
+        for var_name in substitutions:
+            var_lines.append(f'_LOCALS[{var_name!r}] = Symbol({var_name!r})')
+        var_declarations = "\n".join(var_lines)
+
     if substitutions:
         subs_pairs = []
         for var_name, var_value in substitutions.items():
@@ -399,6 +437,7 @@ def build_code(operation: str, **params) -> str:
     molar_masses_code = "\n".join(molar_lines)
 
     return template.safe_substitute(
+        var_declarations=var_declarations,
         subs_call=subs_call,
         substitutions="",
         expression=json_repr(params.get("expression", "")),
