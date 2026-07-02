@@ -1,14 +1,24 @@
 """text nav tools"""
 import re
+import threading
 from typing import Optional
 from pydantic import BaseModel, Field
 from langchain_core.tools import BaseTool
 
-_current_text: Optional[str] = None
+_thread_local = threading.local()
+
 
 def set_current_text(text: str):
-    global _current_text
-    _current_text = text
+    """设置当前线程的校对文本（线程安全）。
+
+    每个线程有独立的文本上下文，互不干扰。
+    """
+    _thread_local.current_text = text
+
+
+def _get_current_text() -> Optional[str]:
+    """获取当前线程的校对文本。"""
+    return getattr(_thread_local, 'current_text', None)
 
 class LocateParagraphParams(BaseModel):
     keywords: str = Field(description="keywords to locate")
@@ -18,10 +28,9 @@ class LocateParagraphTool(BaseTool):
     description: str = "Search for keywords in the source text and return the surrounding paragraphs."
     args_schema: type[BaseModel] = LocateParagraphParams
     def _run(self, keywords: str) -> str:
-        global _current_text
-        if not _current_text:
+        text = _get_current_text()
+        if not text:
             return "[error: no text]"
-        text = _current_text
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
         if not paragraphs:
             paragraphs = [l.strip() for l in text.split("\n") if l.strip()]
@@ -41,10 +50,9 @@ class ReadSectionTool(BaseTool):
     description: str = "Read paragraphs by range. start and end are 1-based."
     args_schema: type[BaseModel] = ReadSectionParams
     def _run(self, start: int, end: int) -> str:
-        global _current_text
-        if not _current_text:
+        text = _get_current_text()
+        if not text:
             return "[error: no text]"
-        text = _current_text
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
         if not paragraphs:
             paragraphs = [l.strip() for l in text.split("\n") if l.strip()]

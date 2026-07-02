@@ -27,13 +27,38 @@ def _strip_search_from_prompt(prompt: str) -> str:
 
 
 def fix_latex_escapes(md_file):
+    """修复 pandoc 的过度转义。
+
+    分三阶段：
+    1. 全局反斜杠规约（pandoc 的 \\\\ → \\，必须全局生效）
+    2. 保护 $...$ / $$...$$ 数学块，避免内部 LaTeX 命令被破坏
+    3. 字面替换仅作用于非数学文本；数学内部仅做安全的还原（下标、上标、分组）
+    """
     with open(md_file, 'r', encoding='utf-8') as f:
         content = f.read()
+
+    # ===== Phase 1: 全局反斜杠规约（lines 33-35，安全，数学内外均需） =====
     special_chars = r'[\[\]\(\)\$_<>{}$]'
     content = re.sub(r'\\{2,}(?=' + special_chars + r')', r'\\', content)
     content = re.sub(r'\\{2,}([a-zA-Z]+)', r'\\\1', content)
     content = re.sub(r'\\{2,}([^a-zA-Z0-9])', r'\\\1', content)
+
+    # ===== Phase 2a: 还原数学定界符 \$ → $（必须在保护数学块之前） =====
+    # pandoc 把 $...$ 输出为 \$...\$，先还原定界符才能正确识别数学块
     content = content.replace(r'\$', r'$')
+
+    # ===== Phase 2b: 保护数学块（先 $...$ 再 $$...$$，与 comprehensive_clean 一致） =====
+    math_blocks = []
+
+    def _save_math(m):
+        math_blocks.append(m.group(0))
+        return f'\x01MATH{len(math_blocks) - 1}\x01'
+
+    # 先保护 $...$（单行），再保护 $$...$$（多行）
+    content = re.sub(r'\$[^$\n]+?\$', _save_math, content)
+    content = re.sub(r'\$\$.*?\$\$', _save_math, content, flags=re.DOTALL)
+
+    # ===== Phase 3: 字面替换（仅影响非数学文本） =====
     content = content.replace(r'\_', '_')
     content = content.replace(r'\<', '<')
     content = content.replace(r'\>', '>')
@@ -43,6 +68,7 @@ def fix_latex_escapes(md_file):
     content = content.replace(r'\right\)', r'\right)')
     content = content.replace(r'\left\[', r'\left[')
     content = content.replace(r'\right\]', r'\right]')
+
     def _fix_escaped_brackets(content):
         def _repl(m):
             inner = m.group(1)
@@ -51,16 +77,41 @@ def fix_latex_escapes(md_file):
             return '[' + inner + ']'
         return re.sub(r'\\\[([^\]]*?)\\\]', _repl, content)
     content = _fix_escaped_brackets(content)
-    for esc, orig in [(r'\^','^'), (r'\#','#'), (r'\~','~'), (r'\&','&'),
-                       (r'\%','%'), (r'\*','*'), (r'\+','+'), (r'\-','-'),
-                       (r'\=','='), (r'\|','|'), (r'\!','!'), (r"\'","'")]:
+
+    for esc, orig in [(r'\^', '^'), (r'\#', '#'), (r'\~', '~'), (r'\&', '&'),
+                       (r'\%', '%'), (r'\*', '*'), (r'\+', '+'), (r'\-', '-'),
+                       (r'\=', '='), (r'\|', '|'), (r'\!', '!'), (r"\'", "'")]:
         content = content.replace(esc, orig)
+
+    # ===== Phase 4: 数学块内部的安全还原 =====
+    # 只还原数学模式必需的命令（下标、上标、分组），其余 LaTeX 命令保持不动
+    for i, block in enumerate(math_blocks):
+        block = block.replace(r'\_', '_')   # 下标 a_1
+        block = block.replace(r'\^', '^')   # 上标 x^2
+        block = block.replace(r'\{', '{')   # 分组 {…}
+        block = block.replace(r'\}', '}')   # 分组 {…}
+        math_blocks[i] = block
+
+    # ===== Phase 5: 还原数学块 =====
+    for i, block in enumerate(math_blocks):
+        content = content.replace(f'\x01MATH{i}\x01', block)
+
     with open(md_file, 'w', encoding='utf-8') as f:
         f.write(content)
 
 
 def comprehensive_clean(md_content):
-    lines = md_content.splitlines()
+    # Step 0: 保护数学公式中的 | 字符（绝对值、集合、mid 等），避免被表格清理误删
+    math_blocks = []
+    def _save_math(m):
+        math_blocks.append(m.group(0))
+        return f'\x00MATH{len(math_blocks)-1}\x00'
+    # 先保护 $...$（单行），再保护 $$...$$（多行）
+    # 顺序很重要：$ 更细粒度，先匹配可以避免 $$ 误吞相邻的 $...$（如 $$=\!$ 碎片化公式）
+    content = re.sub(r'\$[^$\n]+?\$', _save_math, md_content)
+    content = re.sub(r'\$\$.*?\$\$', _save_math, content, flags=re.DOTALL)
+
+    lines = content.splitlines()
     cleaned = []
     i = 0
     while i < len(lines):
@@ -81,6 +132,10 @@ def comprehensive_clean(md_content):
     text = '\n'.join(cleaned)
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = '\n'.join(l.strip() for l in text.split('\n'))
+
+    # Step N: 恢复数学公式
+    for j, block in enumerate(math_blocks):
+        text = text.replace(f'\x00MATH{j}\x00', block)
     return text.strip()
 
 
@@ -551,6 +606,24 @@ def _is_no_issue(res: str) -> bool:
     return False
 
 
+def _format_usage_summary(usage: dict) -> str:
+    """格式化 token 用量统计。"""
+    if not usage:
+        return ""
+    prompt = usage.get("prompt_tokens", 0)
+    completion = usage.get("completion_tokens", 0)
+    total = usage.get("total_tokens", 0)
+    if total == 0:
+        return ""
+    lines = ["\n\n---\n", "## 📊 Token 用量统计\n\n"]
+    lines.append(f"| 类型 | Token 数 |\n")
+    lines.append(f"|------|----------|\n")
+    lines.append(f"| 提示词 (prompt) | {prompt:,} |\n")
+    lines.append(f"| 生成 (completion) | {completion:,} |\n")
+    lines.append(f"| **总计** | **{total:,}** |\n")
+    return "".join(lines)
+
+
 def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None, react_mode=False):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
@@ -610,6 +683,11 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 set_physics_api_config(api_url, api_key, model, output_dir=q_dir)
             except ImportError:
                 pass  # 非物理学科无 physics_tools 模块，忽略
+            try:
+                from shared.chemistry_tools import set_chemistry_api_config
+                set_chemistry_api_config(api_url, api_key, model, output_dir=q_dir)
+            except ImportError:
+                pass  # 非化学学科无 chemistry_tools 模块，忽略
 
         result = call_api(api_url, api_key, model, md_content, images_b64,
                           q_name, prompt, tools=tools, max_loops=max_loops,
@@ -617,6 +695,7 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
         res = result["content"]
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")
+        usage = result.get("usage", {})
         # 记录 LLM 最终返回内容摘要
         log(f"   📥 LLM 最终返回: {res[:150].replace(chr(10), ' ')}...")
         if reasoning:
@@ -656,6 +735,10 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                         f.write("\n\n---\n")
                         f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
                         f.write(reasoning)
+                    # 追加 token 用量统计
+                    usage_text = _format_usage_summary(usage)
+                    if usage_text:
+                        f.write(usage_text)
             except Exception:
                 pass
             save_proofread_json(res, q_dir, tool_calls)
@@ -677,6 +760,9 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                         f.write("\n\n---\n")
                         f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
                         f.write(reasoning)
+                    usage_text = _format_usage_summary(usage)
+                    if usage_text:
+                        f.write(usage_text)
                 # 同步存档结构化数据
                 import shutil, json as _json
                 src_json = os.path.join(q_dir, "_校对数据.json")
