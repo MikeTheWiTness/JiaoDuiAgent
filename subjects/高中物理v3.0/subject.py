@@ -23,6 +23,7 @@ from core.defaults import (
 )
 from core.manual_split import split_by_manual_markers
 from core.logging_utils import log
+from shared.image_utils import copy_md_images
 
 
 class SubjectApp:
@@ -100,8 +101,17 @@ class SubjectApp:
         return base_prompt
 
     def get_knowledge_prompt(self):
-        """获取知识提取提示词。ReAct 模式时优先用 agent_prompt。"""
+        """获取知识提取提示词。ReAct 模式时使用知识专属 agent prompt。"""
         if self.react_mode:
+            # 优先使用知识专属的 agent prompt（7 步，无难题判定和独立解题）
+            knowledge_agent_lines = self.config.get("knowledge_agent_prompt_lines")
+            if knowledge_agent_lines:
+                base_prompt = "\n".join(knowledge_agent_lines)
+                tool_instructions = self.get_tool_instructions()
+                if tool_instructions:
+                    return base_prompt + "\n\n" + tool_instructions
+                return base_prompt
+            # fallback
             agent_lines = self.config.get("agent_prompt_lines")
             if agent_lines:
                 base_prompt = "\n".join(agent_lines)
@@ -135,6 +145,8 @@ class SubjectApp:
 
     def split_lecture(self, md_file, output_root, base_name, options):
         do_clean = options.get("do_clean", True)
+        from shared.decor_utils import strip_decor_images_from_file
+        strip_decor_images_from_file(md_file)
         return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
     def split_exam(self, md_file, output_root, base_name, options=None):
@@ -181,35 +193,8 @@ class SubjectApp:
             img_dir = q_dir / "images"
             img_dir.mkdir(exist_ok=True)
 
-            img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
-            def _copy_img(m):
-                alt, src = m.group(1), m.group(2).strip()
-                if src.startswith('http://') or src.startswith('https://'):
-                    return m.group(0)
-                img_name = Path(src).name
-                src_path = None
-                candidates = [
-                    src_media / img_name,
-                    md_dir / src,
-                    md_dir / Path(src).name,
-                ]
-                for cand in candidates:
-                    try:
-                        if cand.exists() and cand.is_file():
-                            src_path = cand
-                            break
-                    except Exception:
-                        pass
-                if src_path:
-                    dest = img_dir / img_name
-                    if not dest.exists():
-                        try:
-                            shutil.copy2(src_path, dest)
-                        except Exception:
-                            pass
-                    return f"![{alt}](./images/{img_name})"
-                return m.group(0)
-            new_content = img_pat.sub(_copy_img, content)
+            img_result = copy_md_images(content, [src_media, md_dir], img_dir)
+            new_content = img_result.content
 
             (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
 

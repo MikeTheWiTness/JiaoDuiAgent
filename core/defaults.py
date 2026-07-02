@@ -5,6 +5,7 @@ from core.api_client import call_api, MAX_FILE_SIZE
 from core.logging_utils import log
 from core.format_enforcement import _enforce_format, enforce_and_fix
 from core import config_loader
+from shared.image_utils import copy_md_images
 
 
 def _strip_search_from_prompt(prompt: str) -> str:
@@ -275,36 +276,19 @@ def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     target_root = Path(output_root) / base_name
     target_root.mkdir(parents=True, exist_ok=True)
 
-    def find_img(fname, sdir):
-        if not sdir or not sdir.exists(): return None
-        c = sdir / fname; return c if c.exists() else None
-
     unit_prefix = "板块" if split_mode == "section" else "第"
     unit_suffix = "" if split_mode == "section" else "题"
 
     total_copied = [0]; total_missing = [0]
-    img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
     for idx, (title, content) in enumerate(questions, start=1):
         q_dir_name = f"{unit_prefix}{idx}{unit_suffix}"
         q_dir = target_root / q_dir_name
         q_dir.mkdir(exist_ok=True)
         img_dir = q_dir / "images"; img_dir.mkdir(exist_ok=True)
-        def repl(m):
-            alt, src = m.group(1), m.group(2).strip()
-            img_name = Path(src).name
-            sp = find_img(img_name, src_media)
-            if sp:
-                dest = img_dir / img_name
-                if not dest.exists():
-                    shutil.copy2(sp, dest)
-                total_copied[0] += 1
-                return f"![{alt}](./images/{img_name})"
-            else:
-                log(f"      ⚠️ 未找到图片: {img_name}")
-                total_missing[0] += 1
-                return m.group(0)
-        new_content = img_pat.sub(repl, content)
-        (q_dir / f"{q_dir_name}.md").write_text(new_content, encoding='utf-8')
+        img_result = copy_md_images(content, [src_media], img_dir)
+        total_copied[0] += img_result.copied
+        total_missing[0] += img_result.missing
+        (q_dir / f"{q_dir_name}.md").write_text(img_result.content, encoding='utf-8')
 
     log(f"   📂 拆分完成: {len(questions)} 题, 图片 {total_copied[0]} 张")
     return True
@@ -336,22 +320,8 @@ def default_generate_knowledge(cleaned_md, output_root, base_name, config):
     target_root.mkdir(parents=True, exist_ok=True)
     img_dest = target_root / "images"; img_dest.mkdir(exist_ok=True)
 
-    img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
-    def repl(m):
-        alt, src = m.group(1), m.group(2).strip()
-        img_name = Path(src).name
-        sp = None
-        if src_media.exists():
-            c = src_media / img_name
-            if c.exists(): sp = c
-        if sp:
-            dest = img_dest / img_name
-            if not dest.exists():
-                shutil.copy2(sp, dest)
-            return f"![{alt}](./images/{img_name})"
-        return m.group(0)
-    new_text = img_pat.sub(repl, knowledge_text)
-    (target_root / f"{base_name}_知识.md").write_text(new_text, encoding='utf-8')
+    img_result = copy_md_images(knowledge_text, [src_media], img_dest)
+    (target_root / f"{base_name}_知识.md").write_text(img_result.content, encoding='utf-8')
     log(f"   📘 知识文件已生成")
 
 
@@ -509,10 +479,6 @@ def default_split_exam(md_file, output_root, base_name, config):
     target_root = Path(output_root) / base_name
     target_root.mkdir(parents=True, exist_ok=True)
 
-    def find_img(fname, sdir):
-        if not sdir or not sdir.exists(): return None
-        c = sdir / fname; return c if c.exists() else None
-
     total_copied = [0]; total_missing = [0]
 
     def is_title(l):
@@ -544,27 +510,10 @@ def default_split_exam(md_file, output_root, base_name, config):
         q_dir = target_root / f"第{idx}题"; q_dir.mkdir(exist_ok=True)
         img_dir = q_dir / "images"; img_dir.mkdir(exist_ok=True)
 
-        img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
-        def repl(m):
-            alt, src = m.group(1), m.group(2).strip()
-            img_name = Path(src).name
-            sp = find_img(img_name, src_media)
-            if sp:
-                dest = img_dir / img_name
-                if not dest.exists():
-                    try:
-                        shutil.copy2(sp, dest)
-                    except Exception as e:
-                        log(f"      ❌ 图片复制失败: {img_name}, {e}")
-                total_copied[0] += 1
-                return f"![{alt}](./images/{img_name})"
-            else:
-                log(f"      ⚠️ 未找到图片: {img_name}")
-                total_missing[0] += 1
-                return m.group(0)
-
-        new_content = img_pat.sub(repl, content_str)
-        (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
+        img_result = copy_md_images(content_str, [src_media], img_dir)
+        total_copied[0] += img_result.copied
+        total_missing[0] += img_result.missing
+        (q_dir / f"第{idx}题.md").write_text(img_result.content, encoding='utf-8')
 
     log(f"   📂 拆分完成: {len(blocks)} 题, 图片 {total_copied[0]} 张")
     return True

@@ -12,6 +12,7 @@ from shared.sympy_tools.tools import (
     BalanceChemicalEquationTool,
     StoichiometryCalcTool,
 )
+from shared.web_tools import WebSearchTool
 from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
@@ -22,6 +23,7 @@ from core.defaults import (
 )
 from core.manual_split import split_by_manual_markers
 from core.logging_utils import log
+from shared.image_utils import copy_md_images
 import shutil
 import re
 from pathlib import Path
@@ -48,51 +50,45 @@ class SubjectApp:
             SimplifyExpressionTool(),
             BalanceChemicalEquationTool(),
             StoichiometryCalcTool(),
+            WebSearchTool(),
         ]
         if self.react_mode:
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            base.append(PlanUpdateTool())
+            from shared.chemistry_tools import ChemistryIndependentSolveTool
+            # 化学 nudge 置空：自检靠 prompt 第 8 步，不依赖工具 nudge（对标 ADR-0006 决策 2）
+            base.append(PlanUpdateTool(nudge_template=""))
             base.append(LocateParagraphTool())
             base.append(ReadSectionTool())
+            base.append(ChemistryIndependentSolveTool())
         return base
 
     def get_max_tool_loops(self):
         """工具调用最大循环次数。"""
-        return 20 if self.react_mode else 15
+        return 30 if self.react_mode else 20
 
     def get_tool_instructions(self):
-        """生成工具使用指令。"""
-        instructions = []
-        for tool in self.tools:
-            if tool.name == "evaluate_expression":
-                instructions.append(
-                    "evaluate_expression: 求值数学表达式，支持四则运算、幂运算、科学计数法等。"
-                    "用于化学计算题答案验证时，必须用此工具实算，不得凭模型自身估算。"
-                )
-            elif tool.name == "solve_equation":
-                instructions.append(
-                    "solve_equation: 求解一元或多元方程。适用于化学平衡计算、pH计算等。"
-                )
-            elif tool.name == "balance_chemical_equation":
-                instructions.append(
-                    "balance_chemical_equation: 配平化学方程式。输入格式：反应物 -> 产物，"
-                    "如 'Fe + O2 -> Fe2O3'。配平类题目必须用此工具验证配平结果。"
-                )
-            elif tool.name == "stoichiometry_calc":
-                instructions.append(
-                    "stoichiometry_calc: 根据配平方程式进行化学计量计算（质量→质量）。"
-                    "计算题必须用此工具实算验证。"
-                )
-            elif tool.name == "check_equality":
-                instructions.append(
-                    "check_equality: 检查两个表达式是否等价。适用于验证公式变形。"
-                )
-            elif tool.name == "simplify_expression":
-                instructions.append(
-                    "simplify_expression: 化简数学表达式。可用于表达式化简。"
-                )
-        return "\n".join(instructions)
+        """生成工具使用指令（自动从工具描述生成，对标物理结构化风格）。"""
+        sympy_tools = [t for t in self.tools if t.name not in ("web_search", "web_fetch",
+                         "plan_update", "locate_paragraph", "read_section", "independent_solve")]
+        web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
+
+        lines = []
+
+        if sympy_tools:
+            lines.append("## 可用的化学计算工具\n"
+                "你在校对该学科题目时，可以使用以下工具进行**实算验证**，不得凭模型自身估算数值结果：\n")
+            lines.append("\n".join(f"- `{t.name}`: {t.description}" for t in sympy_tools))
+            lines.append("\n使用规则：对于需要化学方程式配平、化学计量计算、数值计算、方程求解的步骤，必须调用对应工具获取精确结果。\n")
+
+        if web_tools:
+            lines.append("## 可用的联网搜索工具\n"
+                "如需查找最新物质性质、反应条件、不在训练数据内的化学信息，可使用：\n")
+            lines.append("\n".join(f"- `{t.name}`: {t.description}" for t in web_tools))
+            lines.append("\n使用规则：先调 web_search 搜索，若需查看详情页再调 web_fetch 抓取。"
+                "搜索失败或超时是正常情况，此时使用模型自身知识继续。\n")
+
+        return "\n".join(lines)
 
     def get_question_prompt(self):
         """获取题目校对提示词。ReAct 模式时优先用 agent_prompt。"""
@@ -107,8 +103,17 @@ class SubjectApp:
         return "\n".join(self.config.get("question_prompt_lines", []))
 
     def get_knowledge_prompt(self):
-        """获取知识提取提示词。ReAct 模式时优先用 agent_prompt。"""
+        """获取知识提取提示词。ReAct 模式时使用知识专属 agent prompt。"""
         if self.react_mode:
+            # 优先使用知识专属的 agent prompt（7 步，无难题判定和独立解题）
+            knowledge_agent_lines = self.config.get("knowledge_agent_prompt_lines")
+            if knowledge_agent_lines:
+                base_prompt = "\n".join(knowledge_agent_lines)
+                tool_instructions = self.get_tool_instructions()
+                if tool_instructions:
+                    return base_prompt + "\n\n" + tool_instructions
+                return base_prompt
+            # fallback：如果没有知识专属 prompt，降级使用题目 agent prompt
             agent_lines = self.config.get("agent_prompt_lines")
             if agent_lines:
                 base_prompt = "\n".join(agent_lines)
@@ -140,6 +145,8 @@ class SubjectApp:
         if options is None:
             options = {}
         do_clean = options.get("do_clean", True)
+        from shared.decor_utils import strip_decor_images_from_file
+        strip_decor_images_from_file(md_file)
         return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
     def split_exam(self, md_file, output_root, base_name, options=None):
@@ -186,35 +193,8 @@ class SubjectApp:
             img_dir = q_dir / "images"
             img_dir.mkdir(exist_ok=True)
 
-            img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
-            def _copy_img(m):
-                alt, src = m.group(1), m.group(2).strip()
-                if src.startswith('http://') or src.startswith('https://'):
-                    return m.group(0)
-                img_name = Path(src).name
-                src_path = None
-                candidates = [
-                    src_media / img_name,
-                    md_dir / src,
-                    md_dir / Path(src).name,
-                ]
-                for cand in candidates:
-                    try:
-                        if cand.exists() and cand.is_file():
-                            src_path = cand
-                            break
-                    except Exception:
-                        pass
-                if src_path:
-                    dest = img_dir / img_name
-                    if not dest.exists():
-                        try:
-                            shutil.copy2(src_path, dest)
-                        except Exception:
-                            pass
-                    return f"![{alt}](./images/{img_name})"
-                return m.group(0)
-            new_content = img_pat.sub(_copy_img, content)
+            img_result = copy_md_images(content, [src_media, md_dir], img_dir)
+            new_content = img_result.content
 
             (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
 

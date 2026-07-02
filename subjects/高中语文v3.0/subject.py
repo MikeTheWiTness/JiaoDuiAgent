@@ -19,6 +19,7 @@ from core.logging_utils import log
 import shutil
 import re
 from pathlib import Path
+from shared.image_utils import copy_md_images
 
 
 class SubjectApp:
@@ -30,7 +31,16 @@ class SubjectApp:
     def __init__(self, subject_dir):
         self.subject_dir = subject_dir
         self.config = load_config(subject_dir)
-        self.react_mode = False
+        self._react_mode = False
+        self.tools = self.build_tools()
+
+    @property
+    def react_mode(self):
+        return self._react_mode
+
+    @react_mode.setter
+    def react_mode(self, value):
+        self._react_mode = value
         self.tools = self.build_tools()
 
     def build_tools(self):
@@ -136,6 +146,8 @@ class SubjectApp:
         do_clean = options.get("do_clean", True)
 
         if split_mode == "rule":
+            from shared.decor_utils import strip_decor_images_from_file
+            strip_decor_images_from_file(md_file)
             return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
         with open(md_file, 'r', encoding='utf-8') as f:
@@ -210,35 +222,8 @@ class SubjectApp:
             img_dir = q_dir / "images"
             img_dir.mkdir(exist_ok=True)
 
-            img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
-            def _copy_img(m):
-                alt, src = m.group(1), m.group(2).strip()
-                if src.startswith('http://') or src.startswith('https://'):
-                    return m.group(0)
-                img_name = Path(src).name
-                src_path = None
-                candidates = [
-                    src_media / img_name,
-                    md_dir / src,
-                    md_dir / Path(src).name,
-                ]
-                for cand in candidates:
-                    try:
-                        if cand.exists() and cand.is_file():
-                            src_path = cand
-                            break
-                    except Exception:
-                        pass
-                if src_path:
-                    dest = img_dir / img_name
-                    if not dest.exists():
-                        try:
-                            shutil.copy2(src_path, dest)
-                        except Exception:
-                            pass
-                    return f"![{alt}](./images/{img_name})"
-                return m.group(0)
-            new_content = img_pat.sub(_copy_img, content)
+            img_result = copy_md_images(content, [src_media, md_dir], img_dir)
+            new_content = img_result.content
 
             (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
 

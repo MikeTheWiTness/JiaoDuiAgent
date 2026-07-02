@@ -9,7 +9,9 @@ from shared.sympy_tools.tools import (
     SolveEquationTool,
     CheckEqualityTool,
     SimplifyExpressionTool,
+    GeometryTool,
 )
+from shared.web_tools import WebSearchTool
 from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
@@ -20,6 +22,7 @@ from core.defaults import (
 )
 from core.manual_split import split_by_manual_markers
 from core.logging_utils import log
+from shared.image_utils import copy_md_images
 import shutil
 import re
 from pathlib import Path
@@ -44,32 +47,46 @@ class SubjectApp:
             SolveEquationTool(),
             CheckEqualityTool(),
             SimplifyExpressionTool(),
+            GeometryTool(),
+            WebSearchTool(),
         ]
         if self.react_mode:
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            base.append(PlanUpdateTool())
+            from shared.physics_tools import IndependentSolveTool
+            # 数学 nudge 置空：自检靠 prompt 第 8 步，不依赖工具 nudge（对齐物理 ADR-0006 决策 2）
+            base.append(PlanUpdateTool(nudge_template=""))
             base.append(LocateParagraphTool())
             base.append(ReadSectionTool())
+            base.append(IndependentSolveTool())
         return base
 
     def get_max_tool_loops(self):
         """工具调用最大循环次数。"""
-        return 15 if self.react_mode else 10
+        return 30 if self.react_mode else 20
 
     def get_tool_instructions(self):
         """生成工具使用指令。"""
-        sympy_tools = [t for t in self.tools if t.name in (
-            "evaluate_expression", "solve_equation", "check_equality", "simplify_expression"
-        )]
-        if not sympy_tools:
-            return ""
-        lines = ["## 可用的符号计算工具",
-                 "你在校对该学科题目时，可以使用以下工具进行**实算验证**，不得凭模型自身估算数值结果：",
-                 ""]
-        lines.extend(f"- `{t.name}`: {t.description}" for t in sympy_tools)
-        lines.append("\n使用规则：对于需要数值计算、方程求解、公式推导验证的步骤，必须调用对应工具获取精确结果。")
-        return "\n".join(lines)
+        sympy_tools = [t for t in self.tools if t.name not in ("web_search", "web_fetch",
+                         "plan_update", "locate_paragraph", "read_section")]
+        web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
+
+        lines = []
+
+        if sympy_tools:
+            lines.append("## 可用的符号计算与几何工具\n"
+                "你在校对该学科题目时，可以使用以下工具进行**实算验证**，不得凭模型自身估算数值结果：\n")
+            lines.append("\n".join(f"- `{t.name}`: {t.description}" for t in sympy_tools))
+            lines.append("\n使用规则：对于需要数值计算、方程求解、几何测量、表达式化简的步骤，必须调用对应工具获取精确结果。\n")
+
+        if web_tools:
+            lines.append("## 可用的联网搜索工具\n"
+                "如需查找最新说法、验证专业术语、检索不在训练数据内的信息，可使用：\n")
+            lines.append("\n".join(f"- `{t.name}`: {t.description}" for t in web_tools))
+            lines.append("\n使用规则：先调 web_search 搜索，若需查看详情页再调 web_fetch 抓取。"
+                "搜索失败或超时是正常情况，此时使用模型自身知识继续。\n")
+
+        return "".join(lines)
 
     def get_question_prompt(self):
         """获取题目校对提示词。ReAct 模式时优先用 agent_prompt。"""
@@ -88,8 +105,17 @@ class SubjectApp:
         return base_prompt
 
     def get_knowledge_prompt(self):
-        """获取知识提取提示词。ReAct 模式时优先用 agent_prompt。"""
+        """获取知识提取提示词。ReAct 模式时使用知识专属 agent prompt。"""
         if self.react_mode:
+            # 优先使用知识专属的 agent prompt（7 步，无难题判定和独立解题）
+            knowledge_agent_lines = self.config.get("knowledge_agent_prompt_lines")
+            if knowledge_agent_lines:
+                base_prompt = "\n".join(knowledge_agent_lines)
+                tool_instructions = self.get_tool_instructions()
+                if tool_instructions:
+                    return base_prompt + "\n\n" + tool_instructions
+                return base_prompt
+            # fallback
             agent_lines = self.config.get("agent_prompt_lines")
             if agent_lines:
                 base_prompt = "\n".join(agent_lines)
@@ -126,6 +152,8 @@ class SubjectApp:
         if options is None:
             options = {}
         do_clean = options.get("do_clean", True)
+        from shared.decor_utils import strip_decor_images_from_file
+        strip_decor_images_from_file(md_file)
         return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
     def split_exam(self, md_file, output_root, base_name, options=None):
@@ -173,35 +201,8 @@ class SubjectApp:
             img_dir = q_dir / "images"
             img_dir.mkdir(exist_ok=True)
 
-            img_pat = re.compile(r'!\[(.*?)\]\((.*?)\)')
-            def _copy_img(m):
-                alt, src = m.group(1), m.group(2).strip()
-                if src.startswith('http://') or src.startswith('https://'):
-                    return m.group(0)
-                img_name = Path(src).name
-                src_path = None
-                candidates = [
-                    src_media / img_name,
-                    md_dir / src,
-                    md_dir / Path(src).name,
-                ]
-                for cand in candidates:
-                    try:
-                        if cand.exists() and cand.is_file():
-                            src_path = cand
-                            break
-                    except Exception:
-                        pass
-                if src_path:
-                    dest = img_dir / img_name
-                    if not dest.exists():
-                        try:
-                            shutil.copy2(src_path, dest)
-                        except Exception:
-                            pass
-                    return f"![{alt}](./images/{img_name})"
-                return m.group(0)
-            new_content = img_pat.sub(_copy_img, content)
+            img_result = copy_md_images(content, [src_media, md_dir], img_dir)
+            new_content = img_result.content
 
             (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
 

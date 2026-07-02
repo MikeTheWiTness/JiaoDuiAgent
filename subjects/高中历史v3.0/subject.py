@@ -1,4 +1,4 @@
-"""初中英语业务逻辑 —— 工具、提示词、拆分、校对、钩子。"""
+"""高中历史业务逻辑 —— 工具、提示词、拆分、校对、钩子。"""
 import os
 import sys
 
@@ -21,71 +21,109 @@ from pathlib import Path
 
 
 class SubjectApp:
-    LEVEL = "初中"
-    SUBJECT = "英语"
-    name = "初中英语"
+    LEVEL = "高中"
+    SUBJECT = "历史"
+    name = "高中历史"
     version = "v3.0"
 
     def __init__(self, subject_dir):
         self.subject_dir = subject_dir
         self.config = load_config(subject_dir)
-        self.react_mode = False
+        self._react_mode = False
+        self.tools = self.build_tools()
+
+    @property
+    def react_mode(self):
+        return self._react_mode
+
+    @react_mode.setter
+    def react_mode(self, value):
+        self._react_mode = value
         self.tools = self.build_tools()
 
     def build_tools(self):
-        """构建初中英语专用工具集。英语以语法/词汇校对为主，无需计算工具。"""
         base = []
         if self.react_mode:
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            base.append(PlanUpdateTool())
+            base.append(PlanUpdateTool(nudge_template=""))
             base.append(LocateParagraphTool())
             base.append(ReadSectionTool())
         return base
 
     def get_max_tool_loops(self):
-        """工具调用最大循环次数。"""
         return 15 if self.react_mode else 0
 
     def get_tool_instructions(self):
-        """生成工具使用指令。"""
-        if not self.tools:
-            return ""
-        return "\n".join([f"- {t.name}" for t in tools])
+        # 历史学科不需要联网检索工具（史实主要靠 LLM 自身知识）
+        # ReAct 模式下仅提供 plan_update、locate_paragraph、read_section
+        return ""
 
     def get_question_prompt(self):
-        """获取题目校对提示词。ReAct 模式时优先用 agent_prompt。"""
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                return "\n".join(agent_lines)
-        return "\n".join(self.config.get("question_prompt_lines", []))
-
-    def get_knowledge_prompt(self):
-        """获取知识提取提示词。ReAct 模式时优先用 agent_prompt。"""
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                return "\n".join(agent_lines)
-        return "\n".join(self.config.get("knowledge_prompt_lines", []))
-
-    def get_review_prompt(self):
-        """获取批注评审提示词。"""
-        from shared.review_mode import build_review_prompt
         if self.react_mode:
             agent_lines = self.config.get("agent_prompt_lines")
             if agent_lines:
                 return "\n".join(agent_lines)
         base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
-        return base_prompt + "\n\n" + build_review_prompt("")
+        return base_prompt
+
+    def get_knowledge_prompt(self):
+        if self.react_mode:
+            agent_lines = self.config.get("agent_prompt_lines")
+            if agent_lines:
+                return "\n".join(agent_lines)
+        base_prompt = "\n".join(self.config.get("knowledge_prompt_lines", []))
+        return base_prompt
+
 
     def split_lecture(self, md_file, output_root, base_name, options):
+        from shared.decor_utils import strip_decor_images, strip_decor_images_from_file
+        from shared.split_post_utils import remove_navigation_units
+
         if options is None:
             options = {}
+        split_mode = options.get("split_mode", "rule")
         do_clean = options.get("do_clean", True)
-        from shared.decor_utils import strip_decor_images_from_file
-        strip_decor_images_from_file(md_file)
-        return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
+
+        if split_mode == "rule":
+            # 预清洗：去除装饰图片
+            strip_decor_images_from_file(str(md_file))
+            result = default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
+            # 后处理：删除导航/封面板块
+            if result:
+                remove_navigation_units(output_root, base_name)
+            return result
+
+        with open(md_file, 'r', encoding='utf-8') as f:
+            md_content = f.read()
+
+        # 预清洗：去除装饰图片
+        md_content = strip_decor_images(md_content)
+
+        if split_mode == "none":
+            problems = [{"content": md_content}]
+        elif split_mode == "manual":
+            problems = split_by_manual_markers(md_content)
+        elif split_mode == "knowledge_manual":
+            from core.manual_split import split_by_knowledge_markers
+            problems = split_by_knowledge_markers(md_content)
+        elif split_mode == "knowledge_smart":
+            api_url = options.get("api_url", "")
+            api_key = options.get("api_key", "")
+            model = options.get("model", "")
+            from shared.knowledge_split import knowledge_split_smart
+            problems = knowledge_split_smart(md_content, api_url, api_key, model, md_file=md_file)
+        elif split_mode == "smart":
+            api_url = options.get("api_url", "")
+            api_key = options.get("api_key", "")
+            model = options.get("model", "")
+            from shared.smart_split import smart_split
+            problems = smart_split(md_content, api_url, api_key, model, md_file=md_file)
+        else:
+            log(f"⚠️ 未知分割模式: {split_mode}，使用规则模式")
+            return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
+
+        return self._write_problems_to_dirs(md_file, output_root, base_name, problems)
 
     def split_exam(self, md_file, output_root, base_name, options=None):
         if options is None:
@@ -136,13 +174,13 @@ class SubjectApp:
 
             (q_dir / f"第{idx}题.md").write_text(new_content, encoding='utf-8')
 
-            # 同步生成 _clean.md
+            # 同步生成 _clean.md（去除所有格式标记的纯文本版）
             try:
                 from shared.docx_format_enhancer import strip_format_markers
                 clean = strip_format_markers(new_content)
                 clean = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', clean, flags=re.DOTALL)
-                clean = re.sub(r'\*\*([^*]+)\*\*', r'', clean)
-                clean = re.sub(r'__([^_]+)__', r'', clean)
+                clean = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean)
+                clean = re.sub(r'__([^_]+)__', r'\1', clean)
                 (q_dir / f"第{idx}题_clean.md").write_text(clean, encoding='utf-8')
             except Exception:
                 pass
@@ -152,6 +190,17 @@ class SubjectApp:
 
     def generate_knowledge(self, md_file, output_root, base_name):
         return default_generate_knowledge(md_file, output_root, base_name, self.config)
+
+    def get_review_prompt(self):
+        from shared.review_mode import build_review_prompt
+        if self.react_mode:
+            agent_lines = self.config.get("agent_prompt_lines")
+            if agent_lines:
+                base_prompt = "\n".join(agent_lines)
+                return base_prompt
+        base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
+        review_specific = build_review_prompt("")
+        return base_prompt + "\n\n" + review_specific
 
     def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode="试卷"):
         if is_knowledge:
@@ -183,6 +232,7 @@ class SubjectApp:
         return {".docx", ".doc", ".md"}
 
     def pre_proofread_hook(self, md_text, api_url=None, api_key=None, model=None, q_dir=None):
+        # 历史学科不需要前置原文检索
         return md_text
 
     def post_proofread_hook(self, result, q_dir):
@@ -191,7 +241,7 @@ class SubjectApp:
     def get_ui_features(self):
         return {
             "show_clean_table_option": True,
-            "show_knowledge_option": True,
+            "show_knowledge_option": False,
             "show_pdf_option": True,
             "show_parallel_option": True,
             "show_source_modes": ["讲义", "试卷", "自由校对", "批注评审"],
