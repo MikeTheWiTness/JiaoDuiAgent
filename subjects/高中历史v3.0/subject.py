@@ -14,32 +14,23 @@ from core.defaults import (
 )
 from core.manual_split import split_by_manual_markers
 from core.logging_utils import log
+from core.base_subject import BaseSubjectApp
 from shared.image_utils import copy_md_images
 import shutil
 import re
 from pathlib import Path
 
 
-class SubjectApp:
+class SubjectApp(BaseSubjectApp):
     LEVEL = "高中"
     SUBJECT = "历史"
     name = "高中历史"
     version = "v3.0"
+    _show_knowledge_option = False
 
     def __init__(self, subject_dir):
-        self.subject_dir = subject_dir
-        self.config = load_config(subject_dir)
+        super().__init__(subject_dir)
         self._react_mode = False
-        self.tools = self.build_tools()
-
-    @property
-    def react_mode(self):
-        return self._react_mode
-
-    @react_mode.setter
-    def react_mode(self, value):
-        self._react_mode = value
-        self.tools = self.build_tools()
 
     def build_tools(self):
         base = []
@@ -188,8 +179,6 @@ class SubjectApp:
         log(f"📂 拆分完成: {len(problems)} 题")
         return True
 
-    def generate_knowledge(self, md_file, output_root, base_name):
-        return default_generate_knowledge(md_file, output_root, base_name, self.config)
 
     def get_review_prompt(self):
         from shared.review_mode import build_review_prompt
@@ -216,37 +205,6 @@ class SubjectApp:
             react_mode=self.react_mode
         )
 
-    def collect_paper_dirs(self, base_path):
-        return default_collect_paper_dirs(base_path)
 
-    def get_supported_file_types(self):
-        return [
-            ("支持的文件", "*.docx;*.doc;*.md;*.zip"),
-            ("Word 文档", "*.docx;*.doc"),
-            ("Markdown 文件", "*.md"),
-            ("ZIP 压缩包", "*.zip"),
-            ("所有文件", "*.*"),
-        ]
 
-    def get_supported_extensions(self):
-        return {".docx", ".doc", ".md"}
 
-    def pre_proofread_hook(self, md_text, api_url=None, api_key=None, model=None, q_dir=None):
-        # 历史学科不需要前置原文检索
-        return md_text
-
-    def post_proofread_hook(self, result, q_dir):
-        return result
-
-    def get_ui_features(self):
-        return {
-            "show_clean_table_option": True,
-            "show_knowledge_option": False,
-            "show_pdf_option": True,
-            "show_parallel_option": True,
-            "show_source_modes": ["讲义", "试卷", "自由校对", "批注评审"],
-            "show_exec_modes": ["完整流程", "仅转换", "仅拆分", "仅校对", "仅生成PDF"],
-            "show_split_mode_option": True,
-            "add_file_title": "添加文件",
-            "add_folder_title": "添加文件夹",
-        }

@@ -14,23 +14,22 @@ from core.defaults import (
 )
 from core.manual_split import split_by_manual_markers
 from core.logging_utils import log
+from core.base_subject import BaseSubjectApp
 from shared.image_utils import copy_md_images
 import shutil
 import re
 from pathlib import Path
 
 
-class SubjectApp:
+class SubjectApp(BaseSubjectApp):
     LEVEL = "初中"
     SUBJECT = "英语"
     name = "初中英语"
     version = "v3.0"
 
     def __init__(self, subject_dir):
-        self.subject_dir = subject_dir
-        self.config = load_config(subject_dir)
-        self.react_mode = False
-        self.tools = self.build_tools()
+        super().__init__(subject_dir)
+        self._react_mode = False
 
     def build_tools(self):
         """构建初中英语专用工具集。英语以语法/词汇校对为主，无需计算工具。"""
@@ -150,8 +149,6 @@ class SubjectApp:
         log(f"📂 拆分完成: {len(problems)} 题")
         return True
 
-    def generate_knowledge(self, md_file, output_root, base_name):
-        return default_generate_knowledge(md_file, output_root, base_name, self.config)
 
     def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode="试卷"):
         if is_knowledge:
@@ -167,36 +164,6 @@ class SubjectApp:
             react_mode=self.react_mode
         )
 
-    def collect_paper_dirs(self, base_path):
-        return default_collect_paper_dirs(base_path)
 
-    def get_supported_file_types(self):
-        return [
-            ("支持的文件", "*.docx;*.doc;*.md;*.zip"),
-            ("Word 文档", "*.docx;*.doc"),
-            ("Markdown 文件", "*.md"),
-            ("ZIP 压缩包", "*.zip"),
-            ("所有文件", "*.*"),
-        ]
 
-    def get_supported_extensions(self):
-        return {".docx", ".doc", ".md"}
 
-    def pre_proofread_hook(self, md_text, api_url=None, api_key=None, model=None, q_dir=None):
-        return md_text
-
-    def post_proofread_hook(self, result, q_dir):
-        return result
-
-    def get_ui_features(self):
-        return {
-            "show_clean_table_option": True,
-            "show_knowledge_option": True,
-            "show_pdf_option": True,
-            "show_parallel_option": True,
-            "show_source_modes": ["讲义", "试卷", "自由校对", "批注评审"],
-            "show_exec_modes": ["完整流程", "仅转换", "仅拆分", "仅校对", "仅生成PDF"],
-            "show_split_mode_option": True,
-            "add_file_title": "添加文件",
-            "add_folder_title": "添加文件夹",
-        }
