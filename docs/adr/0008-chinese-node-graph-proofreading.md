@@ -1,7 +1,8 @@
 # ADR 0008：高中语文校对节点图重构
 
-**状态**：提议中
+**状态**：已实现（commit b878670）
 **日期**：2026-06-29
+**实现日期**：2026-06-29
 **决策者**：MikeTheWiTness
 **相关 ADR**：[[ADR 0005 ReAct 机制核心架构]](0005-react-mechanism-architecture.md)、[[ADR 0006 物理 ReAct 学科化]](0006-physics-react-subject-specialization.md)
 

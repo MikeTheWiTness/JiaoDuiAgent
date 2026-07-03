@@ -1,7 +1,8 @@
 # ADR 0009：高中语文知识类校对维度叠加架构
 
-**状态**：提议中
+**状态**：已实现（commit 261e2a0）
 **日期**：2026-06-30
+**实现日期**：2026-06-30
 **决策者**：MikeTheWiTness
 **相关 ADR**：[[ADR 0005 ReAct 机制核心架构]](0005-react-mechanism-architecture.md)、[[ADR 0008 高中语文校对节点图重构]](0008-chinese-node-graph-proofreading.md)
 
