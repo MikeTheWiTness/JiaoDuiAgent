@@ -327,11 +327,6 @@ def clean_intent_md_file(md_file, problem_markers=None):
 
 def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     base_name = base_name.strip()  # 防御：文件名可能带首尾空格，Windows 路径不支持
-
-    # ── 预处理：装饰图片清除（ADR-0017 决策7）──
-    from shared.decor_utils import strip_decor_images_from_file
-    strip_decor_images_from_file(md_file)
-
     with open(md_file, 'r', encoding='utf-8') as f:
         md_content = f.read()
 
@@ -815,7 +810,7 @@ def _format_usage_summary(usage: dict) -> str:
     return "".join(lines)
 
 
-def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
+def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None, react_mode=False, reasoning_effort="high"):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
     if os.path.exists(target_md):
@@ -880,8 +875,9 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
             except ImportError:
                 pass  # 非化学学科无 chemistry_tools 模块，忽略
 
-        result = call_api(ctx, md_content, images_b64,
-                          q_name, prompt, tools=tools)
+        result = call_api(api_url, api_key, model, md_content, images_b64,
+                          q_name, prompt, tools=tools, max_loops=max_loops,
+                          output_dir=q_dir, reasoning_effort=reasoning_effort)
         res = result["content"]
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")

@@ -12,11 +12,14 @@ from core.api_client import (
     APITimeoutError,
     APIRateLimitError,
     APIAuthError,
+    APIBadRequestError,
     FormatError,
     ToolExecutionError,
     _classify_error,
     _should_retry,
     _backoff_delay,
+    _model_supports_reasoning_effort,
+    _model_supports_images,
     call_api,
     StopReason,
     MAX_RETRY,
@@ -35,6 +38,7 @@ class TestErrorHierarchy:
         assert issubclass(APITimeoutError, ProofreadError)
         assert issubclass(APIRateLimitError, ProofreadError)
         assert issubclass(APIAuthError, ProofreadError)
+        assert issubclass(APIBadRequestError, ProofreadError)
         assert issubclass(FormatError, ProofreadError)
         assert issubclass(ToolExecutionError, ProofreadError)
 
@@ -94,6 +98,16 @@ class TestErrorClassification:
         proof_err = _classify_error(exc)
         assert isinstance(proof_err, APIAuthError)
 
+    def test_classify_http_400(self):
+        """HTTP 400 → APIBadRequestError（不可重试）。"""
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = '{"error": "Invalid model or parameter"}'
+        exc = req_mod.exceptions.HTTPError(response=resp)
+        proof_err = _classify_error(exc)
+        assert isinstance(proof_err, APIBadRequestError)
+        assert proof_err.status_code == 400
+
     def test_classify_http_500(self):
         """HTTP 500 → 通用 ProofreadError（应可重试）。"""
         resp = MagicMock()
@@ -127,6 +141,11 @@ class TestRetryStrategy:
     def test_auth_error_not_retryable(self):
         """认证错误不应重试。"""
         err = APIAuthError("unauthorized")
+        assert _should_retry(err) is False
+
+    def test_bad_request_not_retryable(self):
+        """HTTP 400 错误不应重试——请求本身有问题。"""
+        err = APIBadRequestError("bad request")
         assert _should_retry(err) is False
 
     def test_generic_proofread_error_is_retryable(self):
@@ -232,3 +251,100 @@ class TestCircuitBreakerInCallApi:
         call_count = mock_post.call_count
         assert call_count <= MAX_RETRY + 1, f"重试次数 {call_count} 不应超过 MAX_RETRY+1={MAX_RETRY+1}"
         assert result["stop_reason"] == StopReason.ERROR
+
+    @patch("core.api_client.requests.post")
+    @patch("core.api_client._dump_initial_payload")
+    @patch("core.api_client._save_conversation_log")
+    def test_bad_request_stops_immediately(self, mock_save, mock_dump, mock_post):
+        """HTTP 400 错误应立即停止，不重试，不触发熔断。"""
+        mock_dump.return_value = ""
+        mock_post.side_effect = req_mod.exceptions.HTTPError(
+            response=MagicMock(status_code=400, text='{"error": "Invalid parameter"}')
+        )
+
+        result = call_api(
+            api_url="http://test/v1",
+            api_key="key",
+            model="test-model",
+            md_text="测试文本",
+            images=[],
+            q_title="第1题",
+            system_prompt="prompt",
+        )
+
+        # 400 不可重试 → 只调用 1 次
+        assert mock_post.call_count == 1, f"400 错误不应重试，实际调用 {mock_post.call_count} 次"
+        assert result["stop_reason"] == StopReason.ERROR
+        assert "请求格式错误" in result["content"] or "400" in result["content"]
+
+    @patch("core.api_client.requests.post")
+    @patch("core.api_client._dump_initial_payload")
+    @patch("core.api_client._save_conversation_log")
+    def test_400_error_includes_response_body(self, mock_save, mock_dump, mock_post):
+        """400 错误的响应体应出现在错误消息中。"""
+        mock_dump.return_value = ""
+        mock_post.side_effect = req_mod.exceptions.HTTPError(
+            response=MagicMock(status_code=400, text='{"error": "Unsupported parameter: reasoning_effort"}')
+        )
+
+        result = call_api(
+            api_url="http://test/v1",
+            api_key="key",
+            model="test-model",
+            md_text="测试文本",
+            images=[],
+            q_title="第1题",
+            system_prompt="prompt",
+        )
+
+        assert "Unsupported parameter" in result["content"], \
+            f"响应体应出现在错误消息中，实际: {result['content'][:200]}"
+
+
+class TestModelReasoningEffortSupport:
+    """验证 _model_supports_reasoning_effort 的模型兼容性判断。"""
+
+    def test_deepseek_reasoner_supports(self):
+        """deepseek-reasoner 支持 reasoning_effort。"""
+        assert _model_supports_reasoning_effort("deepseek-reasoner") is True
+
+    def test_deepseek_chat_not_support(self):
+        """deepseek-chat (V3) 不支持 reasoning_effort。"""
+        assert _model_supports_reasoning_effort("deepseek-chat") is False
+
+    def test_deepseek_v4_pro_supports(self):
+        """deepseek-v4-pro 是推理模型，支持 reasoning_effort。"""
+        assert _model_supports_reasoning_effort("deepseek-v4-pro") is True
+
+    def test_doubao_supports(self):
+        """豆包模型默认返回 True（忽略未知参数，无害）。"""
+        assert _model_supports_reasoning_effort("doubao-seed-2-0-pro-260215") is True
+
+    def test_unknown_model_defaults_true(self):
+        """未知模型默认发送（绝大多数 API 忽略未知参数）。"""
+        assert _model_supports_reasoning_effort("gpt-4o") is True
+        assert _model_supports_reasoning_effort("claude-3-opus") is True
+
+
+class TestModelImageSupport:
+    """验证 _model_supports_images 的图片兼容性判断。"""
+
+    def test_deepseek_v4_pro_text_only(self):
+        """deepseek-v4-pro 是纯文本模型，不支持图片。"""
+        assert _model_supports_images("deepseek-v4-pro") is False
+
+    def test_deepseek_reasoner_text_only(self):
+        """deepseek-reasoner (R1) 是纯文本推理模型。"""
+        assert _model_supports_images("deepseek-reasoner") is False
+
+    def test_deepseek_chat_supports_images(self):
+        """deepseek-chat (V3) 支持多模态/图片。"""
+        assert _model_supports_images("deepseek-chat") is True
+
+    def test_doubao_supports_images(self):
+        """豆包模型默认支持图片。"""
+        assert _model_supports_images("doubao-seed-2-0-pro-260215") is True
+
+    def test_unknown_model_defaults_true(self):
+        """未知模型默认支持图片。"""
+        assert _model_supports_images("gpt-4o") is True
