@@ -81,8 +81,10 @@
 }
 
 % === Pandoc 兼容：非标准 LaTeX 命令 ===
-\newcommand{\lt}{{<}}
-\newcommand{\gt}{{>}}
+% 使用 \ifmmode 判断当前模式：数学模式中用裸 < > 保留 mathrel 间距，
+% 文本模式中用 \textless/\textgreater 避免特殊字符解析问题。
+\newcommand{\lt}{\ifmmode<\else\textless\fi}
+\newcommand{\gt}{\ifmmode>\else\textgreater\fi}
 
 % === 双删除线命令（基于 ulem 宏包的自定义命令）===
 % ulem 不提供原生双删除线，使用 \markoverwith 实现
