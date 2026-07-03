@@ -266,6 +266,7 @@ class DefaultApp:
 
     def _update_ui_for_pipeline(self):
         """根据管线开关状态显示/隐藏对应阶段的选项面板。"""
+        features = self._get_ui_features()
         import_active = self.pipeline.import_enabled
         split_active = self.pipeline.split_enabled
         proof_active = self.pipeline.proof_enabled
