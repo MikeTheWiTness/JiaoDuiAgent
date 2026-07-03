@@ -26,6 +26,12 @@ class PipelineBar(ttk.Frame):
         ("typeset", "排版", "📄"),
     ]
 
+    # 阶段依赖：开启 split 需要 import，开启 typeset 需要 proof
+    _DEPENDS_ON = {
+        "split": "import",
+        "typeset": "proof",
+    }
+
     def __init__(self, parent, on_changed=None, **kw):
         super().__init__(parent, **kw)
         self.on_changed = on_changed
@@ -55,9 +61,17 @@ class PipelineBar(ttk.Frame):
         self._update_styles()
 
     def _toggle(self, key: str):
-        """切换单个阶段。每个阶段完全独立，组合由 UI 层自适应处理。"""
+        """切换单个阶段。开启时自动满足前置依赖，关闭时无级联。"""
         var = self._vars[key]
-        var.set(not var.get())
+        new_state = not var.get()
+
+        if new_state:
+            # 开启阶段时，确保依赖的前置阶段也已开启
+            dep = self._DEPENDS_ON.get(key)
+            if dep:
+                self._vars[dep].set(True)
+
+        var.set(new_state)
         self._update_styles()
         if self.on_changed:
             self.on_changed()
