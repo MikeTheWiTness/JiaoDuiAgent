@@ -137,9 +137,8 @@ class BaseSubjectApp:
 
     # ---- proofread_one（模板方法，语文覆盖 _build_pre_hook） ----
 
-    def proofread_one(self, api_url, api_key, model, q_dir, q_name,
-                      is_knowledge, generate_pdf, source_mode="试卷",
-                      reasoning_effort="high"):
+    def proofread_one(self, ctx, q_dir, q_name,
+                      is_knowledge, generate_pdf, source_mode="试卷"):
         """校对入口 —— 所有学科共用骨架。高中语文覆盖 _build_pre_hook 注入文言文搜索。"""
         if is_knowledge:
             prompt = self.get_knowledge_prompt()
@@ -151,11 +150,10 @@ class BaseSubjectApp:
         pre_hook = self._build_pre_hook(ctx.api_url, ctx.api_key, ctx.model, q_dir)
 
         return default_proofread_one(
-            ctx, q_dir, q_name,
+            ctx, q_dir, q_name, is_knowledge,
             prompt, self.tools, generate_pdf,
             pre_hook=pre_hook,
             react_mode=self.react_mode,
-            reasoning_effort=reasoning_effort,
         )
 
     def _build_pre_hook(self, api_url, api_key, model, q_dir):

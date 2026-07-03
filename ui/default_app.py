@@ -14,6 +14,7 @@ from core.defaults import (
 )
 from shared.latex_generator import generate_combined_pdf
 from shared.session import SessionManager
+from core.session_context import SessionContext
 from ui.widgets import LogPanel, ApiDialog
 from ui.pipeline import PipelineBar, setup_pipeline_styles
 
@@ -1057,6 +1058,11 @@ class DefaultApp:
         out_root = self.output_dir.get().strip()
         if not out_root:
             out_root = DEFAULT_OUTPUT
+        ctx = SessionContext(
+            api_url=api_url, api_key=api_key, model=model,
+            max_loops=self.subject_app.get_max_tool_loops(),
+            output_dir=out_root,
+        )
         report_root = os.path.join(out_root, "校对报告")
         os.makedirs(report_root, exist_ok=True)
 
@@ -1143,7 +1149,7 @@ class DefaultApp:
                                 log(f"  ⏳ 提交{task_type}：{q_name}")
                                 future = executor.submit(
                                     self.subject_app.proofread_one,
-                                    api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, content
+                                    ctx, q_dir, q_name, is_knowledge, generate_pdf, content
                                 )
                                 future_map[future] = (q_dir, q_name, is_knowledge)
 
@@ -1176,7 +1182,7 @@ class DefaultApp:
                         task_type = "知识" if is_knowledge else "题目"
                         log(f"校对{task_type}：{q_name}")
                         data = self.subject_app.proofread_one(
-                            api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, content
+                            ctx, q_dir, q_name, is_knowledge, generate_pdf, content
                         )
                         if data["success"]:
                             self.proofread_result[q_dir] = data["result"]

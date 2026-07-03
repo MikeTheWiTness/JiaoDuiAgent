@@ -82,8 +82,8 @@ class TestSubjectAppMethodSignatures(unittest.TestCase):
         import inspect
         sig = inspect.signature(self.app.proofread_one)
         params = list(sig.parameters.keys())
-        self.assertEqual(params[:7], [
-            "api_url", "api_key", "model", "q_dir", "q_name", "is_knowledge", "generate_pdf"
+        self.assertEqual(params[:5], [
+            "ctx", "q_dir", "q_name", "is_knowledge", "generate_pdf"
         ])
 
     def test_post_proofread_hook_signature(self):
