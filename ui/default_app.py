@@ -340,13 +340,32 @@ class DefaultApp:
             btn.pack_forget()
 
     def _on_action(self):
+        """校验管线组合合法性，然后路由到对应处理方法。"""
+        imp = self.pipeline.import_enabled
+        spl = self.pipeline.split_enabled
+        prf = self.pipeline.proof_enabled
+        typ = self.pipeline.typeset_enabled
+
+        # 校验规则
+        errors = []
+        if imp and prf and not spl:
+            errors.append("「校对」需要先「拆分」——校对器按拆分后的题目目录工作，不能直接校对原始文档。请同时勾选「拆分」。")
+        if imp and typ and not prf:
+            errors.append("「排版」需要校对结果——PDF 报告由校对报告生成。请同时勾选「校对」，或关闭「导入」后选择已有校对目录。")
+        if not imp and not prf and not typ:
+            errors.append("至少需要勾选一个阶段。")
+
+        if errors:
+            messagebox.showwarning("管线组合不合法", "\n\n".join(errors))
+            return
+
         """根据管线状态路由到对应的处理方法。"""
-        if not self.pipeline.import_enabled and not self.pipeline.split_enabled:
-            if self.pipeline.proof_enabled:
+        if not imp and not spl:
+            if prf:
                 self.start_proofread()
-            elif self.pipeline.typeset_enabled:
+            elif typ:
                 self.start_generate_pdf()
-        elif self.pipeline.split_enabled and not self.pipeline.proof_enabled:
+        elif spl and not prf:
             self.start_conversion()  # 仅拆分
         else:
             self.start_full_pipeline()  # 完整流程或仅转换
