@@ -13,8 +13,6 @@ from core.defaults import (
     normalize_option_spacing, post_process_md_zw, default_generate_knowledge,
 )
 from shared.latex_generator import generate_combined_pdf
-from shared.session import SessionManager
-from core.session_context import SessionContext
 from ui.widgets import LogPanel, ApiDialog
 from ui.pipeline import PipelineBar, setup_pipeline_styles
 
@@ -33,7 +31,7 @@ class DefaultApp:
         self.root.geometry("1050x750")
         self.root.minsize(900, 650)
 
-        self.content_type = tk.StringVar(value="讲义")  # 讲义/试卷/自由校对/批注评审
+        self.content_type = tk.StringVar(value="试卷")  # 讲义/试卷/自由校对/批注评审
         self.output_dir = tk.StringVar(value="output")
 
         self.clean_enabled = tk.BooleanVar(value=True)
@@ -46,15 +44,7 @@ class DefaultApp:
         self.parallel_count = tk.StringVar(value="10")
         self.react_enabled = tk.BooleanVar(value=True)
 
-        self.split_mode = tk.StringVar(value="普通规则")
-
-        # 分割方式中文 ↔ 英文映射
-        self.SPLIT_MODE_MAP = {
-            "普通规则": "rule",
-            "不拆分": "none",
-            "智能分割": "smart",
-            "人工标记": "manual",
-        }
+        self.split_mode = tk.StringVar(value="rule")
         self.free_text = ""
         self.free_images = []
 
@@ -63,7 +53,6 @@ class DefaultApp:
         self.proofread_result = {}
         self.task_running = False
         self.task_interrupt = False
-        self._interrupt_event = threading.Event()  # 线程间中断信号
 
         self.api_config = load_env_config(subject_app.subject_dir)
 
@@ -80,14 +69,14 @@ class DefaultApp:
         self.tools = subject_app.tools
 
         self.setup_ui()
-        self._update_ui_for_pipeline()
+        self.update_ui_for_mode()
 
     def _get_ui_features(self):
         """获取学科自定义的 UI 功能开关。"""
         default_features = {
             "show_clean_table_option": True,
             "show_intent_clean_option": True,
-            "show_knowledge_option": False,  # 统一模型下 LLM 自判类型，无需物理分离
+            "show_knowledge_option": True,
             "show_pdf_option": True,
             "show_parallel_option": True,
             "show_source_modes": ["讲义", "试卷"],
@@ -104,74 +93,78 @@ class DefaultApp:
         style = ttk.Style()
         setup_pipeline_styles(style)
 
-        # ===== 管线 + 输出目录（始终可见） =====
-        frame_top = ttk.Frame(self.root, padding=(10, 8, 10, 4))
-        frame_top.pack(fill=tk.X)
-        ttk.Label(frame_top, text="管线：", font=("", 9)).pack(side=tk.LEFT, padx=(0, 4))
-        self.pipeline = PipelineBar(frame_top, on_changed=self._on_pipeline_changed)
+        # ===== 管线 =====
+        frame_pipeline = ttk.Frame(self.root, padding=(10, 8, 10, 4))
+        frame_pipeline.pack(fill=tk.X)
+        ttk.Label(frame_pipeline, text="管线：", font=("", 9)).pack(side=tk.LEFT, padx=(0, 4))
+        self.pipeline = PipelineBar(frame_pipeline, on_changed=self._on_pipeline_changed)
         self.pipeline.pack(side=tk.LEFT)
-        # 输出目录
-        ttk.Label(frame_top, text="  输出：").pack(side=tk.LEFT)
-        ttk.Entry(frame_top, textvariable=self.output_dir, width=36).pack(side=tk.LEFT, padx=4)
-        ttk.Button(frame_top, text="浏览", command=self.select_output_dir).pack(side=tk.LEFT)
 
-        # ===== 导入选项 =====
-        self.frame_import = ttk.LabelFrame(self.root, text="📥 导入选项", padding=10)
-        frame_ct = ttk.Frame(self.frame_import)
+        # ===== 导入选项（仅导入阶段激活时显示） =====
+        self.frame_import_options = ttk.LabelFrame(self.root, text="导入选项", padding=10)
+
+        # 内容类型
+        frame_ct = ttk.Frame(self.frame_import_options)
         frame_ct.pack(fill=tk.X)
         ttk.Label(frame_ct, text="内容类型：").pack(side=tk.LEFT)
-        for val, label in [("讲义", "讲义"), ("试卷", "试卷"), ("自由校对", "自由校对"), ("批注评审", "批注评审")]:
+        for val, label in [("试卷", "试卷"), ("讲义", "讲义"), ("自由校对", "自由校对"), ("批注评审", "批注评审")]:
             ttk.Radiobutton(frame_ct, text=label, variable=self.content_type,
                            value=val, command=self._on_content_type_changed).pack(side=tk.LEFT, padx=4)
 
-        # 讲义选项
-        self.frame_jy_options = ttk.Frame(self.frame_import)
-        if features.get("show_clean_table_option", True):
-            ttk.Checkbutton(self.frame_jy_options, text="清理表格边框",
-                            variable=self.clean_enabled).pack(side=tk.LEFT, padx=4)
-        if features.get("show_knowledge_option", True):
-            ttk.Checkbutton(self.frame_jy_options, text="提取知识文件夹",
-                            variable=self.knowledge_enabled).pack(side=tk.LEFT, padx=4)
+        # 讲义的额外选项
+        self.frame_jy_options = ttk.Frame(self.frame_import_options)
+        if features.get("show_clean_table_option", True) or features.get("show_knowledge_option", True):
+            self.frame_jy_options.pack(fill=tk.X, pady=(6, 0))
+            if features.get("show_clean_table_option", True):
+                ttk.Checkbutton(self.frame_jy_options, text="清理表格边框",
+                                variable=self.clean_enabled).pack(side=tk.LEFT, padx=4)
+            if features.get("show_knowledge_option", True):
+                ttk.Checkbutton(self.frame_jy_options, text="提取知识文件夹",
+                                variable=self.knowledge_enabled).pack(side=tk.LEFT, padx=4)
 
         # 自由校对输入
-        self.frame_free_input = ttk.Frame(self.frame_import)
+        self.frame_free_input = ttk.Frame(self.frame_import_options)
         self.btn_paste_text = ttk.Button(self.frame_free_input, text="📝 粘贴文本", command=self.paste_free_text)
         self.btn_add_images = ttk.Button(self.frame_free_input, text="🖼️ 上传图片", command=self.add_free_images)
         self.btn_add_free_files = ttk.Button(self.frame_free_input, text="📄 上传文件", command=self.add_free_files)
         self.lbl_free_status = ttk.Label(self.frame_free_input, text="未设置文本/图片/文件", foreground="gray")
         self.free_files = []
 
-        # ===== 拆分选项 =====
-        self.frame_split = ttk.LabelFrame(self.root, text="✂️ 拆分选项", padding=10)
-        self.frame_split_mode = ttk.Frame(self.frame_split)
+        # 分割方式
+        self.frame_split_mode = ttk.Frame(self.frame_import_options)
         if features.get("show_split_mode_option", False):
-            self.frame_split_mode.pack(fill=tk.X)
+            self.frame_split_mode.pack(fill=tk.X, pady=(6, 0))
             ttk.Label(self.frame_split_mode, text="分割方式：").pack(side=tk.LEFT)
             self.combo_split = ttk.Combobox(self.frame_split_mode, textvariable=self.split_mode,
-                                            values=list(self.SPLIT_MODE_MAP.keys()),
-                                            state="readonly", width=14)
+                                            values=["rule", "none", "smart", "manual", "knowledge_smart", "knowledge_manual"],
+                                            state="readonly", width=16)
             self.combo_split.pack(side=tk.LEFT, padx=4)
             self.lbl_split_desc = ttk.Label(self.frame_split_mode, text="（普通规则）", foreground="gray")
             self.lbl_split_desc.pack(side=tk.LEFT, padx=4)
             self.combo_split.bind("<<ComboboxSelected>>", self._on_split_mode_changed)
             self._update_split_mode_desc()
 
-        # ===== 校对选项 =====
-        self.frame_proof = ttk.LabelFrame(self.root, text="🔍 校对选项", padding=10)
-        ttk.Checkbutton(self.frame_proof, text="ReAct 模式",
+        # 输出目录
+        self.frame_output_dir = ttk.Frame(self.frame_import_options)
+        self.frame_output_dir.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(self.frame_output_dir, text="输出根目录：").pack(side=tk.LEFT)
+        ttk.Entry(self.frame_output_dir, textvariable=self.output_dir, width=50).pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        ttk.Button(self.frame_output_dir, text="浏览", command=self.select_output_dir).pack(side=tk.LEFT)
+
+        # ===== 校对选项（始终可见） =====
+        self.frame_proof_options = ttk.LabelFrame(self.root, text="校对选项", padding=10)
+        self.frame_proof_options.pack(fill=tk.X, padx=10, pady=(0, 4))
+        ttk.Checkbutton(self.frame_proof_options, text="ReAct 模式",
                         variable=self.react_enabled,
                         command=self._on_react_toggled).pack(side=tk.LEFT, padx=4)
-        if features.get("show_parallel_option", True):
-            ttk.Checkbutton(self.frame_proof, text="并行校对",
-                            variable=self.parallel_enabled).pack(side=tk.LEFT, padx=4)
-            ttk.Entry(self.frame_proof, textvariable=self.parallel_count, width=3).pack(side=tk.LEFT)
-            ttk.Label(self.frame_proof, text="题/批").pack(side=tk.LEFT)
-
-        # ===== 排版选项 =====
-        self.frame_typeset = ttk.LabelFrame(self.root, text="📄 排版选项", padding=10)
         if features.get("show_pdf_option", True):
-            ttk.Checkbutton(self.frame_typeset, text="生成 LaTeX PDF 校对报告",
+            ttk.Checkbutton(self.frame_proof_options, text="生成 LaTeX PDF",
                             variable=self.generate_pdf).pack(side=tk.LEFT, padx=4)
+        if features.get("show_parallel_option", True):
+            ttk.Checkbutton(self.frame_proof_options, text="并行校对",
+                            variable=self.parallel_enabled).pack(side=tk.LEFT, padx=4)
+            ttk.Entry(self.frame_proof_options, textvariable=self.parallel_count, width=3).pack(side=tk.LEFT)
+            ttk.Label(self.frame_proof_options, text="题/批").pack(side=tk.LEFT)
 
         # ===== 文件区域 =====
         self.frame_file_area = ttk.Frame(self.root, padding=(10, 4))
@@ -266,32 +259,29 @@ class DefaultApp:
         self._update_ui_for_pipeline()
 
     def _update_ui_for_pipeline(self):
-        """根据管线开关状态显示/隐藏对应阶段的选项面板。"""
-        features = self._get_ui_features()
+        """根据管线状态显示/隐藏对应 UI 区域（~25 行，替代原来的 95 行）。"""
         import_active = self.pipeline.import_enabled
-        split_active = self.pipeline.split_enabled
-        proof_active = self.pipeline.proof_enabled
-        typeset_active = self.pipeline.typeset_enabled
         content = self.content_type.get()
         is_lecture = (content == "讲义")
         is_free = (content == "自由校对")
+        features = self._get_ui_features()
 
-        # 导入
+        # 导入选项区
         if import_active:
-            self.frame_import.pack(fill=tk.X, padx=10, pady=(0, 2),
-                                   before=self.frame_file_area)
+            self.frame_import_options.pack(fill=tk.X, padx=10, pady=(0, 4),
+                                           before=self.frame_proof_options)
         else:
-            self.frame_import.pack_forget()
+            self.frame_import_options.pack_forget()
 
-        # 讲义选项（导入 + 讲义）
+        # 讲义专属选项
         if import_active and is_lecture:
-            self.frame_jy_options.pack(fill=tk.X, pady=(4, 0))
+            self.frame_jy_options.pack(fill=tk.X, pady=(6, 0))
         else:
             self.frame_jy_options.pack_forget()
 
-        # 自由校对输入（导入 + 自由校对）
+        # 自由校对输入
         if import_active and is_free:
-            self.frame_free_input.pack(fill=tk.X, pady=(4, 0))
+            self.frame_free_input.pack(fill=tk.X, pady=(6, 0))
             self.btn_paste_text.pack(side=tk.LEFT, padx=4)
             self.btn_add_images.pack(side=tk.LEFT, padx=4)
             self.btn_add_free_files.pack(side=tk.LEFT, padx=4)
@@ -299,47 +289,19 @@ class DefaultApp:
         else:
             self.frame_free_input.pack_forget()
 
-        # 拆分
-        if split_active:
-            self.frame_split.pack(fill=tk.X, padx=10, pady=(0, 2),
-                                  before=self.frame_file_area)
-        else:
-            self.frame_split.pack_forget()
-
-        # 校对
-        if proof_active:
-            self.frame_proof.pack(fill=tk.X, padx=10, pady=(0, 2),
-                                  before=self.frame_file_area)
-        else:
-            self.frame_proof.pack_forget()
-
-        # 排版
-        if typeset_active:
-            self.frame_typeset.pack(fill=tk.X, padx=10, pady=(0, 2),
-                                    before=self.frame_file_area)
-        else:
-            self.frame_typeset.pack_forget()
-
         # 文件选择按钮
         self._hide_all_file_buttons()
         if not import_active:
-            if split_active:
-                # 从拆分开始：添加 MD 文件
-                self.btn_add_files.config(text="📄 添加 MD 文件")
-                self.btn_add_files.pack(side=tk.LEFT, padx=4)
-                self.btn_add_folder.pack(side=tk.LEFT, padx=4)
-                self.btn_clear.pack(side=tk.LEFT, padx=4)
-            elif proof_active:
-                self.btn_select_papers.config(text="📂 选择拆分文件夹")
+            # 仅校对 / 仅排版：选择已有目录
+            if self.pipeline.proof_enabled:
                 self.btn_select_papers.pack(side=tk.LEFT, padx=4)
                 self.btn_select_root.pack(side=tk.LEFT, padx=4)
-            elif typeset_active:
+            elif self.pipeline.typeset_enabled:
                 self.btn_select_pdf_folders.pack(side=tk.LEFT, padx=4)
                 self.btn_clear.pack(side=tk.LEFT, padx=4)
         elif is_free:
             self.btn_clear.pack(side=tk.LEFT, padx=4)
         else:
-            self.btn_add_files.config(text=f"📁 {features.get('add_file_title', '添加文件')}")
             self.btn_add_files.pack(side=tk.LEFT, padx=4)
             self.btn_add_folder.pack(side=tk.LEFT, padx=4)
             self.btn_clear.pack(side=tk.LEFT, padx=4)
@@ -352,32 +314,13 @@ class DefaultApp:
             btn.pack_forget()
 
     def _on_action(self):
-        """校验管线组合合法性，然后路由到对应处理方法。"""
-        imp = self.pipeline.import_enabled
-        spl = self.pipeline.split_enabled
-        prf = self.pipeline.proof_enabled
-        typ = self.pipeline.typeset_enabled
-
-        # 校验规则
-        errors = []
-        if imp and prf and not spl:
-            errors.append("「校对」需要先「拆分」——校对器按拆分后的题目目录工作，不能直接校对原始文档。请同时勾选「拆分」。")
-        if imp and typ and not prf:
-            errors.append("「排版」需要校对结果——PDF 报告由校对报告生成。请同时勾选「校对」，或关闭「导入」后选择已有校对目录。")
-        if not imp and not prf and not typ:
-            errors.append("至少需要勾选一个阶段。")
-
-        if errors:
-            messagebox.showwarning("管线组合不合法", "\n\n".join(errors))
-            return
-
         """根据管线状态路由到对应的处理方法。"""
-        if not imp and not spl:
-            if prf:
+        if not self.pipeline.import_enabled and not self.pipeline.split_enabled:
+            if self.pipeline.proof_enabled:
                 self.start_proofread()
-            elif typ:
+            elif self.pipeline.typeset_enabled:
                 self.start_generate_pdf()
-        elif spl and not prf:
+        elif self.pipeline.split_enabled and not self.pipeline.proof_enabled:
             self.start_conversion()  # 仅拆分
         else:
             self.start_full_pipeline()  # 完整流程或仅转换
@@ -404,20 +347,18 @@ class DefaultApp:
 
         ApiDialog(self.root, self.api_config, on_save)
 
-    def _split_mode_key(self):
-        """返回当前分割方式对应的英文 key。"""
-        return self.SPLIT_MODE_MAP.get(self.split_mode.get(), "rule")
-
     def _on_split_mode_changed(self, event=None):
         self._update_split_mode_desc()
 
     def _update_split_mode_desc(self):
         mode = self.split_mode.get()
         desc_map = {
-            "普通规则": "按标题/题号自动拆分",
-            "不拆分": "整份文档作为一个单元",
-            "智能分割": "LLM 自动识别题目边界",
-            "人工标记": "按 ###### 题目标记拆分",
+            "rule": "（普通规则 - 按标题/题号拆分）",
+            "none": "（不拆分 - 整份作为一个单元）",
+            "smart": "（智能分割 - LLM 自动识别题目）",
+            "manual": "（人工标记 - 按 ###### 题目标记拆分）",
+            "knowledge_smart": "（知识智能分割 - LLM 自动识别知识单元）",
+            "knowledge_manual": "（知识人工标记 - 按 ###### 知识标记拆分）",
         }
         desc = desc_map.get(mode, "")
         if hasattr(self, 'lbl_split_desc'):
@@ -506,19 +447,15 @@ class DefaultApp:
             self.output_dir.set(path)
 
     def add_files(self):
-        # 导入关 + 拆分开 → 仅接受 MD 文件（已有 MD，从拆分开始）
-        if not self.pipeline.import_enabled:
-            filetypes = [("Markdown 文件", "*.md"), ("所有文件", "*.*")]
-            title = "选择 Markdown 文件"
-        else:
-            filetypes = getattr(self.subject_app, 'get_supported_file_types',
-                               lambda: [("支持的文件", "*.docx;*.doc;*.md;*.zip"),
-                                        ("Word 文档", "*.docx;*.doc"),
-                                        ("Markdown 文件", "*.md"),
-                                        ("ZIP 压缩包", "*.zip"),
-                                        ("所有文件", "*.*")])()
-            title = "选择文件或压缩包"
-        paths = filedialog.askopenfilenames(title=title, filetypes=filetypes)
+        filetypes = getattr(self.subject_app, 'get_supported_file_types',
+                           lambda: [("支持的文件", "*.docx;*.doc;*.zip"),
+                                    ("Word 文档", "*.docx;*.doc"),
+                                    ("ZIP 压缩包", "*.zip"),
+                                    ("所有文件", "*.*")])()
+        paths = filedialog.askopenfilenames(
+            title="选择文件或压缩包",
+            filetypes=filetypes
+        )
         added = 0
         for p in paths:
             if p.lower().endswith('.zip'):
@@ -652,7 +589,7 @@ class DefaultApp:
             return
         dirs = self.subject_app.collect_paper_dirs(path)
         if not dirs:
-            messagebox.showwarning("提示", "所选目录下没有识别到试卷结构（需包含 单元N/第N题/板块N 子目录）")
+            messagebox.showwarning("提示", "所选目录下没有识别到试卷结构（需包含第N题/板块N 或 知识 子目录）")
             return
         added = 0
         for d in dirs:
@@ -665,15 +602,15 @@ class DefaultApp:
         log(f"📂 已从根目录加载 {added} 套试卷到清单")
 
     def select_pdf_folders(self):
-        paths = filedialog.askdirectory(title="选择拆分文件夹（含 单元N/第N题/板块N + _校对数据.json）")
+        paths = filedialog.askdirectory(title="选择拆分文件夹（含 第N题/板块N + _校对数据.json）")
         if not paths:
             return
         path = paths
         name = os.path.basename(path)
         subdirs = [e for e in os.listdir(path) if os.path.isdir(os.path.join(path, e))]
-        has_questions = any(re.match(r'第\d+题|板块\d+|单元\d+', e) for e in subdirs)
+        has_questions = any(re.match(r'第\d+题|板块\d+', e) for e in subdirs)
         if not has_questions:
-            messagebox.showwarning("提示", f"「{name}」下没有识别到题目目录（单元N/第N题/板块N），请确认选择正确")
+            messagebox.showwarning("提示", f"「{name}」下没有识别到题目目录（第N题/板块N），请确认选择正确")
             return
         entry = (path, name)
         if entry not in self.proofread_list:
@@ -683,7 +620,7 @@ class DefaultApp:
 
     def start_generate_pdf(self):
         if not self.proofread_list:
-            messagebox.showwarning("提示", "请先选择拆分文件夹（含 单元N/第N题/板块N + _校对数据.json）")
+            messagebox.showwarning("提示", "请先选择拆分文件夹（含 第N题/板块N + _校对数据.json）")
             return
         self.task_running = True
         self.task_interrupt = False
@@ -772,7 +709,7 @@ class DefaultApp:
         source = self.content_type.get()
         do_split = self.pipeline.split_enabled
         do_proof = self.pipeline.proof_enabled
-        split_mode = self._split_mode_key()
+        split_mode = self.split_mode.get()
         is_free_mode = (source == "自由校对")
         is_review_mode = (source == "批注评审")
 
@@ -853,7 +790,7 @@ class DefaultApp:
 
             for idx, file_path in enumerate(self.file_list, 1):
                 fname = os.path.basename(file_path)
-                basename = os.path.splitext(fname)[0].strip()
+                basename = os.path.splitext(fname)[0]
                 ext = os.path.splitext(fname)[1].lower()
 
                 target_base = basename
@@ -984,8 +921,18 @@ class DefaultApp:
                     split_ok = False
 
                 if split_ok:
-                    # ADR-0017: section 模式下知识自然成板块，不再需要独立知识提取
-                    log("   📘 section 模式：知识已作为独立板块，跳过旧版知识提取")
+                    # 知识分割模式（knowledge_smart / knowledge_manual）已自动处理
+                    # 知识/题目的分离，无需再走旧版"提取知识文件夹"逻辑
+                    is_knowledge_split = self.split_mode.get() in ("knowledge_smart", "knowledge_manual")
+                    if source == "讲义" and self.knowledge_enabled.get() and not is_knowledge_split:
+                        from core import config_loader
+                        config_split_mode = config_loader.get_lecture_split_mode(self.subject_app.config)
+                        if config_split_mode != "section":
+                            self.subject_app.generate_knowledge(raw_md, split_root, basename)
+                        else:
+                            log("   📘 section 模式：跳过知识提取（版块即单元）")
+                    elif is_knowledge_split:
+                        log("   📘 知识分割模式：知识/题目已自动分离，跳过旧版知识提取")
 
                     converted_dir = os.path.join(split_root, basename)
                     converted_dirs.append(converted_dir)
@@ -1040,8 +987,7 @@ class DefaultApp:
     def interrupt_task(self):
         if self.task_running:
             self.task_interrupt = True
-            self._interrupt_event.set()  # 通知所有线程中断
-            log("===== 已触发中断（取消进行中的请求） =====")
+            log("===== 已触发中断 =====")
 
     def _proofread_thread(self):
         api_url = self.api_config.get("api_url", "")
@@ -1051,14 +997,6 @@ class DefaultApp:
         out_root = self.output_dir.get().strip()
         if not out_root:
             out_root = DEFAULT_OUTPUT
-        # 重置中断信号
-        self._interrupt_event.clear()
-        ctx = SessionContext(
-            api_url=api_url, api_key=api_key, model=model,
-            max_loops=self.subject_app.get_max_tool_loops(),
-            output_dir=out_root,
-            interrupt_event=self._interrupt_event,
-        )
         report_root = os.path.join(out_root, "校对报告")
         os.makedirs(report_root, exist_ok=True)
 
@@ -1070,35 +1008,28 @@ class DefaultApp:
                 paper_results = {}
 
                 question_dirs = []
+                knowledge_dir = None
                 for item in os.listdir(paper_path):
                     full = os.path.join(paper_path, item)
                     if not os.path.isdir(full):
                         continue
-                    if item.startswith("单元"):
-                        # ADR-0017: 统一命名为 单元N
-                        question_dirs.append(full)
-                    elif "题" in item or item.startswith("板块"):
-                        # 向后兼容旧命名
+                    if "题" in item or item.startswith("板块"):
                         question_dirs.append(full)
                     elif item == "知识":
-                        # 向后兼容旧知识目录
-                        question_dirs.append(full)
+                        knowledge_dir = full
 
                 question_dirs.sort(key=lambda x: (
                     int(re.findall(r'\d+', os.path.basename(x))[0])
                     if re.findall(r'\d+', os.path.basename(x)) else 9999,
                     os.path.basename(x)))
 
-                all_dirs = question_dirs
+                all_dirs = question_dirs[:]
+                if knowledge_dir is not None:
+                    all_dirs.append(knowledge_dir)
 
                 skipped_dirs = []
                 remaining_dirs = []
                 for q_dir in all_dirs:
-                    # ADR-0017 决策9：跳过带 .skip_proofread 标记的导航单元
-                    if os.path.exists(os.path.join(q_dir, ".skip_proofread")):
-                        log(f"   ⏭️ {os.path.basename(q_dir)} 标记为跳过校对")
-                        skipped_dirs.append(q_dir)
-                        continue
                     md_path = os.path.join(q_dir, "_校对报告.md")
                     json_path = os.path.join(q_dir, "_校对数据.json")
                     if os.path.exists(md_path) and os.path.exists(json_path):
@@ -1117,13 +1048,6 @@ class DefaultApp:
                     log(f"   ⏭️  跳过已校对：{len(skipped_dirs)} 题")
 
                 all_dirs = remaining_dirs
-
-                # Session 持久化：记录校对进度，支持中断恢复
-                session_mgr = SessionManager(Path(out_root) / "sessions")
-                q_list = [{"name": os.path.basename(d), "dir": d} for d in all_dirs]
-                session_id = session_mgr.start_session(
-                    f"{self.subject_app.name} - {paper_name}", q_list)
-                log(f"   📝 Session: {session_id}")
 
                 generate_pdf = self.generate_pdf.get()
                 use_parallel = self.parallel_enabled.get()
@@ -1147,33 +1071,27 @@ class DefaultApp:
                             future_map = {}
                             for q_dir in batch:
                                 q_name = os.path.basename(q_dir)
-                                log(f"  ⏳ 提交单元：{q_name}")
+                                is_knowledge = (q_name == "知识")
+                                task_type = "知识" if is_knowledge else "题目"
+                                log(f"  ⏳ 提交{task_type}：{q_name}")
                                 future = executor.submit(
                                     self.subject_app.proofread_one,
-                                    ctx, q_dir, q_name, generate_pdf, content
+                                    api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, content
                                 )
-                                future_map[future] = (q_dir, q_name)
+                                future_map[future] = (q_dir, q_name, is_knowledge)
 
                             for future in as_completed(future_map):
-                                if self.task_interrupt:
-                                    # 取消所有未完成的 future
-                                    for f in future_map:
-                                        if not f.done():
-                                            f.cancel()
-                                    break
-                                q_dir, q_name = future_map[future]
+                                q_dir, q_name, is_knowledge = future_map[future]
+                                task_type = "知识" if is_knowledge else "题目"
                                 try:
                                     data = future.result()
                                     if data["success"]:
                                         self.proofread_result[q_dir] = data["result"]
                                         paper_results[q_dir] = data["result"]
-                                        session_mgr.mark_completed(q_name)
-                                        log(f"   ✅ {q_name} 校对完成")
+                                        log(f"   ✅ {q_name} {task_type}校对完成")
                                     else:
-                                        session_mgr.mark_failed(q_name, data.get('error', ''))
-                                        log(f"   ❌ {q_name} 校对失败：{data['error']}")
+                                        log(f"   ❌ {q_name} {task_type}校对失败：{data['error']}")
                                 except Exception as e:
-                                    session_mgr.mark_failed(q_name, str(e))
                                     log(f"   ❌ {q_name} 异常：{e}")
 
                             remaining = len(all_dirs) - (batch_start + len(batch))
@@ -1184,17 +1102,17 @@ class DefaultApp:
                         if self.task_interrupt:
                             break
                         q_name = os.path.basename(q_dir)
-                        log(f"校对单元：{q_name}")
+                        is_knowledge = (q_name == "知识")
+                        task_type = "知识" if is_knowledge else "题目"
+                        log(f"校对{task_type}：{q_name}")
                         data = self.subject_app.proofread_one(
-                            ctx, q_dir, q_name, generate_pdf, content
+                            api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode
                         )
                         if data["success"]:
                             self.proofread_result[q_dir] = data["result"]
                             paper_results[q_dir] = data["result"]
-                            session_mgr.mark_completed(q_name)
                             log(f"   ✅ {q_name} 校对完成")
                         else:
-                            session_mgr.mark_failed(q_name, data.get('error', ''))
                             log(f"   ❌ {q_name} 校对失败：{data['error']}")
 
                 if not self.task_interrupt and paper_results:
