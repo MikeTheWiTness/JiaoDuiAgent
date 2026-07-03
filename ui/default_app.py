@@ -93,47 +93,48 @@ class DefaultApp:
         style = ttk.Style()
         setup_pipeline_styles(style)
 
-        # ===== 管线 =====
-        frame_pipeline = ttk.Frame(self.root, padding=(10, 8, 10, 4))
-        frame_pipeline.pack(fill=tk.X)
-        ttk.Label(frame_pipeline, text="管线：", font=("", 9)).pack(side=tk.LEFT, padx=(0, 4))
-        self.pipeline = PipelineBar(frame_pipeline, on_changed=self._on_pipeline_changed)
+        # ===== 管线 + 输出目录（始终可见） =====
+        frame_top = ttk.Frame(self.root, padding=(10, 8, 10, 4))
+        frame_top.pack(fill=tk.X)
+        ttk.Label(frame_top, text="管线：", font=("", 9)).pack(side=tk.LEFT, padx=(0, 4))
+        self.pipeline = PipelineBar(frame_top, on_changed=self._on_pipeline_changed)
         self.pipeline.pack(side=tk.LEFT)
+        # 输出目录
+        ttk.Label(frame_top, text="  输出：").pack(side=tk.LEFT)
+        ttk.Entry(frame_top, textvariable=self.output_dir, width=36).pack(side=tk.LEFT, padx=4)
+        ttk.Button(frame_top, text="浏览", command=self.select_output_dir).pack(side=tk.LEFT)
 
-        # ===== 导入选项（仅导入阶段激活时显示） =====
-        self.frame_import_options = ttk.LabelFrame(self.root, text="导入选项", padding=10)
-
-        # 内容类型
-        frame_ct = ttk.Frame(self.frame_import_options)
+        # ===== 导入选项 =====
+        self.frame_import = ttk.LabelFrame(self.root, text="📥 导入选项", padding=10)
+        frame_ct = ttk.Frame(self.frame_import)
         frame_ct.pack(fill=tk.X)
         ttk.Label(frame_ct, text="内容类型：").pack(side=tk.LEFT)
         for val, label in [("试卷", "试卷"), ("讲义", "讲义"), ("自由校对", "自由校对"), ("批注评审", "批注评审")]:
             ttk.Radiobutton(frame_ct, text=label, variable=self.content_type,
                            value=val, command=self._on_content_type_changed).pack(side=tk.LEFT, padx=4)
 
-        # 讲义的额外选项
-        self.frame_jy_options = ttk.Frame(self.frame_import_options)
-        if features.get("show_clean_table_option", True) or features.get("show_knowledge_option", True):
-            self.frame_jy_options.pack(fill=tk.X, pady=(6, 0))
-            if features.get("show_clean_table_option", True):
-                ttk.Checkbutton(self.frame_jy_options, text="清理表格边框",
-                                variable=self.clean_enabled).pack(side=tk.LEFT, padx=4)
-            if features.get("show_knowledge_option", True):
-                ttk.Checkbutton(self.frame_jy_options, text="提取知识文件夹",
-                                variable=self.knowledge_enabled).pack(side=tk.LEFT, padx=4)
+        # 讲义选项
+        self.frame_jy_options = ttk.Frame(self.frame_import)
+        if features.get("show_clean_table_option", True):
+            ttk.Checkbutton(self.frame_jy_options, text="清理表格边框",
+                            variable=self.clean_enabled).pack(side=tk.LEFT, padx=4)
+        if features.get("show_knowledge_option", True):
+            ttk.Checkbutton(self.frame_jy_options, text="提取知识文件夹",
+                            variable=self.knowledge_enabled).pack(side=tk.LEFT, padx=4)
 
         # 自由校对输入
-        self.frame_free_input = ttk.Frame(self.frame_import_options)
+        self.frame_free_input = ttk.Frame(self.frame_import)
         self.btn_paste_text = ttk.Button(self.frame_free_input, text="📝 粘贴文本", command=self.paste_free_text)
         self.btn_add_images = ttk.Button(self.frame_free_input, text="🖼️ 上传图片", command=self.add_free_images)
         self.btn_add_free_files = ttk.Button(self.frame_free_input, text="📄 上传文件", command=self.add_free_files)
         self.lbl_free_status = ttk.Label(self.frame_free_input, text="未设置文本/图片/文件", foreground="gray")
         self.free_files = []
 
-        # 分割方式
-        self.frame_split_mode = ttk.Frame(self.frame_import_options)
+        # ===== 拆分选项 =====
+        self.frame_split = ttk.LabelFrame(self.root, text="✂️ 拆分选项", padding=10)
+        self.frame_split_mode = ttk.Frame(self.frame_split)
         if features.get("show_split_mode_option", False):
-            self.frame_split_mode.pack(fill=tk.X, pady=(6, 0))
+            self.frame_split_mode.pack(fill=tk.X)
             ttk.Label(self.frame_split_mode, text="分割方式：").pack(side=tk.LEFT)
             self.combo_split = ttk.Combobox(self.frame_split_mode, textvariable=self.split_mode,
                                             values=["rule", "none", "smart", "manual", "knowledge_smart", "knowledge_manual"],
@@ -144,27 +145,22 @@ class DefaultApp:
             self.combo_split.bind("<<ComboboxSelected>>", self._on_split_mode_changed)
             self._update_split_mode_desc()
 
-        # 输出目录
-        self.frame_output_dir = ttk.Frame(self.frame_import_options)
-        self.frame_output_dir.pack(fill=tk.X, pady=(6, 0))
-        ttk.Label(self.frame_output_dir, text="输出根目录：").pack(side=tk.LEFT)
-        ttk.Entry(self.frame_output_dir, textvariable=self.output_dir, width=50).pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
-        ttk.Button(self.frame_output_dir, text="浏览", command=self.select_output_dir).pack(side=tk.LEFT)
-
-        # ===== 校对选项（始终可见） =====
-        self.frame_proof_options = ttk.LabelFrame(self.root, text="校对选项", padding=10)
-        self.frame_proof_options.pack(fill=tk.X, padx=10, pady=(0, 4))
-        ttk.Checkbutton(self.frame_proof_options, text="ReAct 模式",
+        # ===== 校对选项 =====
+        self.frame_proof = ttk.LabelFrame(self.root, text="🔍 校对选项", padding=10)
+        ttk.Checkbutton(self.frame_proof, text="ReAct 模式",
                         variable=self.react_enabled,
                         command=self._on_react_toggled).pack(side=tk.LEFT, padx=4)
-        if features.get("show_pdf_option", True):
-            ttk.Checkbutton(self.frame_proof_options, text="生成 LaTeX PDF",
-                            variable=self.generate_pdf).pack(side=tk.LEFT, padx=4)
         if features.get("show_parallel_option", True):
-            ttk.Checkbutton(self.frame_proof_options, text="并行校对",
+            ttk.Checkbutton(self.frame_proof, text="并行校对",
                             variable=self.parallel_enabled).pack(side=tk.LEFT, padx=4)
-            ttk.Entry(self.frame_proof_options, textvariable=self.parallel_count, width=3).pack(side=tk.LEFT)
-            ttk.Label(self.frame_proof_options, text="题/批").pack(side=tk.LEFT)
+            ttk.Entry(self.frame_proof, textvariable=self.parallel_count, width=3).pack(side=tk.LEFT)
+            ttk.Label(self.frame_proof, text="题/批").pack(side=tk.LEFT)
+
+        # ===== 排版选项 =====
+        self.frame_typeset = ttk.LabelFrame(self.root, text="📄 排版选项", padding=10)
+        if features.get("show_pdf_option", True):
+            ttk.Checkbutton(self.frame_typeset, text="生成 LaTeX PDF 校对报告",
+                            variable=self.generate_pdf).pack(side=tk.LEFT, padx=4)
 
         # ===== 文件区域 =====
         self.frame_file_area = ttk.Frame(self.root, padding=(10, 4))
@@ -259,29 +255,31 @@ class DefaultApp:
         self._update_ui_for_pipeline()
 
     def _update_ui_for_pipeline(self):
-        """根据管线状态显示/隐藏对应 UI 区域（~25 行，替代原来的 95 行）。"""
+        """根据管线开关状态显示/隐藏对应阶段的选项面板。"""
         import_active = self.pipeline.import_enabled
+        split_active = self.pipeline.split_enabled
+        proof_active = self.pipeline.proof_enabled
+        typeset_active = self.pipeline.typeset_enabled
         content = self.content_type.get()
         is_lecture = (content == "讲义")
         is_free = (content == "自由校对")
-        features = self._get_ui_features()
 
-        # 导入选项区
+        # 导入
         if import_active:
-            self.frame_import_options.pack(fill=tk.X, padx=10, pady=(0, 4),
-                                           before=self.frame_proof_options)
+            self.frame_import.pack(fill=tk.X, padx=10, pady=(0, 2),
+                                   before=self.frame_file_area)
         else:
-            self.frame_import_options.pack_forget()
+            self.frame_import.pack_forget()
 
-        # 讲义专属选项
+        # 讲义选项（导入 + 讲义）
         if import_active and is_lecture:
-            self.frame_jy_options.pack(fill=tk.X, pady=(6, 0))
+            self.frame_jy_options.pack(fill=tk.X, pady=(4, 0))
         else:
             self.frame_jy_options.pack_forget()
 
-        # 自由校对输入
+        # 自由校对输入（导入 + 自由校对）
         if import_active and is_free:
-            self.frame_free_input.pack(fill=tk.X, pady=(6, 0))
+            self.frame_free_input.pack(fill=tk.X, pady=(4, 0))
             self.btn_paste_text.pack(side=tk.LEFT, padx=4)
             self.btn_add_images.pack(side=tk.LEFT, padx=4)
             self.btn_add_free_files.pack(side=tk.LEFT, padx=4)
@@ -289,14 +287,34 @@ class DefaultApp:
         else:
             self.frame_free_input.pack_forget()
 
+        # 拆分
+        if split_active:
+            self.frame_split.pack(fill=tk.X, padx=10, pady=(0, 2),
+                                  before=self.frame_file_area)
+        else:
+            self.frame_split.pack_forget()
+
+        # 校对
+        if proof_active:
+            self.frame_proof.pack(fill=tk.X, padx=10, pady=(0, 2),
+                                  before=self.frame_file_area)
+        else:
+            self.frame_proof.pack_forget()
+
+        # 排版
+        if typeset_active:
+            self.frame_typeset.pack(fill=tk.X, padx=10, pady=(0, 2),
+                                    before=self.frame_file_area)
+        else:
+            self.frame_typeset.pack_forget()
+
         # 文件选择按钮
         self._hide_all_file_buttons()
         if not import_active:
-            # 仅校对 / 仅排版：选择已有目录
-            if self.pipeline.proof_enabled:
+            if proof_active:
                 self.btn_select_papers.pack(side=tk.LEFT, padx=4)
                 self.btn_select_root.pack(side=tk.LEFT, padx=4)
-            elif self.pipeline.typeset_enabled:
+            elif typeset_active:
                 self.btn_select_pdf_folders.pack(side=tk.LEFT, padx=4)
                 self.btn_clear.pack(side=tk.LEFT, padx=4)
         elif is_free:
