@@ -101,7 +101,7 @@ class TestBaseSubject:
         """get_ui_features 应返回标准字典。"""
         app = _MinimalSubject(subject_dir)
         features = app.get_ui_features()
-        assert features["show_knowledge_option"] is True
+        assert features["show_knowledge_option"] is False  # 统一模型下默认隐藏
         assert features["show_pdf_option"] is True
         assert features["show_parallel_option"] is True
         assert "试卷" in features["show_source_modes"]
