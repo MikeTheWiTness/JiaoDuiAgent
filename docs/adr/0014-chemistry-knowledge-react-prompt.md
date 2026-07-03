@@ -1,6 +1,6 @@
 # ADR 0014：高中化学 ReAct 知识校对场景独立 prompt
 
-**状态**：提议中
+**状态**：已实现
 **日期**：2026-07-02
 **决策者**：MikeTheWiTness
 **相关 ADR**：[[ADR 0005 ReAct 机制核心架构]](0005-react-mechanism-architecture.md)、[[ADR 0006 物理 ReAct 学科化重构]](0006-physics-react-subject-specialization.md)
