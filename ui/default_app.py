@@ -69,7 +69,7 @@ class DefaultApp:
         self.tools = subject_app.tools
 
         self.setup_ui()
-        self.update_ui_for_mode()
+        self._update_ui_for_pipeline()
 
     def _get_ui_features(self):
         """获取学科自定义的 UI 功能开关。"""
