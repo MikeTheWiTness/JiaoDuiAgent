@@ -1,11 +1,73 @@
 import os, re, base64, shutil
 from pathlib import Path
 from core.parsing import save_proofread_json
-from core.api_client import call_api, MAX_FILE_SIZE
+from core.api_client import call_api, MAX_FILE_SIZE, StopReason
 from core.logging_utils import log
 from core.format_enforcement import _enforce_format, enforce_and_fix
 from core import config_loader
 from shared.image_utils import copy_md_images
+
+
+# ============================================================
+# 题目识别标志（用于【出题意图】清理等场景）
+# 后期只需增删此列表，所有引用处自动更新。
+# 格式说明：标志会在粗体包裹下匹配（即 **标志**），
+# 因此只需写标志内容的正则，无需包含 ** 包裹符。
+# ============================================================
+DEFAULT_INTENT_PROBLEM_MARKERS = [
+    # 题目编号
+    r'小试牛刀\d+',
+    r'例\d+',
+    r'练\d+',
+    r'变式\d+',
+    r'变式\d+_例\d+',
+    # 分层/班型标签（含数字后缀）
+    r'一本班\d+',
+    r'双一流班\d+',
+    r'清北班\d+',
+    r'A班\d+',
+    r'A\+班\d+',
+    r'S班\d+',
+    # 分层/班型标签（无数字后缀）
+    r'一本班',
+    r'一本班例题',
+    r'一本班备用',
+    r'双一流班',
+    r'双一流班例题',
+    r'双一流班备用',
+    r'清北班',
+    r'清北班例题',
+    r'清北班备用',
+    r'A班',
+    r'A\+班',
+    r'S班',
+    # 教师版
+    r'教师版',
+    r'一本班教师版',
+    r'双一流班教师版',
+    r'清北班教师版',
+]
+
+
+def get_intent_problem_markers(config=None):
+    """获取完整的题目识别标志列表：通用常量 + 学科 config 覆盖。
+
+    合并策略：以 DEFAULT_INTENT_PROBLEM_MARKERS 为基础，
+    追加 config["lecture_wrapped_patterns"] 中独有的标志（去重）。
+
+    Args:
+        config: 学科配置 dict（可选），包含 lecture_wrapped_patterns 字段
+
+    Returns:
+        list[str]: 去重后的正则模式列表
+    """
+    markers = list(DEFAULT_INTENT_PROBLEM_MARKERS)
+    if config:
+        wrapped = config.get("lecture_wrapped_patterns", [])
+        for pat in wrapped:
+            if pat not in markers:
+                markers.append(pat)
+    return markers
 
 
 def _strip_search_from_prompt(prompt: str) -> str:
@@ -118,8 +180,14 @@ def comprehensive_clean(md_content):
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-        if re.match(r'^[\|\+\-=\:\.\s\t]*$', stripped) and len(stripped) > 2:
-            i += 1; continue
+        # 去除可能的序号前缀（如 Pandoc 转义的 "1\." 或普通 "1."）
+        # 也处理嵌套表格中的前缀：| | 1\.  | +---+
+        core = re.sub(r'^[\|\s]*\d+\\?\.\s*[\|\s]*', '', stripped)
+        # 纯表格字符行（包含 |+-=:. 和空白），长度大于2
+        if re.match(r'^[\|\+\-=\:\.\s\t]*$', core) and len(core) > 2:
+            # 排除纯省略号行（只有 . 和空白），其余全部跳过
+            if not re.match(r'^[\.\s]+$', core):
+                i += 1; continue
         line = re.sub(r'\|', '', line)
         if '答案:' in line:
             line = re.sub(r'[-=]+', '', line)
@@ -211,7 +279,54 @@ def clean_md_file(md_file):
         return False
 
 
+def clean_intent_markers(md_content, problem_markers=None):
+    """清理【出题意图】段落。
+
+    删除【出题意图】到下一个题目编号之间的内容，
+    包括【出题意图】本身，保留题目编号及其后的内容。
+
+    Args:
+        md_content: Markdown 文本
+        problem_markers: 题目编号正则列表（不含 ** 包裹符），
+                         默认使用 DEFAULT_INTENT_PROBLEM_MARKERS。
+                         后期增删该常量即可自动更新所有引用处。
+    """
+    if problem_markers is None:
+        problem_markers = DEFAULT_INTENT_PROBLEM_MARKERS
+
+    # 构建题目编号正则：**标志1**|**标志2**|...
+    # 标签不要求前导 \n 或 ^，直接在 ** 处匹配即可；
+    # 标签后可跟任意内容（如来源信息 "（2026·山东青岛模拟）"），
+    # 对齐 lecture_wrapped_patterns 的 ^\*\*{pattern}\*\*.*$ 规则。
+    marker_union = '|'.join(problem_markers)
+    pattern = r'^【出题意图】.*?(?=\*\*(?:' + marker_union + r')\*\*)'
+    cleaned = re.sub(pattern, '', md_content, flags=re.DOTALL | re.MULTILINE)
+    # 清理可能产生的多余空行
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
+
+def clean_intent_md_file(md_file, problem_markers=None):
+    """对 md 文件执行出题意图清理。
+
+    Args:
+        md_file: Markdown 文件路径
+        problem_markers: 题目编号正则列表，默认使用 DEFAULT_INTENT_PROBLEM_MARKERS
+    """
+    try:
+        with open(md_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        cleaned = clean_intent_markers(content, problem_markers=problem_markers)
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write(cleaned)
+        return True
+    except Exception as e:
+        log(f"   出题意图清理失败: {e}")
+        return False
+
+
 def default_split_lecture(md_file, output_root, base_name, do_clean, config):
+    base_name = base_name.strip()  # 防御：文件名可能带首尾空格，Windows 路径不支持
     with open(md_file, 'r', encoding='utf-8') as f:
         md_content = f.read()
 
@@ -446,6 +561,7 @@ def parse_end_answers(answer_lines):
 
 
 def default_split_exam(md_file, output_root, base_name, config):
+    base_name = base_name.strip()  # 防御：文件名可能带首尾空格，Windows 路径不支持
     with open(md_file, 'r', encoding='utf-8') as f:
         md_content = f.read()
     lines = md_content.splitlines()
@@ -573,7 +689,7 @@ def _format_usage_summary(usage: dict) -> str:
     return "".join(lines)
 
 
-def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None, react_mode=False):
+def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None, react_mode=False, reasoning_effort="high"):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
     if os.path.exists(target_md):
@@ -640,7 +756,7 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
 
         result = call_api(api_url, api_key, model, md_content, images_b64,
                           q_name, prompt, tools=tools, max_loops=max_loops,
-                          output_dir=q_dir)
+                          output_dir=q_dir, reasoning_effort=reasoning_effort)
         res = result["content"]
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")
@@ -650,9 +766,16 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
         if reasoning:
             log(f"   💭 模型思考: {reasoning[:150].replace(chr(10), ' ')}...")
     except Exception as e:
-        return {"success": False, "result": "", "error": str(e), "tool_calls": []}
+        import traceback
+        tb = traceback.format_exc()
+        log(f"   ❌ default_proofread_one 未预期异常: {e}\n{tb}")
+        return {
+            "success": False, "result": "",
+            "error": f"校对流程异常（{type(e).__name__}）：{e}",
+            "tool_calls": []
+        }
 
-    if "API调用失败" not in res:
+    if result.get("stop_reason") != StopReason.ERROR:
         # ---- 格式审查 + bash 直接编辑文件修正 ----
         format_ok, format_issues = _enforce_format(res)
         if not format_ok and generate_pdf:
@@ -725,7 +848,9 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 pass
         return {"success": True, "result": res, "tool_calls": tool_calls, "error": None}
     else:
-        err_detail = res.replace("**API调用失败：**\n", "").strip()[:200]
+        # stop_reason == ERROR：提取完整错误信息（不截断，保留排查细节）
+        err_detail = res.strip()
+        log(f"   ❌ API 调用失败（stop_reason=ERROR），错误摘要: {err_detail[:200]}")
         return {"success": False, "result": "", "error": err_detail, "tool_calls": []}
 
 
