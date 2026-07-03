@@ -689,7 +689,7 @@ def _format_usage_summary(usage: dict) -> str:
     return "".join(lines)
 
 
-def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None, react_mode=False, reasoning_effort="high"):
+def default_proofread_one(ctx, q_dir, q_name, is_knowledge, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
     if os.path.exists(target_md):
@@ -714,7 +714,7 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
             log("   📖 前置参考已注入（已移除联网工具，仅依靠前置搜索结果）")
         else:
             tools = []
-            max_loops = 0
+            ctx.max_loops = 0
             log("   🔒 前置参考已注入，关闭联网搜索")
 
     images_b64 = []
@@ -745,18 +745,17 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
         if react_mode:
             try:
                 from shared.physics_tools import set_physics_api_config
-                set_physics_api_config(api_url, api_key, model, output_dir=q_dir)
+                set_physics_api_config(ctx.api_url, ctx.api_key, model, output_dir=q_dir)
             except ImportError:
                 pass  # 非物理学科无 physics_tools 模块，忽略
             try:
                 from shared.chemistry_tools import set_chemistry_api_config
-                set_chemistry_api_config(api_url, api_key, model, output_dir=q_dir)
+                set_chemistry_api_config(ctx.api_url, ctx.api_key, model, output_dir=q_dir)
             except ImportError:
                 pass  # 非化学学科无 chemistry_tools 模块，忽略
 
-        result = call_api(api_url, api_key, model, md_content, images_b64,
-                          q_name, prompt, tools=tools, max_loops=max_loops,
-                          output_dir=q_dir, reasoning_effort=reasoning_effort)
+        result = call_api(ctx, md_content, images_b64,
+                          q_name, prompt, tools=tools)
         res = result["content"]
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")
@@ -788,7 +787,7 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
             except Exception:
                 pass
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}")
-            res, was_fixed, _ = enforce_and_fix(md_path, res, api_url, api_key, model)
+            res, was_fixed, _ = enforce_and_fix(md_path, res, ctx.api_url, ctx.api_key, ctx.model)
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
 

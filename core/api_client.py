@@ -431,22 +431,23 @@ def _save_conversation_log_full(messages, output_dir, q_title, initial_header):
         pass  # 完整的日志保存失败不应影响主流程
 
 
-def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
-             tools=None, max_loops=20, max_tokens=16384, output_dir=None,
-             reasoning_effort="high"):
+def call_api(ctx, md_text, images, q_title, system_prompt,
+             tools=None):
+    """校对 API 调用入口。ctx 为 SessionContext 实例。"""
     err_msg = ""
-    proof_err = None  # 在 except 块中赋值
+    proof_err = None
     tool_calls_log = []
     tool_instances = tools or []
     openai_tools = [tool_to_openai(t) for t in tool_instances] if tool_instances else None
     # 自动检测模型是否支持 reasoning_effort
-    if reasoning_effort and not _model_supports_reasoning_effort(model):
-        log(f"   ⚠️ 模型 {model} 不支持 reasoning_effort 参数，已自动跳过")
+    reasoning_effort = ctx.reasoning_effort
+    if reasoning_effort and not _model_supports_reasoning_effort(ctx.model):
+        log(f"   ⚠️ 模型 {ctx.model} 不支持 reasoning_effort 参数，已自动跳过")
         reasoning_effort = None
     # 自动检测模型是否支持图片（纯文本模型发送 image_url 会触发 400）
     effective_images = images
-    if images and not _model_supports_images(model):
-        log(f"   ⚠️ 模型 {model} 是纯文本模型，不支持图片输入，已自动跳过 {len(images)} 张图片")
+    if images and not _model_supports_images(ctx.model):
+        log(f"   ⚠️ 模型 {ctx.model} 是纯文本模型，不支持图片输入，已自动跳过 {len(images)} 张图片")
         effective_images = []
     else:
         effective_images = images
@@ -458,7 +459,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
     # 连续相同类型错误计数（熔断器）
     consecutive_errors = 0
     last_error_type = None
-    chat_url = api_url.rstrip("/")
+    chat_url = ctx.api_url.rstrip("/")
     if not chat_url.endswith("/chat/completions"):
         chat_url += "/chat/completions"
 
@@ -475,9 +476,9 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                 ]}
             ]
             payload = {
-                "model": model, "messages": messages,
+                "model": ctx.model, "messages": messages,
                 "temperature": 0.3,
-                "max_tokens": max_tokens
+                "max_tokens": ctx.max_tokens
             }
             if reasoning_effort:
                 payload["reasoning_effort"] = reasoning_effort
@@ -486,14 +487,14 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
 
             # 记录 payload 大小日志
             _payload_size = len(json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8'))
-            log(f"   📤 发送请求 → 模型: {model}, 系统提示词: {len(system_prompt)}字符, "
+            log(f"   📤 发送请求 → 模型: {ctx.model}, 系统提示词: {len(system_prompt)}字符, "
                 f"文本: {len(md_text)}字符, 图片: {len(images)}张, "
                 f"工具: {len(openai_tools) if openai_tools else 0}个, "
                 f"payload: {_payload_size//1024}KB")
 
             initial_header = _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools)
 
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
             resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
             resp.raise_for_status()
             _accumulate_usage(total_usage, _extract_usage(resp.json()))
@@ -501,17 +502,17 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
 
             loop = 0
             while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
-                if loop >= max_loops:
-                    log(f"   ⚠️ 工具调用超限（{max_loops}轮），压缩历史 + 去工具...")
+                if loop >= ctx.max_loops:
+                    log(f"   ⚠️ 工具调用超限（{ctx.max_loops}轮），压缩历史 + 去工具...")
                     # 保存压缩前的完整日志（含工具调用）
                     _save_conversation_log_full(
-                        messages, output_dir, q_title, initial_header)
+                        messages, ctx.output_dir, q_title, initial_header)
                     messages = _compress_history(messages, len(tool_calls_log))
                     openai_tools = None  # 关闭工具调用
                     payload = {
-                        "model": model, "messages": messages,
+                        "model": ctx.model, "messages": messages,
                         "temperature": 0.3,
-                        "max_tokens": max_tokens
+                        "max_tokens": ctx.max_tokens
                     }
                     if reasoning_effort:
                         payload["reasoning_effort"] = reasoning_effort
@@ -522,7 +523,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                     reasoning = choice.get("message", {}).get("reasoning_content", "")
                     content = choice["message"]["content"]
                     messages.append({"role": "assistant", "content": content})
-                    _save_conversation_log(messages, output_dir, q_title, initial_header)
+                    _save_conversation_log(messages, ctx.output_dir, q_title, initial_header)
                     return {
                         "content": content,
                         "tool_calls_log": tool_calls_log,
@@ -575,7 +576,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
                         log(f"   ⚠️ 连续 {empty_streak} 轮空结果，压缩历史 + 去工具...")
                         # 保存压缩前的完整日志（含工具调用），_full 后缀避免被后续覆盖
                         _save_conversation_log_full(
-                            messages, output_dir, q_title, initial_header)
+                            messages, ctx.output_dir, q_title, initial_header)
                         messages = _compress_history(messages, len(tool_calls_log))
                         openai_tools = None
                         payload["tools"] = None
@@ -605,7 +606,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
             content = choice["message"]["content"]
             if content:
                 messages.append({"role": "assistant", "content": content})
-            _save_conversation_log(messages, output_dir, q_title, initial_header)
+            _save_conversation_log(messages, ctx.output_dir, q_title, initial_header)
             return {
                 "content": content,
                 "tool_calls_log": tool_calls_log,
@@ -661,8 +662,8 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
     # 所有重试耗尽或不可重试 → 构建详细的错误报告
     # ================================================================
     error_context = (
-        f"- 模型：`{model}`\n"
-        f"- API 端点：`{api_url.rstrip('/')}`\n"
+        f"- 模型：`{ctx.model}`\n"
+        f"- API 端点：`{ctx.api_url.rstrip('/')}`\n"
         f"- 题目：{q_title}"
     )
 
@@ -763,7 +764,7 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
 
     # 保存错误日志到文件
     _save_conversation_log(
-        [], output_dir, q_title,
+        [], ctx.output_dir, q_title,
         f"# API 请求记录 — {q_title}\n\n"
         f"## 上下文\n{error_context}\n\n"
         f"## 错误报告\n{error_summary}\n"
@@ -780,29 +781,15 @@ def call_api(api_url, api_key, model, md_text, images, q_title, system_prompt,
 
 
 def call_api_continue(
-    api_url: str,
-    api_key: str,
-    model: str,
+    ctx,
     existing_messages: list,
     follow_up_message: str,
-    max_tokens: int = 16384,
 ) -> dict:
     """在已有对话历史上续接一条用户消息，发起单次请求。
 
     不启动工具循环——仅获取 LLM 的直接回复。用于格式审查重试、LLM 格式修正等场景。
-
-    Args:
-        api_url: API 端点
-        api_key: API 密钥
-        model: 模型名称
-        existing_messages: 已有的完整对话历史
-        follow_up_message: 追加的用户消息内容
-        max_tokens: 最大输出 token 数
-
-    Returns:
-        dict: {"content": str, "reasoning": str}
     """
-    chat_url = api_url.rstrip("/")
+    chat_url = ctx.api_url.rstrip("/")
     if not chat_url.endswith("/chat/completions"):
         chat_url += "/chat/completions"
 
@@ -810,13 +797,13 @@ def call_api_continue(
     messages.append({"role": "user", "content": follow_up_message})
 
     payload = {
-        "model": model,
+        "model": ctx.model,
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": max_tokens,
+        "max_tokens": ctx.max_tokens,
     }
 
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
 
     try:
         log(f"   📤 [格式修正] 发送请求: {follow_up_message[:120].replace(chr(10), ' ')}...")
