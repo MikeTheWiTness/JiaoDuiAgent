@@ -13,6 +13,7 @@ from core.defaults import (
     normalize_option_spacing, post_process_md_zw, default_generate_knowledge,
 )
 from shared.latex_generator import generate_combined_pdf
+from shared.session import SessionManager
 from ui.widgets import LogPanel, ApiDialog
 from ui.pipeline import PipelineBar, setup_pipeline_styles
 
@@ -1108,6 +1109,13 @@ class DefaultApp:
 
                 all_dirs = remaining_dirs
 
+                # Session 持久化：记录校对进度，支持中断恢复
+                session_mgr = SessionManager(Path(out_root) / "sessions")
+                q_list = [{"name": os.path.basename(d), "dir": d} for d in all_dirs]
+                session_id = session_mgr.start_session(
+                    f"{self.subject_app.name} - {paper_name}", q_list)
+                log(f"   📝 Session: {session_id}")
+
                 generate_pdf = self.generate_pdf.get()
                 use_parallel = self.parallel_enabled.get()
                 try:
@@ -1147,10 +1155,13 @@ class DefaultApp:
                                     if data["success"]:
                                         self.proofread_result[q_dir] = data["result"]
                                         paper_results[q_dir] = data["result"]
+                                        session_mgr.mark_completed(q_name)
                                         log(f"   ✅ {q_name} {task_type}校对完成")
                                     else:
+                                        session_mgr.mark_failed(q_name, data.get('error', ''))
                                         log(f"   ❌ {q_name} {task_type}校对失败：{data['error']}")
                                 except Exception as e:
+                                    session_mgr.mark_failed(q_name, str(e))
                                     log(f"   ❌ {q_name} 异常：{e}")
 
                             remaining = len(all_dirs) - (batch_start + len(batch))
@@ -1165,13 +1176,15 @@ class DefaultApp:
                         task_type = "知识" if is_knowledge else "题目"
                         log(f"校对{task_type}：{q_name}")
                         data = self.subject_app.proofread_one(
-                            api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode
+                            api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, content
                         )
                         if data["success"]:
                             self.proofread_result[q_dir] = data["result"]
                             paper_results[q_dir] = data["result"]
+                            session_mgr.mark_completed(q_name)
                             log(f"   ✅ {q_name} 校对完成")
                         else:
+                            session_mgr.mark_failed(q_name, data.get('error', ''))
                             log(f"   ❌ {q_name} 校对失败：{data['error']}")
 
                 if not self.task_interrupt and paper_results:
