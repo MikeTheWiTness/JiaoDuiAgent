@@ -102,17 +102,8 @@ class SubjectApp(BaseSubjectApp):
         return "\n".join(self.config.get("question_prompt_lines", []))
 
     def get_knowledge_prompt(self):
-        """获取知识提取提示词。ReAct 模式时使用知识专属 agent prompt。"""
+        """获取知识校对提示词。ReAct 模式统一使用 agent_prompt（已合并题/知识/混合）。"""
         if self.react_mode:
-            # 优先使用知识专属的 agent prompt（7 步，无难题判定和独立解题）
-            knowledge_agent_lines = self.config.get("knowledge_agent_prompt_lines")
-            if knowledge_agent_lines:
-                base_prompt = "\n".join(knowledge_agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-            # fallback：如果没有知识专属 prompt，降级使用题目 agent prompt
             agent_lines = self.config.get("agent_prompt_lines")
             if agent_lines:
                 base_prompt = "\n".join(agent_lines)
