@@ -326,6 +326,7 @@ class DefaultApp:
                 self.btn_add_folder.pack(side=tk.LEFT, padx=4)
                 self.btn_clear.pack(side=tk.LEFT, padx=4)
             elif proof_active:
+                self.btn_select_papers.config(text="📂 选择拆分文件夹")
                 self.btn_select_papers.pack(side=tk.LEFT, padx=4)
                 self.btn_select_root.pack(side=tk.LEFT, padx=4)
             elif typeset_active:
