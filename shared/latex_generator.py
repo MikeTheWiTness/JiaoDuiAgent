@@ -445,7 +445,7 @@ def _apply_markers(md_content: str, corrections: list[dict]) -> tuple[str, list[
         else:
             # 文本模式：红色底色高亮 + 圈号
             result = (result[:start]
-                      + r"\corrmark{" + result[start:end] + r"}{" + str(num) + r"}"
+                      + r"\corrmark{" + _unicode_math_to_latex(result[start:end]) + r"}{" + str(num) + r"}"
                       + result[end:])
 
     return result, numbered
@@ -622,7 +622,7 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
                 inner = _escape_unescaped(inner, '%#')
                 key = f"CORRMARK{num}"
                 placeholder_map[key] = (
-                    r"\corrmark{" + r"\(" + inner + r"\)" + r"}"
+                    r"\corrmark{" + r"\(" + _unicode_math_to_latex(inner) + r"\)" + r"}"
                     + r"{" + str(num) + r"}"
                 )
                 return key
@@ -644,16 +644,16 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
                 inner = _escape_unescaped(inner, '%#')
                 key = f"CORRMARK{num}"
                 placeholder_map[key] = (
-                    r"\corrmark{" + r"\[" + inner + r"\]" + r"}"
+                    r"\corrmark{" + r"\[" + _unicode_math_to_latex(inner) + r"\]" + r"}"
                     + r"{" + str(num) + r"}"
                 )
                 return key
 
         # 纯文本标记（无 $ 包裹）：红色底色高亮 + 圈号
-        orig = _escape_unescaped(orig, '%#')
+        # 也做 Unicode→LaTeX 转换，防止 orig 中含裸 Unicode 数学字符
         key = f"CORRMARK{num}"
         placeholder_map[key] = (
-            r"\corrmark{" + orig + r"}{" + str(num) + r"}"
+            r"\corrmark{" + _unicode_math_to_latex(orig) + r"}{" + str(num) + r"}"
         )
         return key
 
@@ -738,6 +738,56 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
     processed = _merge_split_math_blocks(processed)
 
     return processed, inline_corrections
+
+
+# === Unicode 数学字符 → LaTeX 命令映射 ===
+# XeLaTeX 在无 unicode-math 宏包时，数学模式中的 Unicode 希腊字母等
+# 会因字体映射失败而丢失（渲染为空白）。本映射将常见 Unicode 数学字符
+# 转为对应的 LaTeX 命令，确保在 \(...\) / \[...\] 中正确渲染。
+_UNICODE_MATH_MAP = {
+    # 希腊小写
+    'α': r'\alpha', 'β': r'\beta', 'γ': r'\gamma', 'δ': r'\delta',
+    'ε': r'\epsilon', 'ζ': r'\zeta', 'η': r'\eta', 'θ': r'\theta',
+    'ι': r'\iota', 'κ': r'\kappa', 'λ': r'\lambda', 'μ': r'\mu',
+    'ν': r'\nu', 'ξ': r'\xi', 'π': r'\pi', 'ρ': r'\rho',
+    'σ': r'\sigma', 'τ': r'\tau', 'υ': r'\upsilon', 'φ': r'\phi',
+    'χ': r'\chi', 'ψ': r'\psi', 'ω': r'\omega',
+    # 希腊大写（部分常用）
+    'Γ': r'\Gamma', 'Δ': r'\Delta', 'Θ': r'\Theta',
+    'Λ': r'\Lambda', 'Ξ': r'\Xi', 'Π': r'\Pi',
+    'Σ': r'\Sigma', 'Φ': r'\Phi', 'Ψ': r'\Psi', 'Ω': r'\Omega',
+    # 其他常见 Unicode 数学符号
+    '∑': r'\sum', '∫': r'\int', '∏': r'\prod',
+    '∞': r'\infty', '≈': r'\approx', '≠': r'\neq',
+    '≤': r'\leq', '≥': r'\geq', '±': r'\pm',
+    '×': r'\times', '÷': r'\div', '·': r'\cdot',
+    '∂': r'\partial', '∇': r'\nabla',
+    '∈': r'\in', '∉': r'\notin', '⊂': r'\subset',
+    '→': r'\rightarrow', '←': r'\leftarrow',
+    '⇒': r'\Rightarrow', '⇐': r'\Leftarrow',
+    '°': r'^\circ',
+}
+
+
+def _unicode_math_to_latex(text: str) -> str:
+    r"""将数学内容中的 Unicode 希腊字母等转为 LaTeX 命令。
+
+    在 XeLaTeX 无 unicode-math 的情况下，数学模式中的 Unicode 数学字符
+    会因字体映射失败而丢失。本函数将常见 Unicode 数学字符替换为 LaTeX 命令，
+    确保在 \(...\) / \[...\] 中正确渲染。
+
+    同时移除 \gt / \lt 的多余花括号（Pandoc 兼容定义引入），
+    避免 mathrel 间距丢失。
+    """
+    if not text:
+        return text
+    for uchar, latex_cmd in _UNICODE_MATH_MAP.items():
+        text = text.replace(uchar, latex_cmd)
+    # 修复 \\gt / \\lt：在数学模式中移除多余花括号，保留 mathrel 间距
+    # （模板中 \\gt/\\lt 定义为 {>}/{<}，花括号使 mathrel 降级为 mathord）
+    text = text.replace(r'\gt', '>')
+    text = text.replace(r'\lt', '<')
+    return text
 
 
 def _fix_missing_chars(text: str) -> str:
