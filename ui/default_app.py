@@ -33,7 +33,7 @@ class DefaultApp:
         self.root.geometry("1050x750")
         self.root.minsize(900, 650)
 
-        self.content_type = tk.StringVar(value="试卷")  # 讲义/试卷/自由校对/批注评审
+        self.content_type = tk.StringVar(value="讲义")  # 讲义/试卷/自由校对/批注评审
         self.output_dir = tk.StringVar(value="output")
 
         self.clean_enabled = tk.BooleanVar(value=True)
@@ -86,7 +86,7 @@ class DefaultApp:
         default_features = {
             "show_clean_table_option": True,
             "show_intent_clean_option": True,
-            "show_knowledge_option": True,
+            "show_knowledge_option": False,  # 统一模型下 LLM 自判类型，无需物理分离
             "show_pdf_option": True,
             "show_parallel_option": True,
             "show_source_modes": ["讲义", "试卷"],
@@ -119,7 +119,7 @@ class DefaultApp:
         frame_ct = ttk.Frame(self.frame_import)
         frame_ct.pack(fill=tk.X)
         ttk.Label(frame_ct, text="内容类型：").pack(side=tk.LEFT)
-        for val, label in [("试卷", "试卷"), ("讲义", "讲义"), ("自由校对", "自由校对"), ("批注评审", "批注评审")]:
+        for val, label in [("讲义", "讲义"), ("试卷", "试卷"), ("自由校对", "自由校对"), ("批注评审", "批注评审")]:
             ttk.Radiobutton(frame_ct, text=label, variable=self.content_type,
                            value=val, command=self._on_content_type_changed).pack(side=tk.LEFT, padx=4)
 

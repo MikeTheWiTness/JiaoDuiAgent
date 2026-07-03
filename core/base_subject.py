@@ -29,7 +29,7 @@ class BaseSubjectApp:
     version: str = "v3.0"
 
     # ---- 子类可覆盖的类属性 ----
-    _show_knowledge_option: bool = True
+    _show_knowledge_option: bool = False  # 统一模型下默认隐藏，历史等学科可覆盖为 True
     _clean_bold_replacement: str = "\x01"  # 高中历史覆盖为 "\1" 保留粗体文本
 
     def __init__(self, subject_dir):
