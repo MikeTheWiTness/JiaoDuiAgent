@@ -55,9 +55,24 @@ class PipelineBar(ttk.Frame):
         self._update_styles()
 
     def _toggle(self, key: str):
-        """切换单个阶段，触发回调。"""
+        """切换单个阶段，级联关闭后续 / 级联开启前面。"""
         var = self._vars[key]
-        var.set(not var.get())
+        new_state = not var.get()
+
+        if new_state:
+            # 开启：自动开启所有前面的阶段
+            keys = [k for k, _, _ in self.STAGES]
+            idx = keys.index(key)
+            for i in range(idx):
+                self._vars[keys[i]].set(True)
+        else:
+            # 关闭：自动关闭所有后面的阶段
+            keys = [k for k, _, _ in self.STAGES]
+            idx = keys.index(key)
+            for i in range(idx + 1, len(keys)):
+                self._vars[keys[i]].set(False)
+
+        var.set(new_state)
         self._update_styles()
         if self.on_changed:
             self.on_changed()
