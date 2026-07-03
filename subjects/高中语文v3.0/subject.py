@@ -143,19 +143,14 @@ class SubjectApp(BaseSubjectApp):
         with open(md_file, 'r', encoding='utf-8') as f:
             md_content = f.read()
 
+        # 预清洗：去除装饰图片（对齐高中历史）
+        from shared.decor_utils import strip_decor_images
+        md_content = strip_decor_images(md_content)
+
         if split_mode == "none":
             problems = [{"content": md_content}]
         elif split_mode == "manual":
             problems = split_by_manual_markers(md_content)
-        elif split_mode == "knowledge_manual":
-            from core.manual_split import split_by_knowledge_markers
-            problems = split_by_knowledge_markers(md_content)
-        elif split_mode == "knowledge_smart":
-            api_url = options.get("api_url", "")
-            api_key = options.get("api_key", "")
-            model = options.get("model", "")
-            from shared.knowledge_split import knowledge_split_smart
-            problems = knowledge_split_smart(md_content, api_url, api_key, model, md_file=md_file)
         elif split_mode == "smart":
             api_url = options.get("api_url", "")
             api_key = options.get("api_key", "")

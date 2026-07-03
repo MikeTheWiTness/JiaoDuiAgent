@@ -52,8 +52,6 @@ class DefaultApp:
             "不拆分": "none",
             "智能分割": "smart",
             "人工标记": "manual",
-            "知识智能分割": "knowledge_smart",
-            "知识人工标记": "knowledge_manual",
         }
         self.free_text = ""
         self.free_images = []
@@ -389,8 +387,6 @@ class DefaultApp:
             "不拆分": "整份文档作为一个单元",
             "智能分割": "LLM 自动识别题目边界",
             "人工标记": "按 ###### 题目标记拆分",
-            "知识智能分割": "LLM 自动识别知识单元",
-            "知识人工标记": "按 ###### 知识标记拆分",
         }
         desc = desc_map.get(mode, "")
         if hasattr(self, 'lbl_split_desc'):
@@ -822,7 +818,7 @@ class DefaultApp:
 
             for idx, file_path in enumerate(self.file_list, 1):
                 fname = os.path.basename(file_path)
-                basename = os.path.splitext(fname)[0]
+                basename = os.path.splitext(fname)[0].strip()
                 ext = os.path.splitext(fname)[1].lower()
 
                 target_base = basename
