@@ -1,4 +1,5 @@
 import os, re, json, logging
+from core.config_schema import validate_config
 
 _log = logging.getLogger(__name__)
 
@@ -15,45 +16,8 @@ def load_config(subject_dir):
     if cached is not None:
         return cached
 
-    config_file = os.path.join(subject_dir, "config.json")
-    if not os.path.exists(config_file):
-        raise FileNotFoundError(f"学科配置文件不存在: {config_file}")
-
-    with open(config_file, 'r', encoding='utf-8') as f:
-        new_data = json.load(f)
-
-    if "question_prompt_lines" not in new_data:
-        raise ValueError(f"配置文件缺少 question_prompt_lines: {config_file}")
-    if "knowledge_prompt_lines" not in new_data:
-        raise ValueError(f"配置文件缺少 knowledge_prompt_lines: {config_file}")
-
-    config = {}
-    config["question_prompt_lines"] = new_data["question_prompt_lines"]
-    config["knowledge_prompt_lines"] = new_data["knowledge_prompt_lines"]
-
-    # 加载可选的知识校对 ReAct prompt（知识场景专用，不存在时不报错）
-    if "knowledge_agent_prompt_lines" in new_data:
-        config["knowledge_agent_prompt_lines"] = new_data["knowledge_agent_prompt_lines"]
-
-    # 加载可选的 agent_prompt.json（ReAct 模式专用，不存在时不报错）
-    agent_file = os.path.join(subject_dir, "agent_prompt.json")
-    if os.path.exists(agent_file):
-        try:
-            with open(agent_file, 'r', encoding='utf-8') as f:
-                agent_data = json.load(f)
-            config["agent_prompt_lines"] = agent_data.get("agent_prompt_lines", [])
-        except Exception as e:
-            _log.warning(f"加载 agent_prompt.json 失败: {e}")
-
-    lecture = new_data.get("lecture_split", {})
-    config["lecture_split_mode"] = lecture.get("split_mode", "title")
-    config["lecture_section_pattern"] = lecture.get("section_pattern", r"^##\s")
-    config["lecture_wrapped_patterns"] = lecture.get("wrapped_patterns", [])
-    config["lecture_unwrapped_patterns"] = lecture.get("unwrapped_patterns", [])
-    config["lecture_section_boundary"] = lecture.get("section_boundary", True)
-
-    exam = new_data.get("exam_split", {})
-    config["exam_question_pattern"] = exam.get("question_pattern", r"^(\d+)．")
+    # 校验 + 标准化（失败时抛出含文件名和字段的明确错误）
+    config = validate_config(subject_dir)
 
     _config_cache[cache_key] = config
     return config
