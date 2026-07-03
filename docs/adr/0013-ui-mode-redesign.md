@@ -1,7 +1,8 @@
 # ADR 0013：UI 模式重构 —— 从双层下拉到线性步骤
 
-**状态**：草案（待细化）
+**状态**：已实现（管线 toggle 替代双层下拉，见 codex/ui-pipeline 分支）
 **日期**：2026-06-30
+**实现日期**：2026-07-03
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0012 框架工程债]](0012-framework-engineering-debt.md)
 

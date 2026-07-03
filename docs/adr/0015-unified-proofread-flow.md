@@ -1,7 +1,8 @@
 # ADR 0015：统一校对流程 —— 预处理 → todolist → 三阶段主校对
 
-**状态**：提议中
+**状态**：已实现（全学科 prompt 统一三段式，Issues 026-032 完成）
 **日期**：2026-07-03
+**实现日期**：2026-07-03
 **决策者**：MikeTheWiTness
 **GitHub Issues**：[#53](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/53) [#54](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/54) [#55](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/55) [#56](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/56) [#57](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/57) [#58](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/58) [#59](https://github.com/MikeTheWiTness/JiaoDuiAgent/issues/59)
 **关联**：[[ADR 0008 语文节点图]](0008-chinese-node-graph-proofreading.md)、[[ADR 0009 语文知识维度叠加]](0009-chinese-knowledge-dimension-overlay.md)、[[ADR 0006 物理 ReAct]](0006-physics-react-subject-specialization.md)、[[ADR 0014 化学知识 prompt]](0014-chemistry-knowledge-react-prompt.md)
