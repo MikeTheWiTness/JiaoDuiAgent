@@ -319,7 +319,13 @@ class DefaultApp:
         # 文件选择按钮
         self._hide_all_file_buttons()
         if not import_active:
-            if proof_active:
+            if split_active:
+                # 从拆分开始：添加 MD 文件
+                self.btn_add_files.config(text="📄 添加 MD 文件")
+                self.btn_add_files.pack(side=tk.LEFT, padx=4)
+                self.btn_add_folder.pack(side=tk.LEFT, padx=4)
+                self.btn_clear.pack(side=tk.LEFT, padx=4)
+            elif proof_active:
                 self.btn_select_papers.pack(side=tk.LEFT, padx=4)
                 self.btn_select_root.pack(side=tk.LEFT, padx=4)
             elif typeset_active:
@@ -328,6 +334,7 @@ class DefaultApp:
         elif is_free:
             self.btn_clear.pack(side=tk.LEFT, padx=4)
         else:
+            self.btn_add_files.config(text=f"📁 {features.get('add_file_title', '添加文件')}")
             self.btn_add_files.pack(side=tk.LEFT, padx=4)
             self.btn_add_folder.pack(side=tk.LEFT, padx=4)
             self.btn_clear.pack(side=tk.LEFT, padx=4)
@@ -494,15 +501,19 @@ class DefaultApp:
             self.output_dir.set(path)
 
     def add_files(self):
-        filetypes = getattr(self.subject_app, 'get_supported_file_types',
-                           lambda: [("支持的文件", "*.docx;*.doc;*.zip"),
-                                    ("Word 文档", "*.docx;*.doc"),
-                                    ("ZIP 压缩包", "*.zip"),
-                                    ("所有文件", "*.*")])()
-        paths = filedialog.askopenfilenames(
-            title="选择文件或压缩包",
-            filetypes=filetypes
-        )
+        # 导入关 + 拆分开 → 仅接受 MD 文件（已有 MD，从拆分开始）
+        if not self.pipeline.import_enabled:
+            filetypes = [("Markdown 文件", "*.md"), ("所有文件", "*.*")]
+            title = "选择 Markdown 文件"
+        else:
+            filetypes = getattr(self.subject_app, 'get_supported_file_types',
+                               lambda: [("支持的文件", "*.docx;*.doc;*.md;*.zip"),
+                                        ("Word 文档", "*.docx;*.doc"),
+                                        ("Markdown 文件", "*.md"),
+                                        ("ZIP 压缩包", "*.zip"),
+                                        ("所有文件", "*.*")])()
+            title = "选择文件或压缩包"
+        paths = filedialog.askopenfilenames(title=title, filetypes=filetypes)
         added = 0
         for p in paths:
             if p.lower().endswith('.zip'):
