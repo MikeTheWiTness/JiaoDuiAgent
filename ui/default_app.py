@@ -44,7 +44,17 @@ class DefaultApp:
         self.parallel_count = tk.StringVar(value="10")
         self.react_enabled = tk.BooleanVar(value=True)
 
-        self.split_mode = tk.StringVar(value="rule")
+        self.split_mode = tk.StringVar(value="普通规则")
+
+        # 分割方式中文 ↔ 英文映射
+        self.SPLIT_MODE_MAP = {
+            "普通规则": "rule",
+            "不拆分": "none",
+            "智能分割": "smart",
+            "人工标记": "manual",
+            "知识智能分割": "knowledge_smart",
+            "知识人工标记": "knowledge_manual",
+        }
         self.free_text = ""
         self.free_images = []
 
@@ -137,8 +147,8 @@ class DefaultApp:
             self.frame_split_mode.pack(fill=tk.X)
             ttk.Label(self.frame_split_mode, text="分割方式：").pack(side=tk.LEFT)
             self.combo_split = ttk.Combobox(self.frame_split_mode, textvariable=self.split_mode,
-                                            values=["rule", "none", "smart", "manual", "knowledge_smart", "knowledge_manual"],
-                                            state="readonly", width=16)
+                                            values=list(self.SPLIT_MODE_MAP.keys()),
+                                            state="readonly", width=14)
             self.combo_split.pack(side=tk.LEFT, padx=4)
             self.lbl_split_desc = ttk.Label(self.frame_split_mode, text="（普通规则）", foreground="gray")
             self.lbl_split_desc.pack(side=tk.LEFT, padx=4)
@@ -365,18 +375,22 @@ class DefaultApp:
 
         ApiDialog(self.root, self.api_config, on_save)
 
+    def _split_mode_key(self):
+        """返回当前分割方式对应的英文 key。"""
+        return self.SPLIT_MODE_MAP.get(self.split_mode.get(), "rule")
+
     def _on_split_mode_changed(self, event=None):
         self._update_split_mode_desc()
 
     def _update_split_mode_desc(self):
         mode = self.split_mode.get()
         desc_map = {
-            "rule": "（普通规则 - 按标题/题号拆分）",
-            "none": "（不拆分 - 整份作为一个单元）",
-            "smart": "（智能分割 - LLM 自动识别题目）",
-            "manual": "（人工标记 - 按 ###### 题目标记拆分）",
-            "knowledge_smart": "（知识智能分割 - LLM 自动识别知识单元）",
-            "knowledge_manual": "（知识人工标记 - 按 ###### 知识标记拆分）",
+            "普通规则": "按标题/题号自动拆分",
+            "不拆分": "整份文档作为一个单元",
+            "智能分割": "LLM 自动识别题目边界",
+            "人工标记": "按 ###### 题目标记拆分",
+            "知识智能分割": "LLM 自动识别知识单元",
+            "知识人工标记": "按 ###### 知识标记拆分",
         }
         desc = desc_map.get(mode, "")
         if hasattr(self, 'lbl_split_desc'):
@@ -727,7 +741,7 @@ class DefaultApp:
         source = self.content_type.get()
         do_split = self.pipeline.split_enabled
         do_proof = self.pipeline.proof_enabled
-        split_mode = self.split_mode.get()
+        split_mode = self._split_mode_key()
         is_free_mode = (source == "自由校对")
         is_review_mode = (source == "批注评审")
 
@@ -941,7 +955,7 @@ class DefaultApp:
                 if split_ok:
                     # 知识分割模式（knowledge_smart / knowledge_manual）已自动处理
                     # 知识/题目的分离，无需再走旧版"提取知识文件夹"逻辑
-                    is_knowledge_split = self.split_mode.get() in ("knowledge_smart", "knowledge_manual")
+                    is_knowledge_split = self._split_mode_key() in ("knowledge_smart", "knowledge_manual")
                     if source == "讲义" and self.knowledge_enabled.get() and not is_knowledge_split:
                         from core import config_loader
                         config_split_mode = config_loader.get_lecture_split_mode(self.subject_app.config)
