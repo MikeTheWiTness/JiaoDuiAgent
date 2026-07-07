@@ -203,3 +203,191 @@ class FileWriteTool(BaseTool):
 
     async def _arun(self, *args, **kwargs):
         raise NotImplementedError
+
+
+# ─── 校对标记工具（ADR-0016） ──────────────────────────────────
+
+import threading
+import re as _re_mod
+
+_current_file: threading.local = threading.local()
+_mark_counter: threading.local = threading.local()
+
+
+def set_current_file(path: str):
+    """设置当前校对文件路径（线程安全）。"""
+    _current_file.value = path
+    _mark_counter.value = 0
+
+
+def get_current_file() -> str:
+    """获取当前校对文件路径。"""
+    return getattr(_current_file, "value", "")
+
+
+def _next_mark_number() -> int:
+    """获取下一个标记编号（线程安全，自动递增）。"""
+    current = getattr(_mark_counter, "value", 0) + 1
+    _mark_counter.value = current
+    return current
+
+
+class AddProofreadMarkParams(BaseModel):
+    paragraph: int = Field(description="段落号（1-based，LLM 通过 read_section 已知）")
+    original: str = Field(description="要标记的原文片段（短字符串）")
+    occurrence: int = Field(default=1, description="该片段在段落中的第几次出现（默认为1）")
+    corrected: str = Field(description="修改后的文字")
+    reason: str = Field(description="修改原因")
+
+
+class AddProofreadMarkTool(BaseTool):
+    """在文件中添加校对标记 【N|原文|改为】，并追加修改原因。"""
+
+    name: str = "add_proofread_mark"
+    description: str = (
+        "在文件中添加一处校对标记。在指定段落的第N次出现的原文处插入 "
+        "【编号|原文|改为】标记，并将修改原因记录到 ### 修改原因 章节。"
+    )
+    args_schema: type[BaseModel] = AddProofreadMarkParams
+
+    def _run(self, paragraph: int, original: str, occurrence: int = 1,
+             corrected: str = "", reason: str = "") -> str:
+        file_path = get_current_file()
+        if not file_path:
+            return "错误：未设置当前校对文件。"
+
+        if not original:
+            return "错误：original 不能为空"
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except FileNotFoundError:
+            return f"错误：文件不存在 — {file_path}"
+        except Exception as e:
+            return f"读取文件失败：{e}"
+
+        paragraphs = _re_mod.split(r"\n\n+", content)
+
+        if paragraph < 1 or paragraph > len(paragraphs):
+            return f"错误：段落号 {paragraph} 超出范围（文件共 {len(paragraphs)} 个段落）"
+
+        para = paragraphs[paragraph - 1]
+
+        # 找到第 occurrence 次出现（跳过已有标记内的文字）
+        found = 0
+        search_pos = 0
+        replace_pos = -1
+        while True:
+            pos = para.find(original, search_pos)
+            if pos == -1:
+                break
+            before = para[:pos]
+            if before.count("【") == before.count("】"):
+                found += 1
+                if found == occurrence:
+                    replace_pos = pos
+                    break
+            search_pos = pos + 1
+
+        if replace_pos == -1:
+            return (
+                f"未在段落 {paragraph} 中找到第 {occurrence} 次出现的 \"{original}\"。\n"
+                f"段落预览（前200字符）:\n{para[:200]}..."
+            )
+
+        mark_num = _next_mark_number()
+        mark = f"【{mark_num}|{original}|{corrected}】"
+        new_para = para[:replace_pos] + mark + para[replace_pos + len(original):]
+        paragraphs[paragraph - 1] = new_para
+        new_content = "\n\n".join(paragraphs)
+
+        reason_section = "\n\n### 修改原因"
+        if reason_section in new_content:
+            new_content += f"\n{mark_num}. {reason}"
+        else:
+            new_content += f"{reason_section}\n{mark_num}. {reason}"
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+        except Exception as e:
+            return f"写入文件失败：{e}"
+
+        return f"已添加标记 {mark}（编号 {mark_num}）。原因: {reason}"
+
+    async def _arun(self, *args, **kwargs):
+        raise NotImplementedError
+
+
+class UpdateProofreadMarkParams(BaseModel):
+    mark_number: int = Field(description="要修改的标记编号")
+    original: str | None = Field(default=None, description="新原文（不修改则留空）")
+    corrected: str | None = Field(default=None, description="新修改后文字（不修改则留空）")
+    reason: str | None = Field(default=None, description="新修改原因（不修改则留空）")
+
+
+class UpdateProofreadMarkTool(BaseTool):
+    """修改已有的校对标记。"""
+
+    name: str = "update_proofread_mark"
+    description: str = "修改已添加的校对标记。至少提供一个要修改的字段。"
+    args_schema: type[BaseModel] = UpdateProofreadMarkParams
+
+    def _run(self, mark_number: int, original: str | None = None,
+             corrected: str | None = None, reason: str | None = None) -> str:
+        if original is None and corrected is None and reason is None:
+            return "错误：至少需要指定 original、corrected 或 reason 中的一个"
+
+        file_path = get_current_file()
+        if not file_path:
+            return "错误：未设置当前校对文件。"
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return f"读取文件失败：{e}"
+
+        old_mark_start = f"【{mark_number}|"
+        idx = content.find(old_mark_start)
+        if idx == -1:
+            return f"错误：未找到编号 {mark_number} 的标记"
+
+        end = content.find("】", idx)
+        if end == -1:
+            return f"错误：标记 {mark_number} 格式异常"
+
+        mark_body = content[idx + len(old_mark_start):end]
+        parts = mark_body.split("|", 1)
+        old_original = parts[0] if len(parts) > 0 else ""
+        old_corrected = parts[1] if len(parts) > 1 else ""
+
+        new_original = original if original is not None else old_original
+        new_corrected = corrected if corrected is not None else old_corrected
+
+        new_mark = f"【{mark_number}|{new_original}|{new_corrected}】"
+        new_content = content[:idx] + new_mark + content[end + 1:]
+
+        if reason is not None:
+            reason_pat = _re_mod.compile(rf"^{mark_number}\.\s.*$", _re_mod.MULTILINE)
+            new_content = reason_pat.sub(rf"{mark_number}. {reason}", new_content)
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+        except Exception as e:
+            return f"写入文件失败：{e}"
+
+        changes = []
+        if original is not None:
+            changes.append(f"原文: \"{old_original}\" → \"{new_original}\"")
+        if corrected is not None:
+            changes.append(f"改为: \"{old_corrected}\" → \"{new_corrected}\"")
+        if reason is not None:
+            changes.append(f"原因: \"{reason}\"")
+
+        return f"已更新标记 {mark_number}。\n" + "\n".join(changes)
+
+    async def _arun(self, *args, **kwargs):
+        raise NotImplementedError
