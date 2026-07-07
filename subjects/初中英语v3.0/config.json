@@ -134,7 +134,8 @@
     "unwrapped_patterns": [
       "^【例题精讲\\d+】"
     ],
-    "section_boundary": true
+    "section_boundary": true,
+    "section_pattern_extensions": []
   },
   "exam_split": {
     "question_pattern": "^(\\d+)[.)]"

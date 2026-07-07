@@ -149,7 +149,9 @@
       "\\d+.*"
     ],
     "unwrapped_patterns": [],
-    "section_boundary": true
+    "section_boundary": true,
+    "split_mode": "section",
+    "section_pattern_extensions": []
   },
   "exam_split": {
     "question_pattern": "^(\\d+)．"
