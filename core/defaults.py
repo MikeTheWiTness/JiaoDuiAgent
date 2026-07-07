@@ -825,7 +825,7 @@ def _format_usage_summary(usage: dict) -> str:
     return "".join(lines)
 
 
-def default_proofread_one(ctx, q_dir, q_name, is_knowledge, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
+def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
     if os.path.exists(target_md):

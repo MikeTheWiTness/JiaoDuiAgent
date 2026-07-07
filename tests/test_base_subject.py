@@ -73,12 +73,13 @@ def subject_dir():
 class TestBaseSubject:
     """验证基类零差异方法。"""
 
-    def test_generate_knowledge_delegates(self, subject_dir):
-        """generate_knowledge 应委托给 default_generate_knowledge。"""
+    def test_generate_knowledge_noop(self, subject_dir):
+        """generate_knowledge 在 section 模式下为 no-op（ADR-0017 决策3）。"""
         with patch("core.base_subject.default_generate_knowledge") as mock:
             app = _MinimalSubject(subject_dir)
-            app.generate_knowledge("test.md", "/out", "base")
-            mock.assert_called_once_with("test.md", "/out", "base", app.config)
+            result = app.generate_knowledge("test.md", "/out", "base")
+            mock.assert_not_called()
+            assert result is False
 
     def test_collect_paper_dirs_delegates(self, subject_dir):
         """collect_paper_dirs 应委托给 default_collect_paper_dirs。"""
