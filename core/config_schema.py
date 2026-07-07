@@ -44,7 +44,7 @@ def validate_config(subject_dir) -> dict:
         if not isinstance(ls, dict):
             errors.append("'lecture_split' 必须是对象")
         else:
-            for key in ["wrapped_patterns", "unwrapped_patterns"]:
+            for key in ["wrapped_patterns", "unwrapped_patterns", "section_pattern_extensions"]:
                 if key in ls and not isinstance(ls[key], list):
                     errors.append(f"'lecture_split.{key}' 必须是数组")
 
@@ -68,8 +68,9 @@ def validate_config(subject_dir) -> dict:
     config = {
         "question_prompt_lines": raw["question_prompt_lines"],
         "knowledge_prompt_lines": raw["knowledge_prompt_lines"],
-        "lecture_split_mode": lecture.get("split_mode", "title"),
+        "lecture_split_mode": lecture.get("split_mode", "section"),
         "lecture_section_pattern": lecture.get("section_pattern", r"^##\s"),
+        "lecture_section_extensions": lecture.get("section_pattern_extensions", []),
         "lecture_wrapped_patterns": lecture.get("wrapped_patterns", []),
         "lecture_unwrapped_patterns": lecture.get("unwrapped_patterns", []),
         "lecture_section_boundary": lecture.get("section_boundary", True),
