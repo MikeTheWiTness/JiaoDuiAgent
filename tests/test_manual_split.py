@@ -4,8 +4,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.manual_split import split_by_manual_markers
+from core.manual_split import split_by_manual_markers, split_by_knowledge_markers
+from core.manual_split import split_by_unit_markers, parse_unit_markers
 
+
+# ─── 已有的 manual split 测试（保持不变） ──────────────────────
 
 class TestManualSplitNormal(unittest.TestCase):
     def test_single_problem_pair(self):
@@ -210,6 +213,156 @@ class TestManualSplitPandocEscaped(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertIn("第一题", result[0]["content"])
         self.assertIn("第二题", result[1]["content"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+# ─── 统一的单元标记测试（ADR-0017 决策5） ──────────────────────
+
+class TestSplitByUnitMarkers(unittest.TestCase):
+    """测试统一的 split_by_unit_markers（替代 split_by_manual_markers + split_by_knowledge_markers）。"""
+
+    def test_single_unit(self):
+        md = (
+            "###### 单元开始 ######\n"
+            "这是第一单元的内容\n"
+            "第二行\n"
+            "###### 单元结束 ######\n"
+        )
+        result = split_by_unit_markers(md)
+        self.assertEqual(len(result), 1)
+        self.assertIn("第一单元的内容", result[0]["content"])
+
+    def test_multiple_units(self):
+        md = (
+            "###### 单元开始 ######\n"
+            "单元1内容\n"
+            "###### 单元结束 ######\n"
+            "###### 单元开始 ######\n"
+            "单元2内容\n"
+            "###### 单元结束 ######\n"
+            "###### 单元开始 ######\n"
+            "单元3内容\n"
+            "###### 单元结束 ######\n"
+        )
+        result = split_by_unit_markers(md)
+        self.assertEqual(len(result), 3)
+
+    def test_outside_content_discarded(self):
+        md = (
+            "开头引言\n"
+            "###### 单元开始 ######\n"
+            "单元正文\n"
+            "###### 单元结束 ######\n"
+            "中间过渡\n"
+            "###### 单元开始 ######\n"
+            "第二单元\n"
+            "###### 单元结束 ######\n"
+            "结尾总结\n"
+        )
+        result = split_by_unit_markers(md)
+        self.assertEqual(len(result), 2)
+        self.assertNotIn("引言", result[0]["content"])
+        self.assertNotIn("过渡", result[1]["content"])
+
+    def test_no_markers_raises_error(self):
+        md = "没有标记的文本"
+        with self.assertRaises(ValueError) as ctx:
+            split_by_unit_markers(md)
+        self.assertIn("标记", str(ctx.exception))
+
+    def test_unpaired_marker_raises_error(self):
+        md = (
+            "###### 单元开始 ######\n"
+            "内容没有结束标记\n"
+        )
+        with self.assertRaises(ValueError):
+            split_by_unit_markers(md)
+
+    def test_pandoc_escaped_markers(self):
+        md = (
+            r"\###### 单元开始 \######" "\n"
+            "单元内容\n"
+            r"\###### 单元结束 \######" "\n"
+        )
+        result = split_by_unit_markers(md)
+        self.assertEqual(len(result), 1)
+        self.assertIn("单元内容", result[0]["content"])
+
+
+class TestParseUnitMarkers(unittest.TestCase):
+    """测试共用的 parse_unit_markers() 解析器。"""
+
+    def test_parse_single_unit(self):
+        text = (
+            "###### 单元开始 ######\n"
+            "内容A\n"
+            "###### 单元结束 ######\n"
+        )
+        result = parse_unit_markers(text)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"].strip(), "内容A")
+
+    def test_parse_multiple_units(self):
+        text = (
+            "###### 单元开始 ######\n"
+            "单元1\n"
+            "###### 单元结束 ######\n"
+            "###### 单元开始 ######\n"
+            "单元2\n"
+            "###### 单元结束 ######\n"
+        )
+        result = parse_unit_markers(text)
+        self.assertEqual(len(result), 2)
+
+    def test_parse_empty_text(self):
+        with self.assertRaises(ValueError):
+            parse_unit_markers("")
+
+    def test_parse_no_markers(self):
+        with self.assertRaises(ValueError):
+            parse_unit_markers("没有标记的普通文本")
+
+    def test_parse_content_contains_marker_lookalike(self):
+        """正文中包含类似标记的文字但不在一行时不应干扰。"""
+        text = (
+            "###### 单元开始 ######\n"
+            "正文里提到了###### 单元开始 ######但不是单独一行\n"
+            "###### 单元结束 ######\n"
+        )
+        result = parse_unit_markers(text)
+        self.assertEqual(len(result), 1)
+        self.assertIn("提到了", result[0]["content"])
+
+    def test_parse_extra_spaces_in_marker(self):
+        text = (
+            "######  单元开始  ######\n"
+            "内容\n"
+            "######  单元结束  ######\n"
+        )
+        result = parse_unit_markers(text)
+        self.assertEqual(len(result), 1)
+
+    def test_parse_empty_unit(self):
+        text = (
+            "###### 单元开始 ######\n"
+            "###### 单元结束 ######\n"
+        )
+        result = parse_unit_markers(text)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "")
+
+    def test_parse_pandoc_escaped(self):
+        text = (
+            r"\###### 单元开始 \######" "\n"
+            "内容\n"
+            r"\###### 单元结束 \######" "\n"
+        )
+        result = parse_unit_markers(text)
+        self.assertEqual(len(result), 1)
+        self.assertIn("内容", result[0]["content"])
 
 
 if __name__ == "__main__":
