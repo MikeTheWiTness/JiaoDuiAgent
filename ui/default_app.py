@@ -1065,28 +1065,35 @@ class DefaultApp:
                 paper_results = {}
 
                 question_dirs = []
-                knowledge_dir = None
                 for item in os.listdir(paper_path):
                     full = os.path.join(paper_path, item)
                     if not os.path.isdir(full):
                         continue
-                    if "题" in item or item.startswith("板块"):
+                    if item.startswith("单元"):
+                        # ADR-0017: 统一命名为 单元N
+                        question_dirs.append(full)
+                    elif "题" in item or item.startswith("板块"):
+                        # 向后兼容旧命名
                         question_dirs.append(full)
                     elif item == "知识":
-                        knowledge_dir = full
+                        # 向后兼容旧知识目录
+                        question_dirs.append(full)
 
                 question_dirs.sort(key=lambda x: (
                     int(re.findall(r'\d+', os.path.basename(x))[0])
                     if re.findall(r'\d+', os.path.basename(x)) else 9999,
                     os.path.basename(x)))
 
-                all_dirs = question_dirs[:]
-                if knowledge_dir is not None:
-                    all_dirs.append(knowledge_dir)
+                all_dirs = question_dirs
 
                 skipped_dirs = []
                 remaining_dirs = []
                 for q_dir in all_dirs:
+                    # ADR-0017 决策9：跳过带 .skip_proofread 标记的导航单元
+                    if os.path.exists(os.path.join(q_dir, ".skip_proofread")):
+                        log(f"   ⏭️ {os.path.basename(q_dir)} 标记为跳过校对")
+                        skipped_dirs.append(q_dir)
+                        continue
                     md_path = os.path.join(q_dir, "_校对报告.md")
                     json_path = os.path.join(q_dir, "_校对数据.json")
                     if os.path.exists(md_path) and os.path.exists(json_path):
