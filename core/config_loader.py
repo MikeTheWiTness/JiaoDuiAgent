@@ -64,14 +64,43 @@ def get_section_boundary_enabled(config):
 
 
 def get_lecture_split_mode(config):
-    return config.get("lecture_split_mode", "title")
+    return config.get("lecture_split_mode", "section")
+
+
+# 默认 section_pattern（ADR-0017 决策1）：匹配 ##/### 标题 + 例题标记 + 通用知识标题
+DEFAULT_SECTION_PATTERN = (
+    r"^#{2,3}\s"                       # ## / ### 标题
+    r"|^\*\*(例|练|变式|真题)\d+\*\*"    # **例1**、**练1**、**变式1**、**真题1**
+    r"|^\*\*教师版\*\*"                 # **教师版**
+    r"|必备知识"                         # 通用知识标题
+    r"|模型大招"                         # 方法/模型总结标题
+    r"|重难点突破"                        # 重难点专题标题
+)
 
 
 def get_section_pattern(config):
+    """构建 section_pattern：基础 pattern + 学科扩展。
+
+    如果 config 中显式设置了 section_pattern，直接使用；
+    否则从 DEFAULT_SECTION_PATTERN + section_pattern_extensions 构建。
+    """
+    raw = config.get("lecture_section_pattern", "")
+    if raw and raw != r"^##\s":
+        # 显式设置了自定义 pattern，直接使用
+        try:
+            return re.compile(raw)
+        except re.error:
+            return re.compile(DEFAULT_SECTION_PATTERN)
+
+    # 使用默认 pattern + 学科扩展
+    extensions = config.get("lecture_section_extensions", [])
+    pattern = DEFAULT_SECTION_PATTERN
+    for ext in extensions:
+        pattern += "|" + re.escape(ext)
     try:
-        return re.compile(config.get("lecture_section_pattern", r"^##\s"))
+        return re.compile(pattern)
     except re.error:
-        return re.compile(r"^##\s")
+        return re.compile(DEFAULT_SECTION_PATTERN)
 
 
 def get_exam_question_pattern(config):

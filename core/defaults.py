@@ -327,61 +327,52 @@ def clean_intent_md_file(md_file, problem_markers=None):
 
 def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     base_name = base_name.strip()  # 防御：文件名可能带首尾空格，Windows 路径不支持
+
+    # ── 预处理：装饰图片清除（ADR-0017 决策7）──
+    from shared.decor_utils import strip_decor_images_from_file
+    strip_decor_images_from_file(md_file)
+
     with open(md_file, 'r', encoding='utf-8') as f:
         md_content = f.read()
 
-    split_mode = "title"
+    split_mode = "section"
     section_pat = None
+    problem_pats = []
     if config:
         split_mode = config_loader.get_lecture_split_mode(config)
-        if split_mode == "section":
-            section_pat = config_loader.get_section_pattern(config)
+        section_pat = config_loader.get_section_pattern(config)
+        problem_pats = config_loader.get_compiled_title_patterns(config)
 
     lines = md_content.splitlines()
-    questions = []
 
+    # ── 第一遍：按 section_pattern 切出大板块 ──
     if split_mode == "section" and section_pat:
-        current_title = "引言"
-        current_content = []
-        for line in lines:
-            stripped = line.strip()
-            if section_pat.match(stripped):
-                if current_content:
-                    questions.append((current_title, '\n'.join(current_content)))
-                current_title = stripped
-                current_content = [line]
-            else:
-                current_content.append(line)
-        if current_content:
-            questions.append((current_title, '\n'.join(current_content)))
+        raw_sections = _split_by_section_pattern(lines, section_pat)
     else:
-        title_compiled = config_loader.get_compiled_title_patterns(config)
-        current_title = None
-        current_content = []
-        in_question = False
-        for line in lines:
-            stripped = line.strip()
-            is_title = any(p.match(stripped) for p in title_compiled)
-            is_section = stripped.startswith('#') and not stripped.startswith('**')
-            if is_title:
-                if current_title is not None:
-                    questions.append((current_title, '\n'.join(current_content)))
-                current_title = stripped
-                current_content = [line]
-                in_question = True
-            elif is_section and in_question:
-                questions.append((current_title, '\n'.join(current_content)))
-                current_title = None; current_content = []; in_question = False
-            else:
-                if in_question:
-                    current_content.append(line)
-        if current_title is not None:
-            questions.append((current_title, '\n'.join(current_content)))
+        # title 模式（向后兼容旧学科配置）
+        raw_sections = _split_by_title_pattern(lines, config)
 
-    if not questions:
-        log("   ⚠️ 未识别到任何题目，跳过分割")
+    if not raw_sections:
+        log("   ⚠️ 未识别到任何单元，跳过分割")
         return False
 
+    # ── 第二遍：板块内例题提取（ADR-0017 决策8）──
+    all_units = []
+    for sec_title, sec_content in raw_sections:
+        if problem_pats and split_mode == "section":
+            sub_units = _extract_problems_from_section(sec_title, sec_content, problem_pats)
+            all_units.extend(sub_units)
+        else:
+            all_units.append((sec_title, sec_content))
+
+    # ── 连续标题合并（ADR-0017 决策10）──
+    all_units = _merge_consecutive_headers(all_units, section_pat)
+
+    if not all_units:
+        log("   ⚠️ 未识别到任何单元，跳过分割")
+        return False
+
+    # ── 写入文件 ──
     md_dir = Path(md_file).parent
     src_media = md_dir / f"{base_name}_images" / "media"
     log(f"   🔍 图片源目录: {src_media}")
@@ -391,22 +382,167 @@ def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     target_root = Path(output_root) / base_name
     target_root.mkdir(parents=True, exist_ok=True)
 
-    unit_prefix = "板块" if split_mode == "section" else "第"
-    unit_suffix = "" if split_mode == "section" else "题"
-
     total_copied = [0]; total_missing = [0]
-    for idx, (title, content) in enumerate(questions, start=1):
-        q_dir_name = f"{unit_prefix}{idx}{unit_suffix}"
-        q_dir = target_root / q_dir_name
+    for idx, (title, content) in enumerate(all_units, start=1):
+        unit_name = f"单元{idx}"
+        q_dir = target_root / unit_name
         q_dir.mkdir(exist_ok=True)
         img_dir = q_dir / "images"; img_dir.mkdir(exist_ok=True)
         img_result = copy_md_images(content, [src_media], img_dir)
         total_copied[0] += img_result.copied
         total_missing[0] += img_result.missing
-        (q_dir / f"{q_dir_name}.md").write_text(img_result.content, encoding='utf-8')
+        (q_dir / f"{unit_name}.md").write_text(img_result.content, encoding='utf-8')
 
-    log(f"   📂 拆分完成: {len(questions)} 题, 图片 {total_copied[0]} 张")
+    log(f"   📂 拆分完成: {len(all_units)} 个单元, 图片 {total_copied[0]} 张")
     return True
+
+
+def _split_by_section_pattern(lines, section_pat):
+    """按 section_pattern 切分，返回 [(标题, 内容), ...]。
+
+    第一个匹配前的内容标题为"引言"。
+    """
+    sections = []
+    current_title = "引言"
+    current_content = []
+    for line in lines:
+        stripped = line.strip()
+        if section_pat.match(stripped):
+            if current_content:
+                sections.append((current_title, '\n'.join(current_content)))
+            current_title = stripped
+            current_content = [line]
+        else:
+            current_content.append(line)
+    if current_content:
+        sections.append((current_title, '\n'.join(current_content)))
+    return sections
+
+
+def _split_by_title_pattern(lines, config):
+    """title 模式（向后兼容旧学科）。"""
+    title_compiled = config_loader.get_compiled_title_patterns(config)
+    questions = []
+    current_title = None
+    current_content = []
+    in_question = False
+    for line in lines:
+        stripped = line.strip()
+        is_title = any(p.match(stripped) for p in title_compiled)
+        is_section = stripped.startswith('#') and not stripped.startswith('**')
+        if is_title:
+            if current_title is not None:
+                questions.append((current_title, '\n'.join(current_content)))
+            current_title = stripped
+            current_content = [line]
+            in_question = True
+        elif is_section and in_question:
+            questions.append((current_title, '\n'.join(current_content)))
+            current_title = None; current_content = []; in_question = False
+        else:
+            if in_question:
+                current_content.append(line)
+    if current_title is not None:
+        questions.append((current_title, '\n'.join(current_content)))
+    return questions
+
+
+def _extract_problems_from_section(section_title, section_content, problem_pats):
+    """从板块中提取例题为独立单元。
+
+    匹配 problem_pats 的行作为例题边界，例题之间的内容作为知识单元。
+    无标记的内联题留在知识单元中。
+    """
+    lines = section_content.split('\n')
+    units = []
+    knowledge_lines = []
+    current_problem_lines = []
+    current_problem_title = ""
+    in_problem = False
+
+    for line in lines:
+        stripped = line.strip()
+        is_problem = any(p.match(stripped) for p in problem_pats)
+        if is_problem:
+            # 保存之前的知识
+            if knowledge_lines:
+                knowledge_text = '\n'.join(knowledge_lines).strip()
+                if knowledge_text:
+                    units.append((section_title, knowledge_text))
+                knowledge_lines = []
+            # 保存之前的题目
+            if in_problem and current_problem_lines:
+                units.append((current_problem_title, '\n'.join(current_problem_lines)))
+            current_problem_title = stripped
+            current_problem_lines = [line]
+            in_problem = True
+        else:
+            if in_problem:
+                current_problem_lines.append(line)
+            else:
+                knowledge_lines.append(line)
+
+    # 最后的知识块
+    if knowledge_lines:
+        knowledge_text = '\n'.join(knowledge_lines).strip()
+        if knowledge_text:
+            units.append((section_title, knowledge_text))
+    # 最后的题目块
+    if in_problem and current_problem_lines:
+        units.append((current_problem_title, '\n'.join(current_problem_lines)))
+
+    # 如果没有提取出例题，整个板块作为一个知识单元
+    if not units:
+        units.append((section_title, section_content))
+    return units
+
+
+def _has_real_content(lines, section_pat):
+    """检查内容行中是否有实质内容（非标题、非空行）。"""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if section_pat and section_pat.match(stripped):
+            continue
+        return True
+    return False
+
+
+def _merge_consecutive_headers(units, section_pat):
+    """合并连续的标题单元（中间无实质内容时合并）。"""
+    if not units or not section_pat:
+        return units
+
+    merged = []
+    buffer_title = ""
+    buffer_content_lines = []
+
+    for title, content in units:
+        content_lines = content.split('\n')
+        if _has_real_content(content_lines, section_pat):
+            # 有实质内容 → 提交 buffer + 当前单元
+            if buffer_content_lines:
+                merged.append((buffer_title, '\n'.join(buffer_content_lines)))
+                buffer_title = ""
+                buffer_content_lines = []
+            merged.append((title, content))
+        else:
+            # 无实质内容 → 合并标题
+            if buffer_title:
+                buffer_title = title  # 用最新的标题
+            else:
+                buffer_title = title
+            if buffer_content_lines:
+                buffer_content_lines.extend(content_lines)
+            else:
+                buffer_content_lines = content_lines
+
+    # 提交最后的 buffer
+    if buffer_content_lines:
+        merged.append((buffer_title, '\n'.join(buffer_content_lines)))
+
+    return merged if merged else units
 
 
 def default_generate_knowledge(cleaned_md, output_root, base_name, config):
