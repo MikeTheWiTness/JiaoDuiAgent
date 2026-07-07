@@ -502,6 +502,17 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
 
             loop = 0
             while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
+                # 检查中断信号
+                if ctx.interrupt_event and ctx.interrupt_event.is_set():
+                    log("   ⚠️ 收到中断信号，停止工具循环")
+                    return {
+                        "content": "",
+                        "tool_calls_log": tool_calls_log,
+                        "reasoning": "",
+                        "messages": messages,
+                        "stop_reason": "interrupted",
+                        "usage": total_usage,
+                    }
                 if loop >= ctx.max_loops:
                     log(f"   ⚠️ 工具调用超限（{ctx.max_loops}轮），压缩历史 + 去工具...")
                     # 保存压缩前的完整日志（含工具调用）
