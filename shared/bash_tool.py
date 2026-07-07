@@ -248,26 +248,48 @@ def _sanitize_proofread_text(text: str) -> str:
 
 
 def _validate_latex_braces(text: str) -> str | None:
-    """校验 LaTeX 公式的括号匹配。返回错误信息，无错误返回 None。
+    """校验文本中所有花括号的配对。返回错误信息，无错误返回 None。
 
-    只校验 $...$ 和 \\(...\\) 数学模式内的花括号配对。
+    检查范围：
+    - 数学模式内（$...$、$$...$$、\\(...\\)、\\[...\\]）：严格配对
+    - 数学模式外：花括号通常表示格式错误（\\style{} 等），一并检查
+    - 排除已转义的 \\{ \\} 和 LaTeX 命令参数（如 \\text{...}、\\textbf{...}）
+
+    任何位置出现括号不配对都拒绝，防止 LaTeX 编译失败。
     """
-    # 提取所有数学片段
-    math_parts = _re_mod.findall(r'\$[^$]+\$|\\\(.+?\\\)', text)
-    for part in math_parts:
-        # 排除已转义的 \{ \}
-        stripped = part.replace(r'\{', '').replace(r'\}', '')
-        depth = 0
-        for ch in stripped:
+    # 1. 全局括号平衡（排除转义的 \{ \}）
+    stripped = text.replace(r'\{', '').replace(r'\}', '')
+    depth = 0
+    for i, ch in enumerate(stripped):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+        if depth < 0:
+            ctx = text[max(0,i-30):i+30]
+            return f"花括号不匹配（位置 {i} 处多了一个右括号）: ...{ctx}..."
+    if depth != 0:
+        return f"花括号不匹配（全文{'少' if depth > 0 else '多'}了 {abs(depth)} 个括号）"
+
+    # 2. 逐段数学模式校验
+    math_blocks = _re_mod.findall(
+        r'\$\$[\s\S]*?\$\$|\$[^$]+?\$|\\\[[\s\S]*?\\\]|\\\(.+?\\\)',
+        text
+    )
+    for block in math_blocks:
+        # 排除转义的 \{ \}，只数真实分组括号
+        clean = block.replace(r'\{', '').replace(r'\}', '')
+        bd = 0
+        for ch in clean:
             if ch == '{':
-                depth += 1
+                bd += 1
             elif ch == '}':
-                depth -= 1
-            if depth < 0:
-                return "数学公式花括号不匹配（多了一个" + chr(125) + "）: " + part[:100]
-        if depth != 0:
-            direction = "少" if depth > 0 else "多"
-            return f"数学公式花括号不匹配（{direction}了 {abs(depth)} 个括号）: {part[:100]}"
+                bd -= 1
+            if bd < 0:
+                return f"数学公式花括号不匹配（多了一个右括号）: {block[:120]}"
+        if bd != 0:
+            return f"数学公式花括号不匹配（{'少' if bd > 0 else '多'}了 {abs(bd)} 个括号）: {block[:120]}"
+
     return None
 
 
