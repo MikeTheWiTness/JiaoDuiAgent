@@ -983,18 +983,8 @@ class DefaultApp:
                     split_ok = False
 
                 if split_ok:
-                    # 知识分割模式（knowledge_smart / knowledge_manual）已自动处理
-                    # 知识/题目的分离，无需再走旧版"提取知识文件夹"逻辑
-                    is_knowledge_split = self._split_mode_key() in ("knowledge_smart", "knowledge_manual")
-                    if source == "讲义" and self.knowledge_enabled.get() and not is_knowledge_split:
-                        from core import config_loader
-                        config_split_mode = config_loader.get_lecture_split_mode(self.subject_app.config)
-                        if config_split_mode != "section":
-                            self.subject_app.generate_knowledge(raw_md, split_root, basename)
-                        else:
-                            log("   📘 section 模式：跳过知识提取（版块即单元）")
-                    elif is_knowledge_split:
-                        log("   📘 知识分割模式：知识/题目已自动分离，跳过旧版知识提取")
+                    # ADR-0017: section 模式下知识自然成板块，不再需要独立知识提取
+                    log("   📘 section 模式：知识已作为独立板块，跳过旧版知识提取")
 
                     converted_dir = os.path.join(split_root, basename)
                     converted_dirs.append(converted_dir)
@@ -1145,18 +1135,15 @@ class DefaultApp:
                             future_map = {}
                             for q_dir in batch:
                                 q_name = os.path.basename(q_dir)
-                                is_knowledge = (q_name == "知识")
-                                task_type = "知识" if is_knowledge else "题目"
-                                log(f"  ⏳ 提交{task_type}：{q_name}")
+                                log(f"  ⏳ 提交单元：{q_name}")
                                 future = executor.submit(
                                     self.subject_app.proofread_one,
-                                    ctx, q_dir, q_name, is_knowledge, generate_pdf, content
+                                    ctx, q_dir, q_name, generate_pdf, content
                                 )
-                                future_map[future] = (q_dir, q_name, is_knowledge)
+                                future_map[future] = (q_dir, q_name)
 
                             for future in as_completed(future_map):
-                                q_dir, q_name, is_knowledge = future_map[future]
-                                task_type = "知识" if is_knowledge else "题目"
+                                q_dir, q_name = future_map[future]
                                 try:
                                     data = future.result()
                                     if data["success"]:
@@ -1179,11 +1166,9 @@ class DefaultApp:
                         if self.task_interrupt:
                             break
                         q_name = os.path.basename(q_dir)
-                        is_knowledge = (q_name == "知识")
-                        task_type = "知识" if is_knowledge else "题目"
-                        log(f"校对{task_type}：{q_name}")
+                        log(f"校对单元：{q_name}")
                         data = self.subject_app.proofread_one(
-                            ctx, q_dir, q_name, is_knowledge, generate_pdf, content
+                            ctx, q_dir, q_name, generate_pdf, content
                         )
                         if data["success"]:
                             self.proofread_result[q_dir] = data["result"]
