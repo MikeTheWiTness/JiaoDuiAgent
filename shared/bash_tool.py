@@ -247,6 +247,30 @@ def _sanitize_proofread_text(text: str) -> str:
     return text
 
 
+def _validate_latex_braces(text: str) -> str | None:
+    """校验 LaTeX 公式的括号匹配。返回错误信息，无错误返回 None。
+
+    只校验 $...$ 和 \\(...\\) 数学模式内的花括号配对。
+    """
+    # 提取所有数学片段
+    math_parts = _re_mod.findall(r'\$[^$]+\$|\\\(.+?\\\)', text)
+    for part in math_parts:
+        # 排除已转义的 \{ \}
+        stripped = part.replace(r'\{', '').replace(r'\}', '')
+        depth = 0
+        for ch in stripped:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            if depth < 0:
+                return "数学公式花括号不匹配（多了一个" + chr(125) + "）: " + part[:100]
+        if depth != 0:
+            direction = "少" if depth > 0 else "多"
+            return f"数学公式花括号不匹配（{direction}了 {abs(depth)} 个括号）: {part[:100]}"
+    return None
+
+
 class AddProofreadMarkParams(BaseModel):
     paragraph: int = Field(description="段落号（1-based，LLM 通过 read_section 已知）")
     original: str = Field(description="要标记的原文片段（短字符串）")
@@ -278,6 +302,11 @@ class AddProofreadMarkTool(BaseTool):
         original = _sanitize_proofread_text(original)
         corrected = _sanitize_proofread_text(corrected)
         reason = _sanitize_proofread_text(reason)
+
+        # 校验 LaTeX 公式括号匹配（数学学科防 LLM 输出 }} } 错误）
+        brace_err = _validate_latex_braces(corrected)
+        if brace_err:
+            return f"拒绝：corrected 字段的数学公式有括号错误。{brace_err}\n请修正后重试。"
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
