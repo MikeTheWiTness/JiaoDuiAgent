@@ -63,6 +63,7 @@ class DefaultApp:
         self.proofread_result = {}
         self.task_running = False
         self.task_interrupt = False
+        self._interrupt_event = threading.Event()  # 线程间中断信号
 
         self.api_config = load_env_config(subject_app.subject_dir)
 
@@ -1039,7 +1040,8 @@ class DefaultApp:
     def interrupt_task(self):
         if self.task_running:
             self.task_interrupt = True
-            log("===== 已触发中断 =====")
+            self._interrupt_event.set()  # 通知所有线程中断
+            log("===== 已触发中断（取消进行中的请求） =====")
 
     def _proofread_thread(self):
         api_url = self.api_config.get("api_url", "")
@@ -1049,10 +1051,13 @@ class DefaultApp:
         out_root = self.output_dir.get().strip()
         if not out_root:
             out_root = DEFAULT_OUTPUT
+        # 重置中断信号
+        self._interrupt_event.clear()
         ctx = SessionContext(
             api_url=api_url, api_key=api_key, model=model,
             max_loops=self.subject_app.get_max_tool_loops(),
             output_dir=out_root,
+            interrupt_event=self._interrupt_event,
         )
         report_root = os.path.join(out_root, "校对报告")
         os.makedirs(report_root, exist_ok=True)
@@ -1150,6 +1155,12 @@ class DefaultApp:
                                 future_map[future] = (q_dir, q_name)
 
                             for future in as_completed(future_map):
+                                if self.task_interrupt:
+                                    # 取消所有未完成的 future
+                                    for f in future_map:
+                                        if not f.done():
+                                            f.cancel()
+                                    break
                                 q_dir, q_name = future_map[future]
                                 try:
                                     data = future.result()

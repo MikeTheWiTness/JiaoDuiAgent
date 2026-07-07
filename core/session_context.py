@@ -1,5 +1,6 @@
 """校对会话上下文 —— 封装 API 配置，消除参数传递链。"""
 from dataclasses import dataclass, field
+import threading
 
 
 @dataclass
@@ -13,3 +14,4 @@ class SessionContext:
     max_tokens: int = 16384
     reasoning_effort: str = "high"
     output_dir: str | None = None
+    interrupt_event: threading.Event | None = None  # 中断信号
