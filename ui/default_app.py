@@ -652,7 +652,7 @@ class DefaultApp:
             return
         dirs = self.subject_app.collect_paper_dirs(path)
         if not dirs:
-            messagebox.showwarning("提示", "所选目录下没有识别到试卷结构（需包含第N题/板块N 或 知识 子目录）")
+            messagebox.showwarning("提示", "所选目录下没有识别到试卷结构（需包含 单元N/第N题/板块N 子目录）")
             return
         added = 0
         for d in dirs:
@@ -665,15 +665,15 @@ class DefaultApp:
         log(f"📂 已从根目录加载 {added} 套试卷到清单")
 
     def select_pdf_folders(self):
-        paths = filedialog.askdirectory(title="选择拆分文件夹（含 第N题/板块N + _校对数据.json）")
+        paths = filedialog.askdirectory(title="选择拆分文件夹（含 单元N/第N题/板块N + _校对数据.json）")
         if not paths:
             return
         path = paths
         name = os.path.basename(path)
         subdirs = [e for e in os.listdir(path) if os.path.isdir(os.path.join(path, e))]
-        has_questions = any(re.match(r'第\d+题|板块\d+', e) for e in subdirs)
+        has_questions = any(re.match(r'第\d+题|板块\d+|单元\d+', e) for e in subdirs)
         if not has_questions:
-            messagebox.showwarning("提示", f"「{name}」下没有识别到题目目录（第N题/板块N），请确认选择正确")
+            messagebox.showwarning("提示", f"「{name}」下没有识别到题目目录（单元N/第N题/板块N），请确认选择正确")
             return
         entry = (path, name)
         if entry not in self.proofread_list:
@@ -683,7 +683,7 @@ class DefaultApp:
 
     def start_generate_pdf(self):
         if not self.proofread_list:
-            messagebox.showwarning("提示", "请先选择拆分文件夹（含 第N题/板块N + _校对数据.json）")
+            messagebox.showwarning("提示", "请先选择拆分文件夹（含 单元N/第N题/板块N + _校对数据.json）")
             return
         self.task_running = True
         self.task_interrupt = False
