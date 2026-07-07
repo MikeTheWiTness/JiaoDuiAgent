@@ -85,6 +85,11 @@ def _escape_unescaped(text: str, chars: str) -> str:
 
 
 def _escape_preserve_math(text: str) -> str:
+    # 预处理：清除 Markdown 和 HTML 格式残留（防御性清洗）
+    text = re.sub(r'\\style\{[^}]*\}\{([^}]*)\}', r'\1', text)  # \style{...}{text} → text
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)               # **bold** → bold
+    text = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'\1', text)      # *italic* → italic
+
     parts = re.split(r"(\$\$[\s\S]*?\$\$|\$[^$]*?\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))", text)
     result = []
     for part in parts:

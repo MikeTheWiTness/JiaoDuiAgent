@@ -232,6 +232,21 @@ def _next_mark_number() -> int:
     return current
 
 
+def _sanitize_proofread_text(text: str) -> str:
+    """清洗校对文本中的 Markdown/HTML 格式残留。
+
+    LLM 有时会在 corrected/original/reason 中带 markdown 粗体（**text**）、
+    HTML 样式（\\style{...}）、Word 残留格式等，需在写入文件前清除。
+    """
+    # 1. 移除 HTML/CSS style 属性（如 \\style{font-style:italic;...}{text}）
+    text = _re_mod.sub(r'\\style\{[^}]*\}\{([^}]*)\}', r'\1', text)
+    # 2. 移除 Markdown 粗体/斜体标记（保留内部文字）
+    text = _re_mod.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = _re_mod.sub(r'\*([^*]+)\*', r'\1', text)
+    text = _re_mod.sub(r'__([^_]+)__', r'\1', text)
+    return text
+
+
 class AddProofreadMarkParams(BaseModel):
     paragraph: int = Field(description="段落号（1-based，LLM 通过 read_section 已知）")
     original: str = Field(description="要标记的原文片段（短字符串）")
@@ -258,6 +273,11 @@ class AddProofreadMarkTool(BaseTool):
 
         if not original:
             return "错误：original 不能为空"
+
+        # 清洗 LLM 可能误带的 Markdown/HTML 格式
+        original = _sanitize_proofread_text(original)
+        corrected = _sanitize_proofread_text(corrected)
+        reason = _sanitize_proofread_text(reason)
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -342,6 +362,14 @@ class UpdateProofreadMarkTool(BaseTool):
         file_path = get_current_file()
         if not file_path:
             return "错误：未设置当前校对文件。"
+
+        # 清洗 LLM 可能误带的格式
+        if original is not None:
+            original = _sanitize_proofread_text(original)
+        if corrected is not None:
+            corrected = _sanitize_proofread_text(corrected)
+        if reason is not None:
+            reason = _sanitize_proofread_text(reason)
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
