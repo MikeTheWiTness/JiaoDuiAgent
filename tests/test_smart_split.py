@@ -116,7 +116,8 @@ class TestSmartSplitEdgeCases(unittest.TestCase):
 
     def test_prompt_exists(self):
         self.assertIsInstance(SMART_SPLIT_PROMPT, str)
-        self.assertIn("<problem>", SMART_SPLIT_PROMPT)
+        self.assertIn("单元开始", SMART_SPLIT_PROMPT)
+        self.assertIn("单元结束", SMART_SPLIT_PROMPT)
         self.assertIn("不修改原文", SMART_SPLIT_PROMPT)
 
     def test_smart_split_function_exists(self):

@@ -3,39 +3,47 @@ import os
 from pathlib import Path
 from core.logging_utils import log
 from core.api_client import call_api
+from core.manual_split import parse_unit_markers
 
 
-SMART_SPLIT_PROMPT = """你是专业的语文试卷结构分析专家。请在给定的文档原文中，用 <problem></problem> 标签标记每个完整的题目单元。
+SMART_SPLIT_PROMPT = """你是专业的语文试卷结构分析专家。请在给定的文档原文中，用 ###### 单元开始 ###### 和 ###### 单元结束 ###### 标记每个完整的单元。
 
 规则：
-1. **绝对不修改原文任何一个字**，只在题目边界插入标签
-2. 每个完整题目单元（一篇文言文+几道小题、一首诗+鉴赏题等 + 该题的答案解析）用一对 <problem> 标签包裹
-3. **答案解析是题目的一部分**：如果某道题后面紧跟着答案、解析、参考答案等内容，必须将它们也包含在同一个 <problem> 标签内
-4. **仅跳过**：试卷级别的标题、总分说明、考试时间等全局信息。这些不属于任何一道题
-5. 标签必须单独占一行，不要和正文混在一起
-6. 输出完整的带标签文本，不要加其他解释
+1. **绝对不修改原文任何一个字**，只在单元边界插入标记
+2. 每个完整单元（一篇文言文+几道小题、知识讲解+配套练习、一首诗+鉴赏题等）用一对标记包裹
+3. **答案解析是题目的一部分**：如果某道题后面紧跟着答案、解析、参考答案等内容，必须将它们也包含在同一个单元内
+4. **仅跳过**：试卷级别的标题、总分说明、考试时间等全局信息。这些不属于任何一个单元
+5. 标记必须**单独占一行**，不要和正文混在一起
+6. 输出完整的带标记文本，不要加其他解释
 
 示例：
 ```
 这是引言，不标记
-<problem>
+###### 单元开始 ######
 例1 题目内容...
-</problem>
+###### 单元结束 ######
 中间过渡文字，不标记
-<problem>
+###### 单元开始 ######
 例2 题目内容...
-</problem>
+###### 单元结束 ######
 结尾总结，不标记
 ```"""
 
 
-SMART_SPLIT_MAX_TOKENS = 16384  # deepseek 等模型输出上限通常为 8K-16K
+SMART_SPLIT_MAX_TOKENS = 16384
 
 
 def parse_problem_tags(text):
+    """旧的 <problem> 标签解析（向后兼容）。"""
     pattern = r"<problem>(.*?)</problem>"
     matches = re.findall(pattern, text, re.DOTALL)
-    return [{"content": m.strip()} for m in matches]
+    if matches:
+        return [{"content": m.strip()} for m in matches]
+    # Fallback：尝试用统一标记解析
+    try:
+        return parse_unit_markers(text)
+    except Exception:
+        return []
 
 
 def _dump_smart_split_raw(raw_text, md_file, label=""):
