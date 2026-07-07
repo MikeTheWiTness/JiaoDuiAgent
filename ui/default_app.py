@@ -1157,10 +1157,10 @@ class DefaultApp:
                                         self.proofread_result[q_dir] = data["result"]
                                         paper_results[q_dir] = data["result"]
                                         session_mgr.mark_completed(q_name)
-                                        log(f"   ✅ {q_name} {task_type}校对完成")
+                                        log(f"   ✅ {q_name} 校对完成")
                                     else:
                                         session_mgr.mark_failed(q_name, data.get('error', ''))
-                                        log(f"   ❌ {q_name} {task_type}校对失败：{data['error']}")
+                                        log(f"   ❌ {q_name} 校对失败：{data['error']}")
                                 except Exception as e:
                                     session_mgr.mark_failed(q_name, str(e))
                                     log(f"   ❌ {q_name} 异常：{e}")
