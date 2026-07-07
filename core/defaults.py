@@ -510,39 +510,29 @@ def _has_real_content(lines, section_pat):
 
 
 def _merge_consecutive_headers(units, section_pat):
-    """合并连续的标题单元（中间无实质内容时合并）。"""
-    if not units or not section_pat:
+    """合并 ## 模块级标题到下一个单元。
+
+    ## 模块一、## 模块二等标题只是组织结构壳，
+    固定合并到下一个 ### 或 #### 标题单元中。
+    """
+    if not units:
         return units
 
     merged = []
-    buffer_title = ""
-    buffer_content_lines = []
-
-    for title, content in units:
-        content_lines = content.split('\n')
-        if _has_real_content(content_lines, section_pat):
-            # 有实质内容 → 提交 buffer + 当前单元
-            if buffer_content_lines:
-                merged.append((buffer_title, '\n'.join(buffer_content_lines)))
-                buffer_title = ""
-                buffer_content_lines = []
-            merged.append((title, content))
+    i = 0
+    while i < len(units):
+        title, content = units[i]
+        # 如果当前单元以 ## 开头且后面还有单元 → 合并到下一个
+        if title.startswith("## ") and i + 1 < len(units):
+            next_title, next_content = units[i + 1]
+            merged_content = content + "\n" + next_content
+            merged.append((next_title, merged_content))
+            i += 2
         else:
-            # 无实质内容 → 合并标题
-            if buffer_title:
-                buffer_title = title  # 用最新的标题
-            else:
-                buffer_title = title
-            if buffer_content_lines:
-                buffer_content_lines.extend(content_lines)
-            else:
-                buffer_content_lines = content_lines
+            merged.append((title, content))
+            i += 1
 
-    # 提交最后的 buffer
-    if buffer_content_lines:
-        merged.append((buffer_title, '\n'.join(buffer_content_lines)))
-
-    return merged if merged else units
+    return merged
 
 
 def default_generate_knowledge(cleaned_md, output_root, base_name, config):
