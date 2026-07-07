@@ -69,6 +69,88 @@ class BashTool(BaseTool):
         raise NotImplementedError
 
 
+class EditFileParams(BaseModel):
+    path: str = Field(description="要编辑的文件路径（绝对路径）")
+    old_string: str = Field(description="要替换的原文字段（必须与文件中的内容完全一致）")
+    new_string: str = Field(description="替换后的文字")
+
+
+class EditFileTool(BaseTool):
+    """在文件中精确查找并替换指定文本。
+
+    只替换第一个匹配项。old_string 必须与文件中的内容完全一致（包括空白字符）。
+    替换成功后返回前后几行的预览。
+    """
+
+    name: str = "edit_file"
+    description: str = (
+        "在文件中精确查找并替换指定文本。old_string 必须与文件中的内容完全一致。"
+        "只替换第一个匹配项。替换成功后返回修改位置前后的预览。"
+    )
+    args_schema: type[BaseModel] = EditFileParams
+
+    def _run(self, path: str, old_string: str, new_string: str) -> str:
+        if not old_string:
+            return "错误：old_string 不能为空"
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except FileNotFoundError:
+            return f"错误：文件不存在 — {path}"
+        except Exception as e:
+            return f"读取文件失败：{e}"
+
+        idx = content.find(old_string)
+        if idx == -1:
+            lines = content.split("\n")
+            line_count = len(lines)
+            # 尝试提供上下文提示
+            snippet = content[:200] if len(content) <= 200 else content[:200] + "..."
+            return (
+                f"未找到匹配文本（文件共 {line_count} 行，{len(content)} 字符）。\n"
+                f"文件开头预览:\n{snippet}\n\n"
+                f"请确认 old_string 与文件内容完全一致（含空白字符）。"
+            )
+
+        new_content = content[:idx] + new_string + content[idx + len(old_string):]
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+        except Exception as e:
+            return f"写入文件失败：{e}"
+
+        # 生成预览：定位到匹配所在行，显示前后行
+        lines = content.split("\n")
+        # 找到匹配所在的行号
+        pos = 0
+        match_line_idx = 0
+        for i, line in enumerate(lines):
+            if pos + len(line) > idx:
+                match_line_idx = i
+                break
+            pos += len(line) + 1  # +1 for \n
+        # 取前后行（存在时）
+        prev_snippet = lines[match_line_idx - 1].strip()[-60:] if match_line_idx > 0 else ""
+        match_snippet = lines[match_line_idx].strip()[:80]
+        next_snippet = lines[match_line_idx + 1].strip()[:60] if match_line_idx + 1 < len(lines) else ""
+        preview_parts = []
+        if prev_snippet:
+            preview_parts.append(f"...{prev_snippet}")
+        preview_parts.append(f"→ {match_snippet} ←")
+        if next_snippet:
+            preview_parts.append(f"{next_snippet}...")
+
+        return (
+            f"替换成功。已将 \"{old_string}\" 替换为 \"{new_string}\"。\n"
+            f"修改位置预览:\n" + "\n".join(preview_parts)
+        )
+
+    async def _arun(self, *args, **kwargs):
+        raise NotImplementedError
+
+
 # ─── FileReadTool ────────────────────────────────────────────
 
 class FileReadParams(BaseModel):
