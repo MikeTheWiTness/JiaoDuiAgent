@@ -23,43 +23,61 @@ def _is_no_issue(res: str) -> bool:
 
 
 def _enforce_format(res: str):
+    """格式审查 — 适配 ADR-0019 XML 标记式校对。"""
     if _is_no_issue(res):
         return True, ""
     issues = []
-    # 注意：标记原文中可能包含内部 ### 标题（如前置参考的"### 权威原文"），
-    # 不能以任意 ### 作为结束边界，必须以 ### 修改原因 作为精确边界。
-    # 使用 [^\n]* 而非 \s* 允许标题行上有额外描述文字（如 "### 标记原文 段落"），
-    # 避免因提示词歧义导致 LLM 在标题后多加文字而匹配失败。
-    marker_match = re.search(r'###\s*标记原文[^\n]*\n(.*?)(?=\n###\s*修改原因|\Z)', res, re.DOTALL)
-    reason_match = re.search(r'###\s*修改原因[^\n]*\n(.*?)(?=\n###\s*修改|\Z)', res, re.DOTALL)
-    # 内联标记检测：只要存在 【N|原文|改为】 标记即视为内联格式
-    has_inline_markers = bool(re.search(r'【\d+\|.*\|[^】]*】', res))
-    if not marker_match and not has_inline_markers:
-        issues.append("缺少 ### 标记原文 段落 且无内联标记")
-    if not reason_match:
-        issues.append("缺少 ### 修改原因 段落")
-    # 确定标记所在的文本区域（优先用 marker_match，其次全文）
-    marker_text = marker_match.group(1) if marker_match else (res if has_inline_markers else "")
-    if marker_text and reason_match:
-        markers = re.findall(r'【(\d+)\|', marker_text)
-        marker_nums = set(int(m) for m in markers)
-        reason_nums = set()
-        for line in reason_match.group(1).split('\n'):
-            m = re.match(r'^(\d+)\.\s', line.strip())
-            if m:
-                reason_nums.add(int(m.group(1)))
-        missing = marker_nums - reason_nums
-        extra = reason_nums - marker_nums
-        if missing:
-            issues.append(f"标记编号 {sorted(missing)} 在修改原因中缺少对应条目")
-        if extra:
-            issues.append(f"修改原因编号 {sorted(extra)} 没有对应的标记")
-    if marker_text:
-        # 只检测【数字 开头但后面紧跟的不是 | 或数字（防止 \d+ 回溯
-        # 把 【13|...】 中的 【1 误判为异常）。【试题答案】等中文括号不受影响。
-        malformed = re.findall(r'【\d+(?![|\d])', marker_text)
-        if malformed:
-            issues.append(f"发现 {len(malformed)} 个格式异常的标记（编号后缺少 |）")
+
+    # ADR-0019: 检查 <mark_N>...</mark_N> 标记配对
+    open_marks = re.findall(r'<mark_(\d+)>', res)
+    close_marks = re.findall(r'</mark_(\d+)>', res)
+    open_set = set(int(m) for m in open_marks)
+    close_set = set(int(m) for m in close_marks)
+
+    # 也兼容旧格式
+    has_inline = bool(re.search(r'【\d+\|.*\|[^】]*】', res))
+    has_marker_section = bool(re.search(r'###\s*标记原文', res))
+    has_suggestion_section = bool(re.search(r'###\s*修改建议', res))
+    has_reason_section = bool(re.search(r'###\s*修改原因', res))
+
+    if open_set or close_set:
+        # 新格式检查
+        unclosed = open_set - close_set
+        unopened = close_set - open_set
+        if unclosed:
+            issues.append(f"标记未闭合: {sorted(unclosed)}")
+        if unopened:
+            issues.append(f"关闭标记无对应打开: {sorted(unopened)}")
+        if not has_suggestion_section and not has_reason_section:
+            issues.append("缺少 ### 修改建议 或 ### 修改原因 段落")
+    elif has_inline or has_marker_section:
+        # 旧格式兼容检查
+        if not has_marker_section and not has_inline:
+            issues.append("缺少 ### 标记原文 段落 且无内联标记")
+        if not has_reason_section:
+            issues.append("缺少 ### 修改原因 段落")
+        # 旧格式编号校验（保留兼容）
+        marker_text = res
+        if has_marker_section:
+            m = re.search(r'###\s*标记原文[^\n]*\n(.*?)(?=\n###\s*修改原因|\Z)', res, re.DOTALL)
+            marker_text = m.group(1) if m else res
+        if has_reason_section:
+            m = re.search(r'###\s*修改原因[^\n]*\n(.*?)(?=\n###\s*修改|\Z)', res, re.DOTALL)
+            reason_text = m.group(1) if m else ""
+            markers = re.findall(r'【(\d+)\|', marker_text)
+            marker_nums = set(int(m) for m in markers)
+            reason_nums = set()
+            for line in reason_text.split('\n'):
+                rn = re.match(r'^(\d+)\.\s', line.strip())
+                if rn:
+                    reason_nums.add(int(rn.group(1)))
+            missing = marker_nums - reason_nums
+            extra = reason_nums - marker_nums
+            if missing:
+                issues.append(f"标记编号 {sorted(missing)} 在修改原因中缺少对应条目")
+            if extra:
+                issues.append(f"修改原因编号 {sorted(extra)} 没有对应的标记")
+
     if issues:
         return False, "; ".join(issues)
     return True, ""

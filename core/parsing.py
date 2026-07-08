@@ -140,6 +140,51 @@ def _parse_old_format(text: str, summary: str) -> dict | None:
     return {"corrections": corrections, "summary": summary or "无问题"}
 
 
+def _parse_xml_mark_format(text: str, summary: str) -> dict | None:
+    """解析 ADR-0019 XML 标记格式：<mark_N>...</mark_N> + ### 修改建议。"""
+    corrections = []
+
+    # 提取 ### 修改建议 中的修改条目
+    suggestion_section = ""
+    sm = re.search(r'###\s*修改建议[^\n]*\n(.*?)(?=\n###|\Z)', text, re.DOTALL)
+    rm = re.search(r'###\s*修改原因[^\n]*\n(.*?)(?=\n###|\Z)', text, re.DOTALL)
+    if sm:
+        suggestion_section = sm.group(1)
+    elif rm:
+        suggestion_section = rm.group(1)
+
+    # 解析 <mark_N>: original → corrected  原因: reason
+    for line in suggestion_section.split('\n'):
+        line = line.strip()
+        m = re.match(r'<mark_(\d+)>:\s*(.*?)\s*→\s*(.*?)\s*原因:\s*(.*)', line)
+        if m:
+            corrections.append({
+                "num": int(m.group(1)),
+                "type": "text",
+                "original": m.group(2).strip(),
+                "correction": m.group(3).strip(),
+                "reason": m.group(4).strip(),
+            })
+
+    # 构建 marked_text：保留 <mark_N> 标记，把 </mark_N> 后的多余标记清理
+    marked_text = text
+    # 切除 ### 修改建议 之后的内容
+    if sm:
+        marked_text = text[:sm.start()]
+    elif rm:
+        marked_text = text[:rm.start()]
+
+    if not corrections:
+        return None
+
+    corrections.sort(key=lambda x: x.get("num", 0))
+    return {
+        "corrections": corrections,
+        "summary": summary or "一般问题",
+        "marked_text": marked_text.strip().replace('\n', '\\n'),
+    }
+
+
 def parse_proofread_md(text: str):
     if not text or not text.strip():
         return None
@@ -150,22 +195,26 @@ def parse_proofread_md(text: str):
             summary = kw
             break
 
-    # "无问题" 快速通道：仅当 LLM 真只输出"无问题"（无标记、无修改原因）时生效。
-    # 若有标记混在文中，走正常内联解析流程，避免丢失校正数据。
+    # ADR-0019: 优先检测 XML 标记格式
+    has_xml_marks = bool(re.search(r'<mark_\d+>', text))
+    has_suggestions = bool(re.search(r'###\s*修改建议', text))
+    if has_xml_marks and has_suggestions:
+        result = _parse_xml_mark_format(text, summary)
+        if result:
+            return result
+
+    # 旧格式兼容
     has_markers = bool(re.search(r'【\d+\|.*\|[^】]*】', text))
     has_reasons = bool(re.search(r'###\s*修改原因', text))
-    if summary == "无问题" and not has_markers and not has_reasons:
+    if summary == "无问题" and not has_markers and not has_reasons and not has_xml_marks:
         return {"corrections": [], "summary": "无问题", "marked_text": ""}
 
-    if "### 标记原文" in text and re.search(r'【\d+\|.*\|[^】]*】', text):
+    if "### 标记原文" in text and has_markers:
         result = _parse_inline_format(text, summary)
         if result:
             return result
 
-    # 兜底：即使缺少 ### 标记原文 标题，只要有 【N|原文|改为】 标记 +
-    # ### 修改原因 段落，也能提取校对数据。格式修正 LLM 常常忘记加
-    # 标记原文标题但实际内容已在文中。
-    if re.search(r'【\d+\|.*\|[^】]*】', text) and re.search(r'###\s*修改原因', text):
+    if has_markers and has_reasons:
         result = _parse_inline_format(text, summary)
         if result:
             return result
