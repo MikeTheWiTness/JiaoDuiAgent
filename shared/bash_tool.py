@@ -470,3 +470,192 @@ class UpdateProofreadMarkTool(BaseTool):
 
     async def _arun(self, *args, **kwargs):
         raise NotImplementedError
+
+
+# ─── XML 标记式校对工具（ADR-0019） ────────────────────────────
+
+_MATH_DELIM = _re_mod.compile(r'\$+|\$|\$\$|\\\(|\\\)|\\\[|\\\]')
+
+# 标记计数器（线程安全）
+_mark_id_counter: threading.local = threading.local()
+
+
+def _reset_mark_counter():
+    """重置标记计数器（每个校对单元开始时调用）。"""
+    _mark_id_counter.value = 0
+
+
+def _next_mark_id() -> int:
+    current = getattr(_mark_id_counter, "value", 0) + 1
+    _mark_id_counter.value = current
+    return current
+
+
+def _auto_fix_math_tag(para: str, insert_pos: int, tag: str) -> tuple[str, int]:
+    """自动修复：如果插入位置在数学模式内，将标记挪到公式外。
+
+    - open tag → 移到公式左侧
+    - close tag → 移到公式右侧
+    """
+    if insert_pos >= len(para):
+        return para, insert_pos
+
+    # 统计 $ 的奇偶性判断是否在 $...$ 内
+    before = para[:insert_pos]
+    dollar_count = before.count("$") - before.count(r"\$") * 2
+    if dollar_count % 2 == 1:
+        # 在 $...$ 内部
+        if not tag.startswith("</mark_"):
+            # open tag → 移到 $ 前面
+            search_pos = insert_pos - 1
+            while search_pos >= 0:
+                if para[search_pos] == "$" and (search_pos == 0 or para[search_pos - 1] != "\\"):
+                    return para[:search_pos] + tag + para[search_pos:], search_pos + len(tag)
+                search_pos -= 1
+        else:
+            # close tag → 移到 $ 后面
+            after = para[insert_pos:]
+            for j, ch in enumerate(after):
+                if ch == "$" and (j == 0 or after[j - 1] != "\\"):
+                    new_pos = insert_pos + j + 1
+                    return para[:new_pos] + tag + para[new_pos:], new_pos + len(tag)
+
+    return para, insert_pos
+
+
+class InsertMarkParams(BaseModel):
+    paragraph: int = Field(description="段落号（1-based）")
+    after_text: str = Field(description="插入位置前的文字（用于定位）")
+    occurrence: int = Field(default=1, description="after_text 在段落中的第几次出现")
+    action: str = Field(description="'open' 插入 <mark_N>，'close' 插入 </mark_N>")
+    close_mark_id: int | None = Field(default=None, description="关闭时指定对应的标记编号")
+
+
+class InsertMarkTool(BaseTool):
+    """在原文中插入 XML 标记 <mark_N>...</mark_N>，不修改原文内容。"""
+
+    name: str = "insert_mark"
+    description: str = (
+        "在原文中插入校对标记 <mark_N> 或 </mark_N>。不修改原文。\\n"
+        "- action='open': 在指定位置后插入 <mark_N>（编号自动递增）\\n"
+        "- action='close': 在指定位置后插入 </mark_N>（需传 close_mark_id）\\n"
+        "标记自动放在数学公式外部。"
+    )
+    args_schema: type[BaseModel] = InsertMarkParams
+
+    def _run(self, paragraph: int, after_text: str, occurrence: int = 1,
+             action: str = "open", close_mark_id: int | None = None) -> str:
+        if action not in ("open", "close"):
+            return "错误：action 必须是 'open' 或 'close'"
+        if action == "close" and close_mark_id is None:
+            return "错误：action='close' 时必须传 close_mark_id"
+
+        file_path = get_current_file()
+        if not file_path:
+            return "错误：未设置当前校对文件。"
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return f"读取文件失败：{e}"
+
+        paragraphs = _re_mod.split(r"\n\n+", content)
+        if paragraph < 1 or paragraph > len(paragraphs):
+            return f"错误：段落号 {paragraph} 超出范围（共 {len(paragraphs)} 个段落）"
+
+        para = paragraphs[paragraph - 1]
+
+        # 定位 after_text
+        found = 0
+        search_pos = 0
+        insert_pos = -1
+        while True:
+            pos = para.find(after_text, search_pos)
+            if pos == -1:
+                break
+            found += 1
+            if found == occurrence:
+                insert_pos = pos + len(after_text)
+                break
+            search_pos = pos + 1
+
+        if insert_pos == -1:
+            return (
+                f"未找到第 {occurrence} 次出现的 \"{after_text}\"。\n"
+                f"段落预览（前200字符）:\n{para[:200]}..."
+            )
+
+        # 确定标记文本
+        if action == "open":
+            mark_id = _next_mark_id()
+            tag = f"<mark_{mark_id}>"
+        else:
+            tag = f"</mark_{close_mark_id}>"
+
+        # 自动修复：检测并修正公式内的标记
+        new_para, final_pos = _auto_fix_math_tag(para, insert_pos, tag)
+        if final_pos != insert_pos:
+            tag_note = "（已自动移到公式外）"
+        else:
+            tag_note = ""
+            new_para = para[:insert_pos] + tag + para[insert_pos:]
+
+        paragraphs[paragraph - 1] = new_para
+        new_content = "\n\n".join(paragraphs)
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+        except Exception as e:
+            return f"写入文件失败：{e}"
+
+        return f"已插入 {tag}（段落 {paragraph}）{tag_note}"
+
+    async def _arun(self, *args, **kwargs):
+        raise NotImplementedError
+
+
+class AddCorrectionParams(BaseModel):
+    mark_id: int = Field(description="对应的标记编号")
+    original: str = Field(description="原文片段")
+    corrected: str = Field(description="修改建议")
+    reason: str = Field(description="修改原因")
+
+
+class AddCorrectionTool(BaseTool):
+    """在文件末尾追加修改建议。"""
+
+    name: str = "add_correction"
+    description: str = "在文件末尾 ### 修改建议 章节追加一条修改建议。"
+    args_schema: type[BaseModel] = AddCorrectionParams
+
+    def _run(self, mark_id: int, original: str, corrected: str, reason: str) -> str:
+        file_path = get_current_file()
+        if not file_path:
+            return "错误：未设置当前校对文件。"
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            return f"读取文件失败：{e}"
+
+        entry = f"\n<mark_{mark_id}>: {original} → {corrected}  原因: {reason}"
+
+        section_header = "### 修改建议"
+        if section_header not in content:
+            content += f"\n\n{section_header}"
+
+        content += entry
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            return f"写入文件失败：{e}"
+
+        return f"已追加 <mark_{mark_id}> 的修改建议"
+
+    async def _arun(self, *args, **kwargs):
+        raise NotImplementedError

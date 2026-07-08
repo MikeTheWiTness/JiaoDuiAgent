@@ -575,6 +575,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                     _NAV_CONTROL_TOOLS = {
                         "plan_update", "locate_paragraph", "read_section",
                         "read_file", "write_file", "independent_solve",
+                        "insert_mark", "add_correction",  # ADR-0019
                     }
                     recent_results.append(result)
                     if tool_name not in _NAV_CONTROL_TOOLS:
