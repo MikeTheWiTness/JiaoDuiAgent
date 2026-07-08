@@ -539,6 +539,7 @@ def _circled_char(n: int) -> str:
 
 
 _INLINE_MARKER_RE = re.compile(r'【([\d①-⑳]+)\|([^|]*?)\|([^】]*?)】')
+_XML_MARKER_RE = re.compile(r'<mark_(\d+)>(.*?)</mark_\1>')
 
 
 def _parse_marker_num(s: str) -> int:
@@ -550,12 +551,10 @@ def _parse_marker_num(s: str) -> int:
 
 
 def _process_inline_markers(md_text: str, corrections: list[dict],
-                            placeholder_map: dict[str, str]) -> tuple[str, list[dict]]:
-    """处理新格式的 【N原文|改为】 内联标记。
-
-    标记中的 LaTeX 替换为占位符（避免后续 escaping 破坏），
-    返回 (已替换占位符的文本, 编号修改列表)。
-    """
+                            placeholder_map: dict[str, str],
+                            use_xml: bool = False) -> tuple[str, list[dict]]:
+    """处理校对标记。use_xml=True 处理 <mark_N> 格式，否则处理旧 【N|原文|改为】。"""
+    marker_re = _XML_MARKER_RE if use_xml else _INLINE_MARKER_RE
     reason_map = {}
     for c in (corrections or []):
         n = c.get("num", 0)
@@ -566,9 +565,18 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
     seen = set()
 
     def _repl(m):
-        num = _parse_marker_num(m.group(1))
+        num = _parse_marker_num(m.group(1)) if not use_xml else int(m.group(1))
         orig = m.group(2)
-        corr = m.group(3)
+        if use_xml:
+            # XML格式：correction 来自 corrections 参数
+            corr = ""
+            if corrections:
+                for c in corrections:
+                    if c.get("num") == num:
+                        corr = c.get("correction", "")
+                        break
+        else:
+            corr = m.group(3) if m.lastindex >= 3 else ""
         if num not in seen:
             seen.add(num)
             inline_corrections.append({
@@ -681,10 +689,13 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
         )
         return pre_pattern.sub(_merge_repl, text)
 
-    processed = _pre_merge_dollar_markers(md_text)
+    if not use_xml:
+        processed = _pre_merge_dollar_markers(md_text)
+    else:
+        processed = md_text
 
     # 第二步：处理剩余的普通内联标记
-    processed = _INLINE_MARKER_RE.sub(_repl, processed)
+    processed = marker_re.sub(_repl, processed)
 
     # 第三步：strip 紧邻标记前的原文（避免 "1-61-6①" 翻倍）
     # LLM 输出格式：原文【N|原文|改为】，需要把前面的原文也吃掉
@@ -888,10 +899,12 @@ def build_paracol_content(md_content: str, corrections: list[dict],
     # 参数，导致 \textcolor{red}{...\[...\]...} 中显示数学模式破坏颜色作用域。
     md_processed = _fix_escaped_brackets(md_processed)
 
-    # 检测新格式：内联标记 【N原文|改为】（必须在格式化之前）
+    # 检测校对标记格式：优先 ADR-0019 XML 格式，回退旧格式
+    has_xml = bool(_XML_MARKER_RE.search(md_processed))
     has_inline = bool(_INLINE_MARKER_RE.search(md_processed))
-    if has_inline:
-        md_processed, numbered = _process_inline_markers(md_processed, corrections, placeholder_map)
+    if has_xml or has_inline:
+        md_processed, numbered = _process_inline_markers(
+            md_processed, corrections, placeholder_map, use_xml=has_xml)
 
     # 将 ### heading 转为 **heading**（Markdown 粗体），后续由 _extract_md_formatting
     # 转为 \textbf{...} 并放入 placeholder_map 保护，避免被 _escape_text 破坏。
