@@ -1,11 +1,73 @@
 import os, re, base64, shutil
 from pathlib import Path
 from core.parsing import save_proofread_json
-from core.api_client import call_api, MAX_FILE_SIZE
+from core.api_client import call_api, MAX_FILE_SIZE, StopReason
 from core.logging_utils import log
 from core.format_enforcement import _enforce_format, enforce_and_fix
 from core import config_loader
 from shared.image_utils import copy_md_images
+
+
+# ============================================================
+# 题目识别标志（用于【出题意图】清理等场景）
+# 后期只需增删此列表，所有引用处自动更新。
+# 格式说明：标志会在粗体包裹下匹配（即 **标志**），
+# 因此只需写标志内容的正则，无需包含 ** 包裹符。
+# ============================================================
+DEFAULT_INTENT_PROBLEM_MARKERS = [
+    # 题目编号
+    r'小试牛刀\d+',
+    r'例\d+',
+    r'练\d+',
+    r'变式\d+',
+    r'变式\d+_例\d+',
+    # 分层/班型标签（含数字后缀）
+    r'一本班\d+',
+    r'双一流班\d+',
+    r'清北班\d+',
+    r'A班\d+',
+    r'A\+班\d+',
+    r'S班\d+',
+    # 分层/班型标签（无数字后缀）
+    r'一本班',
+    r'一本班例题',
+    r'一本班备用',
+    r'双一流班',
+    r'双一流班例题',
+    r'双一流班备用',
+    r'清北班',
+    r'清北班例题',
+    r'清北班备用',
+    r'A班',
+    r'A\+班',
+    r'S班',
+    # 教师版
+    r'教师版',
+    r'一本班教师版',
+    r'双一流班教师版',
+    r'清北班教师版',
+]
+
+
+def get_intent_problem_markers(config=None):
+    """获取完整的题目识别标志列表：通用常量 + 学科 config 覆盖。
+
+    合并策略：以 DEFAULT_INTENT_PROBLEM_MARKERS 为基础，
+    追加 config["lecture_wrapped_patterns"] 中独有的标志（去重）。
+
+    Args:
+        config: 学科配置 dict（可选），包含 lecture_wrapped_patterns 字段
+
+    Returns:
+        list[str]: 去重后的正则模式列表
+    """
+    markers = list(DEFAULT_INTENT_PROBLEM_MARKERS)
+    if config:
+        wrapped = config.get("lecture_wrapped_patterns", [])
+        for pat in wrapped:
+            if pat not in markers:
+                markers.append(pat)
+    return markers
 
 
 def _strip_search_from_prompt(prompt: str) -> str:
@@ -118,8 +180,14 @@ def comprehensive_clean(md_content):
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-        if re.match(r'^[\|\+\-=\:\.\s\t]*$', stripped) and len(stripped) > 2:
-            i += 1; continue
+        # 去除可能的序号前缀（如 Pandoc 转义的 "1\." 或普通 "1."）
+        # 也处理嵌套表格中的前缀：| | 1\.  | +---+
+        core = re.sub(r'^[\|\s]*\d+\\?\.\s*[\|\s]*', '', stripped)
+        # 纯表格字符行（包含 |+-=:. 和空白），长度大于2
+        if re.match(r'^[\|\+\-=\:\.\s\t]*$', core) and len(core) > 2:
+            # 排除纯省略号行（只有 . 和空白），其余全部跳过
+            if not re.match(r'^[\.\s]+$', core):
+                i += 1; continue
         line = re.sub(r'\|', '', line)
         if '答案:' in line:
             line = re.sub(r'[-=]+', '', line)
@@ -211,62 +279,100 @@ def clean_md_file(md_file):
         return False
 
 
+def clean_intent_markers(md_content, problem_markers=None):
+    """清理【出题意图】段落。
+
+    删除【出题意图】到下一个题目编号之间的内容，
+    包括【出题意图】本身，保留题目编号及其后的内容。
+
+    Args:
+        md_content: Markdown 文本
+        problem_markers: 题目编号正则列表（不含 ** 包裹符），
+                         默认使用 DEFAULT_INTENT_PROBLEM_MARKERS。
+                         后期增删该常量即可自动更新所有引用处。
+    """
+    if problem_markers is None:
+        problem_markers = DEFAULT_INTENT_PROBLEM_MARKERS
+
+    # 构建题目编号正则：**标志1**|**标志2**|...
+    # 标签不要求前导 \n 或 ^，直接在 ** 处匹配即可；
+    # 标签后可跟任意内容（如来源信息 "（2026·山东青岛模拟）"），
+    # 对齐 lecture_wrapped_patterns 的 ^\*\*{pattern}\*\*.*$ 规则。
+    marker_union = '|'.join(problem_markers)
+    pattern = r'^【出题意图】.*?(?=\*\*(?:' + marker_union + r')\*\*)'
+    cleaned = re.sub(pattern, '', md_content, flags=re.DOTALL | re.MULTILINE)
+    # 清理可能产生的多余空行
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
+
+def clean_intent_md_file(md_file, problem_markers=None):
+    """对 md 文件执行出题意图清理。
+
+    Args:
+        md_file: Markdown 文件路径
+        problem_markers: 题目编号正则列表，默认使用 DEFAULT_INTENT_PROBLEM_MARKERS
+    """
+    try:
+        with open(md_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        cleaned = clean_intent_markers(content, problem_markers=problem_markers)
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write(cleaned)
+        return True
+    except Exception as e:
+        log(f"   出题意图清理失败: {e}")
+        return False
+
+
 def default_split_lecture(md_file, output_root, base_name, do_clean, config):
+    base_name = base_name.strip()  # 防御：文件名可能带首尾空格，Windows 路径不支持
+
+    # ── 预处理：装饰图片清除（ADR-0017 决策7）──
+    from shared.decor_utils import strip_decor_images_from_file
+    strip_decor_images_from_file(md_file)
+
     with open(md_file, 'r', encoding='utf-8') as f:
         md_content = f.read()
 
-    split_mode = "title"
+    split_mode = "section"
     section_pat = None
+    problem_pats = []
     if config:
         split_mode = config_loader.get_lecture_split_mode(config)
-        if split_mode == "section":
-            section_pat = config_loader.get_section_pattern(config)
+        section_pat = config_loader.get_section_pattern(config)
+        problem_pats = config_loader.get_compiled_title_patterns(config)
 
     lines = md_content.splitlines()
-    questions = []
 
+    # ── 第一遍：按 section_pattern 切出大板块 ──
     if split_mode == "section" and section_pat:
-        current_title = "引言"
-        current_content = []
-        for line in lines:
-            stripped = line.strip()
-            if section_pat.match(stripped):
-                if current_content:
-                    questions.append((current_title, '\n'.join(current_content)))
-                current_title = stripped
-                current_content = [line]
-            else:
-                current_content.append(line)
-        if current_content:
-            questions.append((current_title, '\n'.join(current_content)))
+        raw_sections = _split_by_section_pattern(lines, section_pat)
     else:
-        title_compiled = config_loader.get_compiled_title_patterns(config)
-        current_title = None
-        current_content = []
-        in_question = False
-        for line in lines:
-            stripped = line.strip()
-            is_title = any(p.match(stripped) for p in title_compiled)
-            is_section = stripped.startswith('#') and not stripped.startswith('**')
-            if is_title:
-                if current_title is not None:
-                    questions.append((current_title, '\n'.join(current_content)))
-                current_title = stripped
-                current_content = [line]
-                in_question = True
-            elif is_section and in_question:
-                questions.append((current_title, '\n'.join(current_content)))
-                current_title = None; current_content = []; in_question = False
-            else:
-                if in_question:
-                    current_content.append(line)
-        if current_title is not None:
-            questions.append((current_title, '\n'.join(current_content)))
+        # title 模式（向后兼容旧学科配置）
+        raw_sections = _split_by_title_pattern(lines, config)
 
-    if not questions:
-        log("   ⚠️ 未识别到任何题目，跳过分割")
+    if not raw_sections:
+        log("   ⚠️ 未识别到任何单元，跳过分割")
         return False
 
+    # ── 第二遍：板块内例题提取（ADR-0017 决策8）──
+    all_units = []
+    for sec_title, sec_content in raw_sections:
+        if problem_pats and split_mode == "section":
+            sub_units = _extract_problems_from_section(sec_title, sec_content, problem_pats)
+            all_units.extend(sub_units)
+        else:
+            all_units.append((sec_title, sec_content))
+
+    # ── 连续标题合并（ADR-0017 决策10）──
+    all_units = _merge_consecutive_headers(all_units, section_pat)
+
+    if not all_units:
+        log("   ⚠️ 未识别到任何单元，跳过分割")
+        return False
+
+    # ── 写入文件 ──
     md_dir = Path(md_file).parent
     src_media = md_dir / f"{base_name}_images" / "media"
     log(f"   🔍 图片源目录: {src_media}")
@@ -276,22 +382,157 @@ def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     target_root = Path(output_root) / base_name
     target_root.mkdir(parents=True, exist_ok=True)
 
-    unit_prefix = "板块" if split_mode == "section" else "第"
-    unit_suffix = "" if split_mode == "section" else "题"
-
     total_copied = [0]; total_missing = [0]
-    for idx, (title, content) in enumerate(questions, start=1):
-        q_dir_name = f"{unit_prefix}{idx}{unit_suffix}"
-        q_dir = target_root / q_dir_name
+    for idx, (title, content) in enumerate(all_units, start=1):
+        unit_name = f"单元{idx}"
+        q_dir = target_root / unit_name
         q_dir.mkdir(exist_ok=True)
         img_dir = q_dir / "images"; img_dir.mkdir(exist_ok=True)
         img_result = copy_md_images(content, [src_media], img_dir)
         total_copied[0] += img_result.copied
         total_missing[0] += img_result.missing
-        (q_dir / f"{q_dir_name}.md").write_text(img_result.content, encoding='utf-8')
+        (q_dir / f"{unit_name}.md").write_text(img_result.content, encoding='utf-8')
 
-    log(f"   📂 拆分完成: {len(questions)} 题, 图片 {total_copied[0]} 张")
+    log(f"   📂 拆分完成: {len(all_units)} 个单元, 图片 {total_copied[0]} 张")
     return True
+
+
+def _split_by_section_pattern(lines, section_pat):
+    """按 section_pattern 切分，返回 [(标题, 内容), ...]。
+
+    第一个匹配前的内容标题为"引言"。
+    """
+    sections = []
+    current_title = "引言"
+    current_content = []
+    for line in lines:
+        stripped = line.strip()
+        if section_pat.match(stripped):
+            if current_content:
+                sections.append((current_title, '\n'.join(current_content)))
+            current_title = stripped
+            current_content = [line]
+        else:
+            current_content.append(line)
+    if current_content:
+        sections.append((current_title, '\n'.join(current_content)))
+    return sections
+
+
+def _split_by_title_pattern(lines, config):
+    """title 模式（向后兼容旧学科）。"""
+    title_compiled = config_loader.get_compiled_title_patterns(config)
+    questions = []
+    current_title = None
+    current_content = []
+    in_question = False
+    for line in lines:
+        stripped = line.strip()
+        is_title = any(p.match(stripped) for p in title_compiled)
+        is_section = stripped.startswith('#') and not stripped.startswith('**')
+        if is_title:
+            if current_title is not None:
+                questions.append((current_title, '\n'.join(current_content)))
+            current_title = stripped
+            current_content = [line]
+            in_question = True
+        elif is_section and in_question:
+            questions.append((current_title, '\n'.join(current_content)))
+            current_title = None; current_content = []; in_question = False
+        else:
+            if in_question:
+                current_content.append(line)
+    if current_title is not None:
+        questions.append((current_title, '\n'.join(current_content)))
+    return questions
+
+
+def _extract_problems_from_section(section_title, section_content, problem_pats):
+    """从板块中提取例题为独立单元。
+
+    匹配 problem_pats 的行作为例题边界，例题之间的内容作为知识单元。
+    无标记的内联题留在知识单元中。
+    """
+    lines = section_content.split('\n')
+    units = []
+    knowledge_lines = []
+    current_problem_lines = []
+    current_problem_title = ""
+    in_problem = False
+
+    for line in lines:
+        stripped = line.strip()
+        is_problem = any(p.match(stripped) for p in problem_pats)
+        if is_problem:
+            # 保存之前的知识
+            if knowledge_lines:
+                knowledge_text = '\n'.join(knowledge_lines).strip()
+                if knowledge_text:
+                    units.append((section_title, knowledge_text))
+                knowledge_lines = []
+            # 保存之前的题目
+            if in_problem and current_problem_lines:
+                units.append((current_problem_title, '\n'.join(current_problem_lines)))
+            current_problem_title = stripped
+            current_problem_lines = [line]
+            in_problem = True
+        else:
+            if in_problem:
+                current_problem_lines.append(line)
+            else:
+                knowledge_lines.append(line)
+
+    # 最后的知识块
+    if knowledge_lines:
+        knowledge_text = '\n'.join(knowledge_lines).strip()
+        if knowledge_text:
+            units.append((section_title, knowledge_text))
+    # 最后的题目块
+    if in_problem and current_problem_lines:
+        units.append((current_problem_title, '\n'.join(current_problem_lines)))
+
+    # 如果没有提取出例题，整个板块作为一个知识单元
+    if not units:
+        units.append((section_title, section_content))
+    return units
+
+
+def _has_real_content(lines, section_pat):
+    """检查内容行中是否有实质内容（非标题、非空行）。"""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if section_pat and section_pat.match(stripped):
+            continue
+        return True
+    return False
+
+
+def _merge_consecutive_headers(units, section_pat):
+    """合并 ## 模块级标题到下一个单元。
+
+    ## 模块一、## 模块二等标题只是组织结构壳，
+    固定合并到下一个 ### 或 #### 标题单元中。
+    """
+    if not units:
+        return units
+
+    merged = []
+    i = 0
+    while i < len(units):
+        title, content = units[i]
+        # 如果当前单元以 ## 开头且后面还有单元 → 合并到下一个
+        if title.startswith("## ") and i + 1 < len(units):
+            next_title, next_content = units[i + 1]
+            merged_content = content + "\n" + next_content
+            merged.append((next_title, merged_content))
+            i += 2
+        else:
+            merged.append((title, content))
+            i += 1
+
+    return merged
 
 
 def default_generate_knowledge(cleaned_md, output_root, base_name, config):
@@ -446,6 +687,7 @@ def parse_end_answers(answer_lines):
 
 
 def default_split_exam(md_file, output_root, base_name, config):
+    base_name = base_name.strip()  # 防御：文件名可能带首尾空格，Windows 路径不支持
     with open(md_file, 'r', encoding='utf-8') as f:
         md_content = f.read()
     lines = md_content.splitlines()
@@ -573,7 +815,7 @@ def _format_usage_summary(usage: dict) -> str:
     return "".join(lines)
 
 
-def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, prompt, tools, max_loops, generate_pdf, pre_hook=None, react_mode=False):
+def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
     target_md = os.path.join(q_dir, f"{q_name}.md")
     md_content = ""
     if os.path.exists(target_md):
@@ -598,7 +840,7 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
             log("   📖 前置参考已注入（已移除联网工具，仅依靠前置搜索结果）")
         else:
             tools = []
-            max_loops = 0
+            ctx.max_loops = 0
             log("   🔒 前置参考已注入，关闭联网搜索")
 
     images_b64 = []
@@ -629,18 +871,17 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
         if react_mode:
             try:
                 from shared.physics_tools import set_physics_api_config
-                set_physics_api_config(api_url, api_key, model, output_dir=q_dir)
+                set_physics_api_config(ctx.api_url, ctx.api_key, model, output_dir=q_dir)
             except ImportError:
                 pass  # 非物理学科无 physics_tools 模块，忽略
             try:
                 from shared.chemistry_tools import set_chemistry_api_config
-                set_chemistry_api_config(api_url, api_key, model, output_dir=q_dir)
+                set_chemistry_api_config(ctx.api_url, ctx.api_key, model, output_dir=q_dir)
             except ImportError:
                 pass  # 非化学学科无 chemistry_tools 模块，忽略
 
-        result = call_api(api_url, api_key, model, md_content, images_b64,
-                          q_name, prompt, tools=tools, max_loops=max_loops,
-                          output_dir=q_dir)
+        result = call_api(ctx, md_content, images_b64,
+                          q_name, prompt, tools=tools)
         res = result["content"]
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")
@@ -650,9 +891,16 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
         if reasoning:
             log(f"   💭 模型思考: {reasoning[:150].replace(chr(10), ' ')}...")
     except Exception as e:
-        return {"success": False, "result": "", "error": str(e), "tool_calls": []}
+        import traceback
+        tb = traceback.format_exc()
+        log(f"   ❌ default_proofread_one 未预期异常: {e}\n{tb}")
+        return {
+            "success": False, "result": "",
+            "error": f"校对流程异常（{type(e).__name__}）：{e}",
+            "tool_calls": []
+        }
 
-    if "API调用失败" not in res:
+    if result.get("stop_reason") != StopReason.ERROR:
         # ---- 格式审查 + bash 直接编辑文件修正 ----
         format_ok, format_issues = _enforce_format(res)
         if not format_ok and generate_pdf:
@@ -665,7 +913,7 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
             except Exception:
                 pass
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}")
-            res, was_fixed, _ = enforce_and_fix(md_path, res, api_url, api_key, model)
+            res, was_fixed, _ = enforce_and_fix(md_path, res, ctx.api_url, ctx.api_key, ctx.model)
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
 
@@ -725,7 +973,9 @@ def default_proofread_one(api_url, api_key, model, q_dir, q_name, is_knowledge, 
                 pass
         return {"success": True, "result": res, "tool_calls": tool_calls, "error": None}
     else:
-        err_detail = res.replace("**API调用失败：**\n", "").strip()[:200]
+        # stop_reason == ERROR：提取完整错误信息（不截断，保留排查细节）
+        err_detail = res.strip()
+        log(f"   ❌ API 调用失败（stop_reason=ERROR），错误摘要: {err_detail[:200]}")
         return {"success": False, "result": "", "error": err_detail, "tool_calls": []}
 
 

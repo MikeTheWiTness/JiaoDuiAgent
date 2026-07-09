@@ -1,4 +1,5 @@
 import os, re, json, logging
+from core.config_schema import validate_config
 
 _log = logging.getLogger(__name__)
 
@@ -15,45 +16,8 @@ def load_config(subject_dir):
     if cached is not None:
         return cached
 
-    config_file = os.path.join(subject_dir, "config.json")
-    if not os.path.exists(config_file):
-        raise FileNotFoundError(f"学科配置文件不存在: {config_file}")
-
-    with open(config_file, 'r', encoding='utf-8') as f:
-        new_data = json.load(f)
-
-    if "question_prompt_lines" not in new_data:
-        raise ValueError(f"配置文件缺少 question_prompt_lines: {config_file}")
-    if "knowledge_prompt_lines" not in new_data:
-        raise ValueError(f"配置文件缺少 knowledge_prompt_lines: {config_file}")
-
-    config = {}
-    config["question_prompt_lines"] = new_data["question_prompt_lines"]
-    config["knowledge_prompt_lines"] = new_data["knowledge_prompt_lines"]
-
-    # 加载可选的知识校对 ReAct prompt（知识场景专用，不存在时不报错）
-    if "knowledge_agent_prompt_lines" in new_data:
-        config["knowledge_agent_prompt_lines"] = new_data["knowledge_agent_prompt_lines"]
-
-    # 加载可选的 agent_prompt.json（ReAct 模式专用，不存在时不报错）
-    agent_file = os.path.join(subject_dir, "agent_prompt.json")
-    if os.path.exists(agent_file):
-        try:
-            with open(agent_file, 'r', encoding='utf-8') as f:
-                agent_data = json.load(f)
-            config["agent_prompt_lines"] = agent_data.get("agent_prompt_lines", [])
-        except Exception as e:
-            _log.warning(f"加载 agent_prompt.json 失败: {e}")
-
-    lecture = new_data.get("lecture_split", {})
-    config["lecture_split_mode"] = lecture.get("split_mode", "title")
-    config["lecture_section_pattern"] = lecture.get("section_pattern", r"^##\s")
-    config["lecture_wrapped_patterns"] = lecture.get("wrapped_patterns", [])
-    config["lecture_unwrapped_patterns"] = lecture.get("unwrapped_patterns", [])
-    config["lecture_section_boundary"] = lecture.get("section_boundary", True)
-
-    exam = new_data.get("exam_split", {})
-    config["exam_question_pattern"] = exam.get("question_pattern", r"^(\d+)．")
+    # 校验 + 标准化（失败时抛出含文件名和字段的明确错误）
+    config = validate_config(subject_dir)
 
     _config_cache[cache_key] = config
     return config
@@ -100,14 +64,43 @@ def get_section_boundary_enabled(config):
 
 
 def get_lecture_split_mode(config):
-    return config.get("lecture_split_mode", "title")
+    return config.get("lecture_split_mode", "section")
+
+
+# 默认 section_pattern（ADR-0017 决策1）：匹配 ##/### 标题 + 例题标记 + 通用知识标题
+DEFAULT_SECTION_PATTERN = (
+    r"^#{2,3}\s"                       # ## / ### 标题
+    r"|^\*\*(例|练|变式|真题)\d+\*\*"    # **例1**、**练1**、**变式1**、**真题1**
+    r"|^\*\*教师版\*\*"                 # **教师版**
+    r"|必备知识"                         # 通用知识标题
+    r"|模型大招"                         # 方法/模型总结标题
+    r"|重难点突破"                        # 重难点专题标题
+)
 
 
 def get_section_pattern(config):
+    """构建 section_pattern：基础 pattern + 学科扩展。
+
+    如果 config 中显式设置了 section_pattern，直接使用；
+    否则从 DEFAULT_SECTION_PATTERN + section_pattern_extensions 构建。
+    """
+    raw = config.get("lecture_section_pattern", "")
+    if raw and raw != r"^##\s":
+        # 显式设置了自定义 pattern，直接使用
+        try:
+            return re.compile(raw)
+        except re.error:
+            return re.compile(DEFAULT_SECTION_PATTERN)
+
+    # 使用默认 pattern + 学科扩展
+    extensions = config.get("lecture_section_extensions", [])
+    pattern = DEFAULT_SECTION_PATTERN
+    for ext in extensions:
+        pattern += "|" + re.escape(ext)
     try:
-        return re.compile(config.get("lecture_section_pattern", r"^##\s"))
+        return re.compile(pattern)
     except re.error:
-        return re.compile(r"^##\s")
+        return re.compile(DEFAULT_SECTION_PATTERN)
 
 
 def get_exam_question_pattern(config):

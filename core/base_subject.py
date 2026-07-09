@@ -29,7 +29,7 @@ class BaseSubjectApp:
     version: str = "v3.0"
 
     # ---- 子类可覆盖的类属性 ----
-    _show_knowledge_option: bool = True
+    _show_knowledge_option: bool = False  # 统一模型下默认隐藏，历史等学科可覆盖为 True
     _clean_bold_replacement: str = "\x01"  # 高中历史覆盖为 "\1" 保留粗体文本
 
     def __init__(self, subject_dir):
@@ -82,8 +82,16 @@ class BaseSubjectApp:
     # ---- 零差异方法（7 科完全一致） ----
 
     def generate_knowledge(self, md_file, output_root, base_name):
-        """知识提取 —— 所有学科完全相同。"""
-        return default_generate_knowledge(md_file, output_root, base_name, self.config)
+        """知识提取 —— 已废弃（ADR-0017 决策3）。
+
+        section 模式下知识标题被识别为板块边界，知识自然成为独立单元，
+        不再需要单独提取到 知识/ 文件夹。保留函数体向后兼容。
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+        _log.warning("generate_knowledge 已废弃（ADR-0017），section 模式下跳过")
+        # 不再调用 default_generate_knowledge
+        return False
 
     def collect_paper_dirs(self, base_path):
         """收集试卷目录 —— 所有学科完全相同。"""
@@ -129,21 +137,24 @@ class BaseSubjectApp:
 
     # ---- proofread_one（模板方法，语文覆盖 _build_pre_hook） ----
 
-    def proofread_one(self, api_url, api_key, model, q_dir, q_name,
-                      is_knowledge, generate_pdf, source_mode="试卷"):
-        """校对入口 —— 所有学科共用骨架。高中语文覆盖 _build_pre_hook 注入文言文搜索。"""
-        if is_knowledge:
-            prompt = self.get_knowledge_prompt()
-        elif source_mode == "批注评审":
+    def proofread_one(self, ctx, q_dir, q_name,
+                      generate_pdf, source_mode="试卷"):
+        """校对入口 —— 所有学科共用骨架。高中语文覆盖 _build_pre_hook 注入文言文搜索。
+
+        ADR-0017 决策6：移除 is_knowledge 参数。
+        ReAct 模式下 LLM 通过 agent_prompt 第0步自行判定内容类型，
+        程序侧不再按目录名决定校对策略。
+        """
+        if source_mode == "批注评审":
             prompt = self.get_review_prompt()
         else:
             prompt = self.get_question_prompt()
 
-        pre_hook = self._build_pre_hook(api_url, api_key, model, q_dir)
+        pre_hook = self._build_pre_hook(ctx.api_url, ctx.api_key, ctx.model, q_dir)
 
         return default_proofread_one(
-            api_url, api_key, model, q_dir, q_name, is_knowledge,
-            prompt, self.tools, self.get_max_tool_loops(), generate_pdf,
+            ctx, q_dir, q_name,
+            prompt, self.tools, generate_pdf,
             pre_hook=pre_hook,
             react_mode=self.react_mode,
         )

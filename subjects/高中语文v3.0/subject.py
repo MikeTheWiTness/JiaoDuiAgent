@@ -34,9 +34,8 @@ class SubjectApp(BaseSubjectApp):
         self._react_mode = False
 
     def build_tools(self):
-        # 联网搜索工具（web_search / web_fetch）已完全禁用，
-        # 仅保留 pre_proofread_hook 中的预搜索阶段
-        base = []
+        from shared.web_tools import WebFetchTool
+        base = [WebFetchTool()]  # web_fetch 始终可用（前置检索 + 兜底）
         if self.react_mode:
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
@@ -46,8 +45,7 @@ class SubjectApp(BaseSubjectApp):
         return base
 
     def get_max_tool_loops(self):
-        # 联网搜索工具已禁用，非 ReAct 模式无需工具循环
-        return 15 if self.react_mode else 0
+        return 15 if self.react_mode else 3
 
     # 可靠原文检索源（通过 web_fetch 直接构造 URL，无需经过搜索引擎）
     _DIRECT_SOURCES = [
@@ -65,29 +63,28 @@ class SubjectApp(BaseSubjectApp):
         web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
 
         lines = []
-        if web_tools:
-            # 构建可靠来源列表
-            sources = "\n".join(
-                f"  - **{name}**: `web_fetch(url=\"{url.format(kw='关键词')}\")` — {desc}"
-                for name, url, desc in self._DIRECT_SOURCES
-            )
+        # 构建可靠来源列表（始终输出工具指令，无论工具是否已实例化）
+        sources = "\n".join(
+            f"  - **{name}**: `web_fetch(url=\"{url.format(kw='关键词')}\")` — {desc}"
+            for name, url, desc in self._DIRECT_SOURCES
+        )
 
-            lines.append(
-                "\n## 原文检索（仅供极端情况使用）\n"
-                "**你是一位资深语文教研员，你的核心能力是基于自身知识直接校对，不是搜索。**\n"
-                "\n"
-                "仅在以下情况才可检索原文，且必须用 **web_fetch 直达以下网站**，"
-                "严禁使用 web_search（搜索引擎对你不可用）。\n"
-                "\n"
-                f"{sources}\n"
-                "\n"
-                "**使用规则**：\n"
-                "- 文言文无前置参考 → 识典古籍 一次（原文中摘几句作关键词）\n"
-                "- 古诗词无前置参考 → 搜韵网 一次\n"
-                "- 现代文需核对原文引用 → 中国作家网 或 百度直达（加 site: 限定）一次\n"
-                "- 任一网站无结果 → **立即用自身知识判断，不得换网站再试，不得换关键词重搜**\n"
-                "\n"
-                "**严禁搜索的情形**：\n"
+        lines.append(
+            "\n## 原文检索（仅供极端情况使用）\n"
+            "**你是一位资深语文教研员，你的核心能力是基于自身知识直接校对，不是搜索。**\n"
+            "\n"
+            "仅在以下情况才可检索原文，且必须用 **web_fetch 直达以下网站**，"
+            "严禁使用 web_search（搜索引擎对你不可用）。\n"
+            "\n"
+            f"{sources}\n"
+            "\n"
+            "**使用规则**：\n"
+            "- 文言文无前置参考 → 识典古籍 一次（原文中摘几句作关键词）\n"
+            "- 古诗词无前置参考 → 搜韵网 一次\n"
+            "- 现代文需核对原文引用 → 中国作家网 或 百度直达（加 site: 限定）一次\n"
+            "- 任一网站无结果 → **立即用自身知识判断，不得换网站再试，不得换关键词重搜**\n"
+            "\n"
+            "**严禁搜索的情形**：\n"
                 "- 错别字、标点错误、病句 → 你自身完全能判断\n"
                 "- 现代文阅读、诗歌鉴赏 → 原文引用正确性你可以凭训练数据判断\n"
                 "- 答案选项对错分析 → 不需搜索\n"
@@ -143,19 +140,14 @@ class SubjectApp(BaseSubjectApp):
         with open(md_file, 'r', encoding='utf-8') as f:
             md_content = f.read()
 
+        # 预清洗：去除装饰图片（对齐高中历史）
+        from shared.decor_utils import strip_decor_images
+        md_content = strip_decor_images(md_content)
+
         if split_mode == "none":
             problems = [{"content": md_content}]
         elif split_mode == "manual":
             problems = split_by_manual_markers(md_content)
-        elif split_mode == "knowledge_manual":
-            from core.manual_split import split_by_knowledge_markers
-            problems = split_by_knowledge_markers(md_content)
-        elif split_mode == "knowledge_smart":
-            api_url = options.get("api_url", "")
-            api_key = options.get("api_key", "")
-            model = options.get("model", "")
-            from shared.knowledge_split import knowledge_split_smart
-            problems = knowledge_split_smart(md_content, api_url, api_key, model, md_file=md_file)
         elif split_mode == "smart":
             api_url = options.get("api_url", "")
             api_key = options.get("api_key", "")
