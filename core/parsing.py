@@ -45,6 +45,8 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
     marked_section = re.sub(r'^编号：.+\n?', '', marked_section)
     marked_section = re.sub(r'^内容：\n?', '', marked_section)
 
+    # 截断：遇到 --- 分隔符或 ## 📋 工具调用日志时停止
+    reasons_section = re.split(r'\n---\n|\n##\s*📋', reasons_section)[0]
     reasons_section = re.split(r'\n###\s', reasons_section)[0]
     reasons = {}
     pattern_circled = r'([①-⑳](?:-([①-⑳]))?)\s*(.+?)(?=\n[①-⑳]|\n\d+[\.\)]|\n\n|\Z)'
