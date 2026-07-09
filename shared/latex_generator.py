@@ -85,6 +85,27 @@ def _escape_unescaped(text: str, chars: str) -> str:
 
 
 def _escape_preserve_math(text: str) -> str:
+    # 清除 pandoc 残留的 \style{...}{...}（XeLaTeX 不识别，会渲染为乱码）
+    while r'\style{' in text:
+        idx = text.find(r'\style{')
+        depth = 0; end1 = -1
+        for i in range(idx + 6, len(text)):
+            if text[i] == '{': depth += 1
+            elif text[i] == '}': depth -= 1
+            if depth == 0: end1 = i; break
+        if end1 > 0 and end1 + 1 < len(text) and text[end1 + 1] == '{':
+            depth = 0; end2 = -1
+            for i in range(end1 + 1, len(text)):
+                if text[i] == '{': depth += 1
+                elif text[i] == '}': depth -= 1
+                if depth == 0: end2 = i; break
+            if end2 > 0:
+                inner = text[end1 + 2:end2]
+                text = text[:idx] + inner + text[end2 + 1:]
+            else:
+                text = text[:idx] + text[end1 + 1:]
+        else:
+            text = text[:idx] + text[end1 + 1:] if end1 > 0 else text[:idx]
     parts = re.split(r"(\$\$[\s\S]*?\$\$|\$[^$]*?\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))", text)
     result = []
     for part in parts:
