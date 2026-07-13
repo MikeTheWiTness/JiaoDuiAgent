@@ -619,6 +619,7 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
                 return math_key + key
             else:
                 # 文本模式：红色底色高亮 + 圈号
+                inner = _escape_unescaped(inner, '%#')
                 key = f"CORRMARK{num}"
                 placeholder_map[key] = (
                     r"\corrmark{" + r"\(" + inner + r"\)" + r"}"
@@ -640,6 +641,7 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
                 )
                 return math_key + key
             else:
+                inner = _escape_unescaped(inner, '%#')
                 key = f"CORRMARK{num}"
                 placeholder_map[key] = (
                     r"\corrmark{" + r"\[" + inner + r"\]" + r"}"
@@ -648,6 +650,7 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
                 return key
 
         # 纯文本标记（无 $ 包裹）：红色底色高亮 + 圈号
+        orig = _escape_unescaped(orig, '%#')
         key = f"CORRMARK{num}"
         placeholder_map[key] = (
             r"\corrmark{" + orig + r"}{" + str(num) + r"}"

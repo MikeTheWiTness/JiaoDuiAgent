@@ -871,12 +871,12 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
         if react_mode:
             try:
                 from shared.physics_tools import set_physics_api_config
-                set_physics_api_config(ctx.api_url, ctx.api_key, model, output_dir=q_dir)
+                set_physics_api_config(ctx.api_url, ctx.api_key, ctx.model, output_dir=q_dir)
             except ImportError:
                 pass  # 非物理学科无 physics_tools 模块，忽略
             try:
                 from shared.chemistry_tools import set_chemistry_api_config
-                set_chemistry_api_config(ctx.api_url, ctx.api_key, model, output_dir=q_dir)
+                set_chemistry_api_config(ctx.api_url, ctx.api_key, ctx.model, output_dir=q_dir)
             except ImportError:
                 pass  # 非化学学科无 chemistry_tools 模块，忽略
 
