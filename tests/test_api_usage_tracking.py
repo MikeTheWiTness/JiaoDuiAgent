@@ -6,6 +6,12 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 from core.api_client import call_api, StopReason
+from core.session_context import SessionContext
+
+
+def _make_ctx(api_url="http://test/v1", api_key="key", model="test-model", max_loops=20):
+    """构造测试用的 SessionContext。"""
+    return SessionContext(api_url=api_url, api_key=api_key, model=model, max_loops=max_loops)
 
 
 def _make_mock_response(content: str, usage: dict = None, finish_reason: str = "stop"):
@@ -37,9 +43,7 @@ class TestApiUsageTracking:
         mock_post.return_value = _make_mock_response("校对完成")
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(),
             md_text="测试文本",
             images=[],
             q_title="第1题",
@@ -79,15 +83,12 @@ class TestApiUsageTracking:
         mock_post.side_effect = [resp1, resp2]
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(max_loops=5),
             md_text="测试文本",
             images=[],
             q_title="第1题",
             system_prompt="prompt",
             tools=[],  # 空工具列表，工具不会被实际执行
-            max_loops=5,
         )
 
         assert "usage" in result
@@ -116,15 +117,12 @@ class TestApiUsageTracking:
         mock_post.return_value = resp
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(max_loops=0),  # 立即超限
             md_text="测试文本",
             images=[],
             q_title="第1题",
             system_prompt="prompt",
             tools=[],
-            max_loops=0,  # 立即超限
         )
 
         assert "usage" in result
@@ -150,9 +148,7 @@ class TestApiUsageTracking:
         mock_post.return_value = mock_resp
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(),
             md_text="测试文本",
             images=[],
             q_title="第1题",
@@ -187,15 +183,12 @@ class TestApiUsageTracking:
         mock_post.side_effect = [resp1, req_mod.exceptions.Timeout("timeout")]
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(max_loops=5),
             md_text="测试文本",
             images=[],
             q_title="第1题",
             system_prompt="prompt",
             tools=[],
-            max_loops=5,
         )
 
         # 第一次成功请求的 usage 应保留

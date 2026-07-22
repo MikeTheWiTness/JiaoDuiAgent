@@ -24,6 +24,12 @@ from core.api_client import (
     StopReason,
     MAX_RETRY,
 )
+from core.session_context import SessionContext
+
+
+def _make_ctx(api_url="http://test/v1", api_key="key", model="test-model", max_loops=20):
+    """构造测试用的 SessionContext。"""
+    return SessionContext(api_url=api_url, api_key=api_key, model=model, max_loops=max_loops)
 
 
 class TestErrorHierarchy:
@@ -192,9 +198,7 @@ class TestCircuitBreakerInCallApi:
         )
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="bad-key",
-            model="test-model",
+            ctx=_make_ctx(api_key="bad-key"),
             md_text="测试文本",
             images=[],
             q_title="第1题",
@@ -214,9 +218,7 @@ class TestCircuitBreakerInCallApi:
 
         start = time.time()
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(),
             md_text="测试文本",
             images=[],
             q_title="第1题",
@@ -238,9 +240,7 @@ class TestCircuitBreakerInCallApi:
         mock_post.side_effect = req_mod.exceptions.Timeout("timeout")
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(),
             md_text="测试文本",
             images=[],
             q_title="第1题",
@@ -263,9 +263,7 @@ class TestCircuitBreakerInCallApi:
         )
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(),
             md_text="测试文本",
             images=[],
             q_title="第1题",
@@ -288,9 +286,7 @@ class TestCircuitBreakerInCallApi:
         )
 
         result = call_api(
-            api_url="http://test/v1",
-            api_key="key",
-            model="test-model",
+            ctx=_make_ctx(),
             md_text="测试文本",
             images=[],
             q_title="第1题",
