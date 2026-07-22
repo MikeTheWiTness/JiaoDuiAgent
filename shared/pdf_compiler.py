@@ -306,7 +306,12 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
                 f"--- LOG TAIL ---\n" + "\n".join(tail))
 
         # Step 2: xdvipdfmx — 将 XDV 转为 PDF
-        xdvipdfmx_path = os.path.join(os.path.dirname(xelatex_path), "xdvipdfmx.exe")
+        # macOS/Linux 上系统 TeX Live 的 xdvipdfmx 无 .exe 后缀
+        _xdv_exe = "xdvipdfmx.exe" if os.name == 'nt' else "xdvipdfmx"
+        xdvipdfmx_path = os.path.join(os.path.dirname(xelatex_path), _xdv_exe)
+        if not os.path.isfile(xdvipdfmx_path) and os.name != 'nt':
+            # 回退：尝试 .exe 后缀（某些 Windows 移植版）
+            xdvipdfmx_path = os.path.join(os.path.dirname(xelatex_path), "xdvipdfmx.exe")
         tmp_pdf = os.path.join(tmpdir, f"{base}.pdf")
         cmd2 = [xdvipdfmx_path, "-o", tmp_pdf, xdv_path]
         compile_kwargs2 = {

@@ -50,11 +50,6 @@ class TestSubjectAppInterface(unittest.TestCase):
         self.assertIn("批注", prompt)
         self.assertIn("标记原文", prompt)
 
-    def test_get_knowledge_prompt_includes_core_content(self):
-        prompt = self.app.get_knowledge_prompt()
-        self.assertIn("校对", prompt)
-        self.assertIn("标记原文", prompt)
-
 
 class TestSubjectAppMethodSignatures(unittest.TestCase):
     def setUp(self):

@@ -27,13 +27,22 @@ PAPER = os.path.join(
 )
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_search_results")
 
+# 数据目录不存在时跳过（该目录为本地拆题产物，CI 环境无此数据）
+_HAS_PAPER_DATA = os.path.isdir(PAPER) and os.path.isfile(os.path.join(PAPER, "第1题", "第1题.md"))
+_HAS_SEARCH_DATA = os.path.isdir(DATA) and os.path.isfile(os.path.join(DATA, "weicou_full.txt"))
+
 
 def _read(q_num):
     with open(os.path.join(PAPER, f"第{q_num}题", f"第{q_num}题.md"), encoding="utf-8") as f:
         return f.read()
 
 
+_skip_no_paper = unittest.skipUnless(_HAS_PAPER_DATA, "需要 output/拆题结果/ 目录中的拆题数据")
+_skip_no_search = unittest.skipUnless(_HAS_SEARCH_DATA, "需要 _search_results/ 中的全文搜索 fixture 数据")
+
+
 class TestExtractBodySegment(unittest.TestCase):
+    @_skip_no_paper
     def test_weicou_body_segment(self):
         body = extract_body_segment(_read(1))
         self.assertIsNotNone(body, "韦凑题应能切出正文段")
@@ -45,6 +54,7 @@ class TestExtractBodySegment(unittest.TestCase):
         # 不应混入断句选项的斜线（题干特有）
         self.assertNotIn("下列对文中", body)
 
+    @_skip_no_paper
     def test_daizhou_body_segment(self):
         body = extract_body_segment(_read(4))
         self.assertIsNotNone(body, "戴胄题应能切出正文段")
@@ -54,6 +64,7 @@ class TestExtractBodySegment(unittest.TestCase):
         self.assertNotIn("下列对文中", body)
         self.assertNotIn("节选自", body)
 
+    @_skip_no_paper
     def test_modern_returns_none(self):
         # 第3题是现代文（阅读下面的文字），引导语不含「文言文/古诗/…」→ 返回 None
         body = extract_body_segment(_read(3))
@@ -89,6 +100,7 @@ class TestPreprocessDiffNoise(unittest.TestCase):
         import re
         return len(re.findall(r'^\d+\. 第\d+位', reference_md, flags=re.MULTILINE))
 
+    @_skip_no_paper
     def test_weicou_diff_noise_eliminated(self):
         md = self._run(1, "weicou")
         self.assertIn("## 前置参考", md, "韦凑题应注入前置参考")
@@ -99,6 +111,7 @@ class TestPreprocessDiffNoise(unittest.TestCase):
         self.assertIn("雇", md)  # 原文「雇」 vs 题目「顾」
         self.assertIn("陜", md)  # 原文「陜」 vs 题目「陕」（异体字）
 
+    @_skip_no_paper
     def test_daizhou_diff_noise_eliminated(self):
         md = self._run(4, "daizhou")
         self.assertIn("## 前置参考", md, "戴胄题应注入前置参考")

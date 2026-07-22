@@ -17,15 +17,7 @@ class UnitMarkerError(ValueError):
 START_MARKER = r"(\\?#){6}\s*题目开始\s*(\\?#){6}"
 END_MARKER = r"(\\?#){6}\s*题目结束\s*(\\?#){6}"
 
-START_KNOWLEDGE_MARKER = r"(\\?#){6}\s*知识开始\s*(\\?#){6}"
-END_KNOWLEDGE_MARKER = r"(\\?#){6}\s*知识结束\s*(\\?#){6}"
-
-
 class ManualMarkerError(ValueError):
-    pass
-
-
-class KnowledgeMarkerError(ValueError):
     pass
 
 
@@ -103,7 +95,7 @@ def parse_unit_markers(text: str) -> list[dict]:
 def split_by_unit_markers(md_content: str) -> list[dict]:
     """按 ###### 单元开始/结束 ###### 标记拆分。
 
-    替代原有的 split_by_manual_markers() + split_by_knowledge_markers()。
+    替代原有的 split_by_manual_markers()。
     """
     return parse_unit_markers(md_content)
 
@@ -167,8 +159,3 @@ def _split_by_deprecated_markers(md_content, unit_label, start_pattern, end_patt
 def split_by_manual_markers(md_content):
     """旧的题目标记拆分（向后兼容）。"""
     return _split_by_deprecated_markers(md_content, "题目", START_MARKER, END_MARKER, ManualMarkerError)
-
-
-def split_by_knowledge_markers(md_content):
-    """旧的知识标记拆分（向后兼容）。"""
-    return _split_by_deprecated_markers(md_content, "知识", START_KNOWLEDGE_MARKER, END_KNOWLEDGE_MARKER, KnowledgeMarkerError)

@@ -444,8 +444,11 @@ def _apply_markers(md_content: str, corrections: list[dict]) -> tuple[str, list[
             result = result[:close+1] + marker + result[close+1:]
         else:
             # 文本模式：红色底色高亮 + 圈号
+            # 将 math-only 命令包裹在 $...$ 中，避免 \times 等在文本模式报错
+            converted = _unicode_math_to_latex(result[start:end])
+            text_safe = _MATH_ONLY_RE.sub(r'$\\\1$', converted)
             result = (result[:start]
-                      + r"\corrmark{" + _unicode_math_to_latex(result[start:end]) + r"}{" + str(num) + r"}"
+                      + r"\corrmark{" + text_safe + r"}{" + str(num) + r"}"
                       + result[end:])
 
     return result, numbered
@@ -536,6 +539,11 @@ def _circled_char(n: int) -> str:
 
 
 _INLINE_MARKER_RE = re.compile(r'【([\d①-⑳]+)\|([^|]*?)\|([^】]*?)】')
+
+# math-only LaTeX 命令（仅数学模式有效），在文本模式中需包裹 $...$ 避免编译错误
+_MATH_ONLY_RE = re.compile(
+    r'\\(times|div|pm|mp|cdot|leq|geq|approx|neq|infty|sum|int|prod|partial|nabla|in|notin|subset|supset|rightarrow|leftarrow|Rightarrow|Leftarrow|circ|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)(?![a-zA-Z])'
+)
 
 
 def _parse_marker_num(s: str) -> int:
@@ -650,10 +658,13 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
                 return key
 
         # 纯文本标记（无 $ 包裹）：红色底色高亮 + 圈号
-        # 也做 Unicode→LaTeX 转换，防止 orig 中含裸 Unicode 数学字符
+        # Unicode→LaTeX 转换后，将 math-only 命令包裹在 $...$ 中
+        # 避免 \times 等命令在 \textcolor 文本模式下触发 Missing $ 错误
+        converted = _unicode_math_to_latex(orig)
+        text_safe = _MATH_ONLY_RE.sub(r'$\\\1$', converted)
         key = f"CORRMARK{num}"
         placeholder_map[key] = (
-            r"\corrmark{" + _unicode_math_to_latex(orig) + r"}{" + str(num) + r"}"
+            r"\corrmark{" + text_safe + r"}{" + str(num) + r"}"
         )
         return key
 

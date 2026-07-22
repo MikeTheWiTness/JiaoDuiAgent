@@ -31,6 +31,10 @@ BUNDLED_TEXLIVE = os.path.join(PROJECT_ROOT, "bundled_texlive")
 XELATEX = os.path.join(BUNDLED_TEXLIVE, "bin", "windows", "xelatex.exe")
 XDVIPDFMX = os.path.join(BUNDLED_TEXLIVE, "bin", "windows", "xdvipdfmx.exe")
 
+# 环境检查：TeX Live 不存在时跳过所有编译测试
+_HAS_TEXLIVE = os.path.isfile(XELATEX) and os.path.isfile(XDVIPDFMX)
+_skip_no_texlive = unittest.skipUnless(_HAS_TEXLIVE, "需要 bundled_texlive 目录（xelatex 编译器）")
+
 # ---- 辅助函数（精简自 pdf_compiler.py）----
 
 def _get_texmf_root():
@@ -193,6 +197,7 @@ def _compile_tex(tex_source, tex_name="test"):
 # 测试用例
 # ═══════════════════════════════════════════════════════════════
 
+@_skip_no_texlive
 class TestMinimalLatex(unittest.TestCase):
     """最小化 LaTeX 编译测试"""
 
@@ -274,6 +279,7 @@ Hello World
         print(f"  ✅ PDF: {pdf} ({os.path.getsize(pdf)} bytes)")
 
 
+@_skip_no_texlive
 class TestProofreadTemplate(unittest.TestCase):
     """验证校对模板关键组件可编译"""
 
@@ -399,6 +405,7 @@ class TestProofreadTemplate(unittest.TestCase):
         print(f"  ✅ PDF: {pdf} ({os.path.getsize(pdf)} bytes)")
 
 
+@_skip_no_texlive
 class TestPdfCompilerIntegration(unittest.TestCase):
     """通过 pdf_compiler.compile_to_pdf 直接编译"""
 

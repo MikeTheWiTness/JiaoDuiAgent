@@ -71,10 +71,11 @@ class TestQuestionPromptQuality(unittest.TestCase):
 
 
 class TestSmartSplitPrompt(unittest.TestCase):
-    def test_prompt_contains_problem_tags(self):
+    def test_prompt_contains_unit_markers(self):
+        """ADR-0018 统一为 ###### 单元开始/结束 ###### 标记"""
         from shared.smart_split import SMART_SPLIT_PROMPT
-        self.assertIn("<problem>", SMART_SPLIT_PROMPT)
-        self.assertIn("</problem>", SMART_SPLIT_PROMPT)
+        self.assertIn("###### 单元开始 ######", SMART_SPLIT_PROMPT)
+        self.assertIn("###### 单元结束 ######", SMART_SPLIT_PROMPT)
 
     def test_prompt_says_no_modification(self):
         from shared.smart_split import SMART_SPLIT_PROMPT

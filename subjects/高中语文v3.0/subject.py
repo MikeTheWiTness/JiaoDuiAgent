@@ -10,11 +10,10 @@ from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
     default_split_exam,
-    default_generate_knowledge,
     default_proofread_one,
     default_collect_paper_dirs,
 )
-from core.manual_split import split_by_manual_markers
+from core.manual_split import split_by_manual_markers, split_by_unit_markers
 from core.logging_utils import log
 from core.base_subject import BaseSubjectApp
 import shutil
@@ -109,23 +108,6 @@ class SubjectApp(BaseSubjectApp):
             return base_prompt + "\n\n" + tool_instructions
         return base_prompt
 
-    def get_knowledge_prompt(self):
-        if self.react_mode:
-            # ReAct 统一入口：agent_prompt 已含知识维度叠加 + 题目节点图
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                base_prompt = "\n".join(agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-        # 非 ReAct 模式：使用旧版 knowledge_prompt_lines
-        base_prompt = "\n".join(self.config.get("knowledge_prompt_lines", []))
-        tool_instructions = self.get_tool_instructions()
-        if tool_instructions:
-            return base_prompt + "\n\n" + tool_instructions
-        return base_prompt
-
     def split_lecture(self, md_file, output_root, base_name, options):
         if options is None:
             options = {}
@@ -133,8 +115,6 @@ class SubjectApp(BaseSubjectApp):
         do_clean = options.get("do_clean", True)
 
         if split_mode == "rule":
-            from shared.decor_utils import strip_decor_images_from_file
-            strip_decor_images_from_file(md_file)
             return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
         with open(md_file, 'r', encoding='utf-8') as f:
@@ -147,7 +127,7 @@ class SubjectApp(BaseSubjectApp):
         if split_mode == "none":
             problems = [{"content": md_content}]
         elif split_mode == "manual":
-            problems = split_by_manual_markers(md_content)
+            problems = split_by_unit_markers(md_content)
         elif split_mode == "smart":
             api_url = options.get("api_url", "")
             api_key = options.get("api_key", "")

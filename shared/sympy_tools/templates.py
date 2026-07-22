@@ -21,8 +21,17 @@ _SERIALIZER = """
 def _serialize(obj):
     if isinstance(obj, bool):
         return obj
-    if isinstance(obj, (int, float)):
-        return float(obj)
+    if isinstance(obj, float):
+        # 消除 IEEE 754 噪声：将浮点数舍入到 12 位有效数字
+        # 如 0.25600000000000006 → 0.256
+        if abs(obj) >= 1e-12:
+            rounded = round(obj, 12)
+            # 仅当舍入前后差异在容差内才取舍入值（避免对真正的无理数产生误差）
+            if abs(obj - rounded) < 1e-10 * max(1, abs(obj)):
+                return rounded
+        return obj
+    if isinstance(obj, int):
+        return obj
     if obj is _sp.S.true:
         return True
     if obj is _sp.S.false:
@@ -31,7 +40,13 @@ def _serialize(obj):
         return None
     if hasattr(obj, 'is_number') and obj.is_number and obj is not _sp.oo and obj is not -_sp.oo:
         try:
-            return float(obj)
+            val = float(obj)
+            # 消除 IEEE 754 噪声
+            if abs(val) >= 1e-12:
+                rounded = round(val, 12)
+                if abs(val - rounded) < 1e-10 * max(1, abs(val)):
+                    return rounded
+            return val
         except (TypeError, ValueError, OverflowError):
             return str(obj)
     if isinstance(obj, _sp.MatrixBase):

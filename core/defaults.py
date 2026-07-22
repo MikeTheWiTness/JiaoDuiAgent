@@ -497,18 +497,6 @@ def _extract_problems_from_section(section_title, section_content, problem_pats)
     return units
 
 
-def _has_real_content(lines, section_pat):
-    """检查内容行中是否有实质内容（非标题、非空行）。"""
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if section_pat and section_pat.match(stripped):
-            continue
-        return True
-    return False
-
-
 def _merge_consecutive_headers(units, section_pat):
     """合并 ## 模块级标题到下一个单元。
 
@@ -533,37 +521,6 @@ def _merge_consecutive_headers(units, section_pat):
             i += 1
 
     return merged
-
-
-def default_generate_knowledge(cleaned_md, output_root, base_name, config):
-    with open(cleaned_md, 'r', encoding='utf-8') as f:
-        content = f.read()
-    lines = content.splitlines()
-    compiled = config_loader.get_compiled_title_patterns(config)
-    filtered = []
-    in_question = False
-    for line in lines:
-        stripped = line.strip()
-        is_title = any(p.match(stripped) for p in compiled)
-        is_section = stripped.startswith('#') and not stripped.startswith('**')
-        if is_title:
-            in_question = True; continue
-        elif is_section:
-            in_question = False; filtered.append(line)
-        else:
-            if not in_question:
-                filtered.append(line)
-
-    knowledge_text = '\n'.join(filtered)
-    md_dir = Path(cleaned_md).parent
-    src_media = md_dir / f"{base_name}_images" / "media"
-    target_root = Path(output_root) / base_name / "知识"
-    target_root.mkdir(parents=True, exist_ok=True)
-    img_dest = target_root / "images"; img_dest.mkdir(exist_ok=True)
-
-    img_result = copy_md_images(knowledge_text, [src_media], img_dest)
-    (target_root / f"{base_name}_知识.md").write_text(img_result.content, encoding='utf-8')
-    log(f"   📘 知识文件已生成")
 
 
 def fix_pandoc_comment_anomaly(content):
@@ -815,12 +772,21 @@ def _format_usage_summary(usage: dict) -> str:
     return "".join(lines)
 
 
-def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
+def read_md_for_unit(q_dir: str, q_name: str) -> str | None:
+    """读取单元目录中与目录同名的 .md 文件内容。
+
+    精确匹配 {q_name}.md，避免读到 _clean.md 或其他辅助 .md 文件。
+    返回文件内容字符串，不存在时返回 None。
+    """
     target_md = os.path.join(q_dir, f"{q_name}.md")
-    md_content = ""
     if os.path.exists(target_md):
         with open(target_md, 'r', encoding='utf-8') as fm:
-            md_content = fm.read()
+            return fm.read()
+    return None
+
+
+def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
+    md_content = read_md_for_unit(q_dir, q_name)
     if not md_content:
         return {"success": False, "result": "", "error": "未找到 md 文件"}
 
@@ -840,7 +806,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
             log("   📖 前置参考已注入（已移除联网工具，仅依靠前置搜索结果）")
         else:
             tools = []
-            ctx.max_loops = 0
+            # max_loops 无需改：tools=[] 时 payload 无 tools 字段，工具循环本就不会启动
             log("   🔒 前置参考已注入，关闭联网搜索")
 
     images_b64 = []
@@ -864,6 +830,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
                     "image_url": {"url": f"data:{mime};base64,{b64}"}
                 })
             except Exception:
+                log(f"   ⚠️ 图片 base64 编码失败: {img_path}")
                 continue
 
     try:
@@ -911,8 +878,8 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
                 with open(md_path, "w", encoding="utf-8") as f:
                     f.write(res)
             except Exception:
-                pass
-            log(f"   \u26a0\ufe0f 格式不合规：{format_issues}")
+                import traceback
+                log(f"   ⚠️ 写入 _校对报告.md 失败 ({md_path}):\n{traceback.format_exc()}")
             res, was_fixed, _ = enforce_and_fix(md_path, res, ctx.api_url, ctx.api_key, ctx.model)
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
@@ -937,7 +904,8 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
                     if usage_text:
                         f.write(usage_text)
             except Exception:
-                pass
+                import traceback
+                log(f"   ⚠️ 写入 reasoning/usage 到 _校对报告.md 失败:\n{traceback.format_exc()}")
             save_proofread_json(res, q_dir, tool_calls)
 
             # 同步存档到 output/中间产物/{文档名}/{题目名}/
@@ -970,7 +938,8 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
                 if os.path.exists(src_api_log):
                     shutil.copy2(src_api_log, artifact_dir / "_API对话记录.md")
             except Exception:
-                pass
+                import traceback
+                log(f"   ⚠️ 中间产物存档失败 ({q_dir} → {artifact_dir}):\n{traceback.format_exc()}")
         return {"success": True, "result": res, "tool_calls": tool_calls, "error": None}
     else:
         # stop_reason == ERROR：提取完整错误信息（不截断，保留排查细节）
@@ -1031,7 +1000,7 @@ def default_collect_paper_dirs(base_path):
     sub_items = [x for x in base.iterdir() if x.is_dir()]
     sub_names = [x.name for x in sub_items]
     def _is_unit_dir(name):
-        return '题' in name or name.startswith('板块')
+        return '题' in name or name.startswith('板块') or name.startswith('单元')
     has_question_dir = any(_is_unit_dir(n) for n in sub_names)
     has_knowledge = any(n == '知识' for n in sub_names)
     if has_question_dir or has_knowledge:

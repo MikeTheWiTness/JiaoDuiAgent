@@ -92,12 +92,21 @@ def smart_split_with_callable(md_content, llm_callable, md_file=None):
 
 
 def smart_split(md_content, api_url, api_key, model, md_file=None):
+    from core.session_context import SessionContext
+    ctx = SessionContext.from_credentials(
+        api_url, api_key, model,
+        max_loops=1,
+        max_tokens=SMART_SPLIT_MAX_TOKENS,
+    )
+
     def _llm_call(text, prompt):
         api_result = call_api(
-            api_url, api_key, model,
-            text, [], "智能分割",
-            prompt, tools=[], max_loops=1,
-            max_tokens=SMART_SPLIT_MAX_TOKENS,
+            ctx,
+            md_text=text,
+            images=[],
+            q_title="智能分割",
+            system_prompt=prompt,
+            tools=[],
         )
         return api_result["content"]
 

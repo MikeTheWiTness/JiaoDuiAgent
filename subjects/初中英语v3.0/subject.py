@@ -8,7 +8,6 @@ from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
     default_split_exam,
-    default_generate_knowledge,
     default_proofread_one,
     default_collect_paper_dirs,
 )
@@ -50,7 +49,7 @@ class SubjectApp(BaseSubjectApp):
         """生成工具使用指令。"""
         if not self.tools:
             return ""
-        return "\n".join([f"- {t.name}" for t in tools])
+        return "\n".join([f"- {t.name}" for t in self.tools])
 
     def get_question_prompt(self):
         """获取题目校对提示词。ReAct 模式时优先用 agent_prompt。"""
@@ -59,14 +58,6 @@ class SubjectApp(BaseSubjectApp):
             if agent_lines:
                 return "\n".join(agent_lines)
         return "\n".join(self.config.get("question_prompt_lines", []))
-
-    def get_knowledge_prompt(self):
-        """获取知识提取提示词。ReAct 模式时优先用 agent_prompt。"""
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                return "\n".join(agent_lines)
-        return "\n".join(self.config.get("knowledge_prompt_lines", []))
 
     def get_review_prompt(self):
         """获取批注评审提示词。"""
@@ -82,8 +73,6 @@ class SubjectApp(BaseSubjectApp):
         if options is None:
             options = {}
         do_clean = options.get("do_clean", True)
-        from shared.decor_utils import strip_decor_images_from_file
-        strip_decor_images_from_file(md_file)
         return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
 

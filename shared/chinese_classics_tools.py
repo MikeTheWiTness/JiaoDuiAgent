@@ -702,6 +702,10 @@ def extract_excerpt_from_full(full_text, excerpt_text):
     if not full_text or not excerpt_text:
         return None
 
+    # 快速路径：节选完整出现在全文中直接返回（解决短文本 n-gram 不足的问题）
+    if excerpt_text in full_text:
+        return excerpt_text
+
     n_full = _clean_for_matching(full_text)
 
     # 在清洗前按标点分句，避免跨句边界的无意义 n-gram

@@ -10,6 +10,7 @@ IndependentSolveTool：
 """
 import json
 import os
+import threading
 import requests
 from typing import Any
 from pathlib import Path
@@ -17,21 +18,25 @@ from pathlib import Path
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-# ---- 模块级 API 配置（在 default_proofread_one 中注入） ----
+# ---- 模块级 API 配置（线程安全：threading.local() 参照 shared/bash_tool.py） ----
 
-_api_config: dict = {}
-"""存储 API 调用所需的配置：api_url, api_key, model, output_dir"""
+_api_config: threading.local = threading.local()
+"""每线程独立的 API 配置，避免并行校对时竞态写错目录。"""
 
 
 def set_physics_api_config(api_url: str, api_key: str, model: str, output_dir: str | None = None):
     """在 ReAct 工具循环开始前注入 API 配置，供 IndependentSolveTool 内部使用。"""
-    global _api_config
-    _api_config = {
+    _api_config.value = {
         "api_url": api_url,
         "api_key": api_key,
         "model": model,
         "output_dir": output_dir,
     }
+
+
+def _get_api_config() -> dict:
+    """获取当前线程的 API 配置，未设置时返回空 dict。"""
+    return getattr(_api_config, "value", {})
 
 
 # ---- IndependentSolveTool ----
@@ -86,11 +91,11 @@ class IndependentSolveTool(BaseTool):
         Returns:
             JSON 字符串：{"answer": str, "reasoning": str, "ok": bool, "error": str|None}
         """
-        global _api_config
-        api_url = _api_config.get("api_url", "")
-        api_key = _api_config.get("api_key", "")
-        model = _api_config.get("model", "")
-        output_dir = _api_config.get("output_dir")
+        cfg = _get_api_config()
+        api_url = cfg.get("api_url", "")
+        api_key = cfg.get("api_key", "")
+        model = cfg.get("model", "")
+        output_dir = cfg.get("output_dir")
 
         if not api_url or not api_key:
             return json.dumps({
@@ -203,7 +208,10 @@ class IndependentSolveTool(BaseTool):
                 f.write("".join(lines))
 
         except Exception:
-            pass  # 落盘失败不影响解题主流程
+            # 落盘失败不影响解题主流程，但需记录以便排查
+            import traceback
+            from core.logging_utils import log
+            log(f"   ⚠️ _物理求解.md 落盘失败: {traceback.format_exc()}")
 
     async def _arun(self, *args: Any, **kwargs: Any) -> str:
         raise NotImplementedError

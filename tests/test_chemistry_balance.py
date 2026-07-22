@@ -15,6 +15,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from shared.chemistry_tools import parse_chemical_formula
+
 # ============================================================
 # 单元测试：_parse_formula 的提取版（直接测试解析逻辑）
 # ============================================================
@@ -69,133 +71,85 @@ class TestParseFormulaV1:
 
 
 # ============================================================
-# 单元测试：修复后的 _parse_formula
+# 单元测试：修复后的 parse_chemical_formula（导入 shared.chemistry_tools 真实实现）
 # ============================================================
 
 
-def _parse_formula_v2(f):
-    """修复版：支持括号的化学式解析"""
-    counts = {}
-    i = 0
-    n = len(f)
-
-    def _parse_group():
-        """从当前位置解析一个化学式片段，返回元素计数"""
-        nonlocal i
-        group_counts = {}
-        while i < n and f[i] != ')':
-            if f[i] == '(':
-                i += 1  # skip '('
-                inner = _parse_group()
-                # expect ')'
-                if i < n and f[i] == ')':
-                    i += 1
-                # read multiplier after ')'
-                mult = 1
-                num_start = i
-                while i < n and f[i].isdigit():
-                    i += 1
-                if i > num_start:
-                    mult = int(f[num_start:i])
-                for el, cnt in inner.items():
-                    group_counts[el] = group_counts.get(el, 0) + cnt * mult
-            elif f[i].isupper():
-                # Element symbol: uppercase followed by optional lowercase
-                el_start = i
-                i += 1
-                while i < n and f[i].islower():
-                    i += 1
-                el = f[el_start:i]
-                # Optional digits
-                num_start = i
-                while i < n and f[i].isdigit():
-                    i += 1
-                cnt = int(f[num_start:i]) if i > num_start else 1
-                group_counts[el] = group_counts.get(el, 0) + cnt
-            else:
-                # Unexpected character, skip
-                i += 1
-        return group_counts
-
-    result = _parse_group()
-    return result
-
-
 class TestParseFormulaV2:
-    """修复版的行为"""
+    """修复版的行为（导入 shared.chemistry_tools.parse_chemical_formula 真实实现）"""
 
     # --- 简单化学式（不应退化） ---
     def test_simple_H2O(self):
-        assert _parse_formula_v2("H2O") == {"H": 2, "O": 1}
+        assert parse_chemical_formula("H2O") == {"H": 2, "O": 1}
 
     def test_simple_CO2(self):
-        assert _parse_formula_v2("CO2") == {"C": 1, "O": 2}
+        assert parse_chemical_formula("CO2") == {"C": 1, "O": 2}
 
     def test_simple_NaCl(self):
-        assert _parse_formula_v2("NaCl") == {"Na": 1, "Cl": 1}
+        assert parse_chemical_formula("NaCl") == {"Na": 1, "Cl": 1}
 
     def test_simple_H2SO4(self):
-        assert _parse_formula_v2("H2SO4") == {"H": 2, "S": 1, "O": 4}
+        assert parse_chemical_formula("H2SO4") == {"H": 2, "S": 1, "O": 4}
 
     def test_simple_Fe2O3(self):
-        assert _parse_formula_v2("Fe2O3") == {"Fe": 2, "O": 3}
+        assert parse_chemical_formula("Fe2O3") == {"Fe": 2, "O": 3}
 
     # --- 含括号化学式（本次修复的核心目标） ---
     def test_CaOH2(self):
         """Ca(OH)₂"""
-        assert _parse_formula_v2("Ca(OH)2") == {"Ca": 1, "O": 2, "H": 2}
+        assert parse_chemical_formula("Ca(OH)2") == {"Ca": 1, "O": 2, "H": 2}
 
     def test_Fe2SO43(self):
         """Fe₂(SO₄)₃"""
-        assert _parse_formula_v2("Fe2(SO4)3") == {"Fe": 2, "S": 3, "O": 12}
+        assert parse_chemical_formula("Fe2(SO4)3") == {"Fe": 2, "S": 3, "O": 12}
 
     def test_AlOH3(self):
         """Al(OH)₃"""
-        assert _parse_formula_v2("Al(OH)3") == {"Al": 1, "O": 3, "H": 3}
+        assert parse_chemical_formula("Al(OH)3") == {"Al": 1, "O": 3, "H": 3}
 
     def test_MgOH2(self):
         """Mg(OH)₂"""
-        assert _parse_formula_v2("Mg(OH)2") == {"Mg": 1, "O": 2, "H": 2}
+        assert parse_chemical_formula("Mg(OH)2") == {"Mg": 1, "O": 2, "H": 2}
 
     def test_Ca3PO42(self):
         """Ca₃(PO₄)₂"""
-        assert _parse_formula_v2("Ca3(PO4)2") == {"Ca": 3, "P": 2, "O": 8}
+        assert parse_chemical_formula("Ca3(PO4)2") == {"Ca": 3, "P": 2, "O": 8}
 
     def test_NH42SO4(self):
         """(NH₄)₂SO₄"""
-        assert _parse_formula_v2("(NH4)2SO4") == {"N": 2, "H": 8, "S": 1, "O": 4}
+        assert parse_chemical_formula("(NH4)2SO4") == {"N": 2, "H": 8, "S": 1, "O": 4}
 
     def test_FeOH3(self):
         """Fe(OH)₃"""
-        assert _parse_formula_v2("Fe(OH)3") == {"Fe": 1, "O": 3, "H": 3}
+        assert parse_chemical_formula("Fe(OH)3") == {"Fe": 1, "O": 3, "H": 3}
 
     def test_BaOH2(self):
         """Ba(OH)₂"""
-        assert _parse_formula_v2("Ba(OH)2") == {"Ba": 1, "O": 2, "H": 2}
+        assert parse_chemical_formula("Ba(OH)2") == {"Ba": 1, "O": 2, "H": 2}
 
     def test_CuOH2(self):
         """Cu(OH)₂"""
-        assert _parse_formula_v2("Cu(OH)2") == {"Cu": 1, "O": 2, "H": 2}
+        assert parse_chemical_formula("Cu(OH)2") == {"Cu": 1, "O": 2, "H": 2}
 
     # --- 无括号的复杂化学式 ---
     def test_KMnO4(self):
-        assert _parse_formula_v2("KMnO4") == {"K": 1, "Mn": 1, "O": 4}
+        assert parse_chemical_formula("KMnO4") == {"K": 1, "Mn": 1, "O": 4}
 
     def test_NaHCO3(self):
-        assert _parse_formula_v2("NaHCO3") == {"Na": 1, "H": 1, "C": 1, "O": 3}
+        assert parse_chemical_formula("NaHCO3") == {"Na": 1, "H": 1, "C": 1, "O": 3}
 
     # --- 边界情况 ---
     def test_single_element(self):
         """单元素"""
-        assert _parse_formula_v2("O2") == {"O": 2}
+        assert parse_chemical_formula("O2") == {"O": 2}
 
     def test_no_subscript(self):
         """无下标"""
-        assert _parse_formula_v2("NaCl") == {"Na": 1, "Cl": 1}
+        assert parse_chemical_formula("NaCl") == {"Na": 1, "Cl": 1}
 
     def test_empty_string(self):
         """空字符串"""
-        assert _parse_formula_v2("") == {}
+        assert parse_chemical_formula("") == {}
 
 
 # ============================================================

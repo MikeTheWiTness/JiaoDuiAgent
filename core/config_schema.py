@@ -28,7 +28,7 @@ def validate_config(subject_dir) -> dict:
     errors = []
 
     # ---- 必填字段 ----
-    for field in ["question_prompt_lines", "knowledge_prompt_lines"]:
+    for field in ["question_prompt_lines"]:
         if field not in raw:
             errors.append(f"缺少必填字段 '{field}'")
         elif not isinstance(raw[field], list) or len(raw[field]) == 0:
@@ -67,7 +67,6 @@ def validate_config(subject_dir) -> dict:
 
     config = {
         "question_prompt_lines": raw["question_prompt_lines"],
-        "knowledge_prompt_lines": raw["knowledge_prompt_lines"],
         "lecture_split_mode": lecture.get("split_mode", "section"),
         "lecture_section_pattern": lecture.get("section_pattern", r"^##\s"),
         "lecture_section_extensions": lecture.get("section_pattern_extensions", []),

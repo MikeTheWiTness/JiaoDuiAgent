@@ -1,4 +1,4 @@
-import os, re, json, base64, time, shutil, subprocess, threading, zipfile, sys
+import os, re, json, base64, time, shutil, subprocess, threading, zipfile, sys, dataclasses
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
@@ -10,7 +10,7 @@ from core.config_loader import clear_config_cache, load_config
 from core.pandoc_utils import check_pandoc, convert_with_pandoc
 from core.defaults import (
     fix_latex_escapes, clean_md_file, clean_intent_md_file, fix_floating_images,
-    normalize_option_spacing, post_process_md_zw, default_generate_knowledge,
+    normalize_option_spacing, post_process_md_zw,
 )
 from shared.latex_generator import generate_combined_pdf
 from shared.session import SessionManager
@@ -76,7 +76,6 @@ class DefaultApp:
         self.subject_app.tools = self.subject_app.build_tools()
 
         self.system_prompt = subject_app.get_question_prompt()
-        self.knowledge_prompt = subject_app.get_knowledge_prompt()
         self.tools = subject_app.tools
 
         self.setup_ui()
@@ -387,7 +386,6 @@ class DefaultApp:
         self.subject_app.react_mode = enabled
         self.subject_app.tools = self.subject_app.build_tools()
         self.system_prompt = self.subject_app.get_question_prompt()
-        self.knowledge_prompt = self.subject_app.get_knowledge_prompt()
         log(f"ReAct 模式: {'ON' if enabled else 'OFF'}")
 
     def setup_extra_options(self, frame):
@@ -1148,9 +1146,10 @@ class DefaultApp:
                             for q_dir in batch:
                                 q_name = os.path.basename(q_dir)
                                 log(f"  ⏳ 提交单元：{q_name}")
+                                unit_ctx = dataclasses.replace(ctx, output_dir=q_dir)
                                 future = executor.submit(
                                     self.subject_app.proofread_one,
-                                    ctx, q_dir, q_name, generate_pdf, content
+                                    unit_ctx, q_dir, q_name, generate_pdf, content
                                 )
                                 future_map[future] = (q_dir, q_name)
 
@@ -1164,6 +1163,8 @@ class DefaultApp:
                                 q_dir, q_name = future_map[future]
                                 try:
                                     data = future.result()
+                                    if data is None:
+                                        raise ValueError("proofread_one 返回了 None（内部缺少 return 语句？）")
                                     if data["success"]:
                                         self.proofread_result[q_dir] = data["result"]
                                         paper_results[q_dir] = data["result"]
@@ -1185,9 +1186,14 @@ class DefaultApp:
                             break
                         q_name = os.path.basename(q_dir)
                         log(f"校对单元：{q_name}")
+                        unit_ctx = dataclasses.replace(ctx, output_dir=q_dir)
                         data = self.subject_app.proofread_one(
-                            ctx, q_dir, q_name, generate_pdf, content
+                            unit_ctx, q_dir, q_name, generate_pdf, content
                         )
+                        if data is None:
+                            log(f"   ❌ {q_name} 校对失败：proofread_one 返回了 None")
+                            session_mgr.mark_failed(q_name, "proofread_one 返回了 None")
+                            continue
                         if data["success"]:
                             self.proofread_result[q_dir] = data["result"]
                             paper_results[q_dir] = data["result"]
@@ -1216,7 +1222,8 @@ class DefaultApp:
             else:
                 log("\n===== 全部校对完成 =====")
         except Exception as e:
-            log(f"❌ 任务异常：{e}")
+            import traceback
+            log(f"❌ 任务异常：{e}\n{traceback.format_exc()}")
         finally:
             self.task_running = False
             self.task_interrupt = False

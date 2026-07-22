@@ -1,4 +1,6 @@
 import os
+import traceback
+from core.logging_utils import log
 
 
 def load_env_config(subject_dir):
@@ -23,7 +25,7 @@ def load_env_config(subject_dir):
                     elif key == 'model_name':
                         cfg['model_name'] = val
     except Exception:
-        pass
+        log(f"   ⚠️ 读取 .env 文件失败 ({env_file}):\n{traceback.format_exc()}")
     return cfg
 
 

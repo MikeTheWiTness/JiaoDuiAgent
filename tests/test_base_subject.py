@@ -31,9 +31,6 @@ class _MinimalSubject(BaseSubjectApp):
     def get_question_prompt(self):
         return "测试 prompt"
 
-    def get_knowledge_prompt(self):
-        return "测试知识 prompt"
-
     def get_review_prompt(self):
         return "测试批注 prompt"
 
@@ -59,7 +56,6 @@ def subject_dir():
     tmp = tempfile.mkdtemp()
     config = {
         "question_prompt_lines": ["测试提示词"],
-        "knowledge_prompt_lines": ["测试知识提示词"],
         "lecture_split": {"wrapped_patterns": [], "unwrapped_patterns": [], "section_boundary": ""},
         "exam_split": {"question_pattern": r"^\d+[.)]"},
     }
@@ -74,12 +70,10 @@ class TestBaseSubject:
     """验证基类零差异方法。"""
 
     def test_generate_knowledge_noop(self, subject_dir):
-        """generate_knowledge 在 section 模式下为 no-op（ADR-0017 决策3）。"""
-        with patch("core.base_subject.default_generate_knowledge") as mock:
-            app = _MinimalSubject(subject_dir)
-            result = app.generate_knowledge("test.md", "/out", "base")
-            mock.assert_not_called()
-            assert result is False
+        """generate_knowledge 已废弃（ADR-0017 决策3），直接返回 False。"""
+        app = _MinimalSubject(subject_dir)
+        result = app.generate_knowledge("test.md", "/out", "base")
+        assert result is False
 
     def test_collect_paper_dirs_delegates(self, subject_dir):
         """collect_paper_dirs 应委托给 default_collect_paper_dirs。"""

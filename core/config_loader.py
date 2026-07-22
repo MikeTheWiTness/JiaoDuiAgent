@@ -23,20 +23,6 @@ def load_config(subject_dir):
     return config
 
 
-def get_question_prompt(config):
-    prompt = config["question_prompt_lines"]
-    if isinstance(prompt, list):
-        prompt = "\n".join(prompt)
-    return prompt
-
-
-def get_knowledge_prompt(config):
-    prompt = config["knowledge_prompt_lines"]
-    if isinstance(prompt, list):
-        prompt = "\n".join(prompt)
-    return prompt
-
-
 def get_lecture_patterns(config):
     wrapped = []
     for pat in config["lecture_wrapped_patterns"]:
@@ -57,10 +43,6 @@ def get_lecture_patterns(config):
 def get_compiled_title_patterns(config):
     wrapped, unwrapped = get_lecture_patterns(config)
     return wrapped + unwrapped
-
-
-def get_section_boundary_enabled(config):
-    return config.get("lecture_section_boundary", True)
 
 
 def get_lecture_split_mode(config):
@@ -108,8 +90,3 @@ def get_exam_question_pattern(config):
         return re.compile(config["exam_question_pattern"])
     except re.error:
         return re.compile(r"^(\d+)．")
-
-
-
-def get_agent_prompt(config):
-    return config.get("agent_prompt_lines", None)

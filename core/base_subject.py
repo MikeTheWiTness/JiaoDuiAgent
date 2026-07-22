@@ -9,12 +9,11 @@ import shutil
 from pathlib import Path
 from core.config_loader import load_config
 from core.defaults import (
-    default_generate_knowledge,
     default_collect_paper_dirs,
     default_split_exam,
     default_proofread_one,
 )
-from core.manual_split import split_by_manual_markers
+from core.manual_split import split_by_manual_markers, split_by_unit_markers
 from core.logging_utils import log
 from shared.image_utils import copy_md_images
 
@@ -63,9 +62,6 @@ class BaseSubjectApp:
     def get_question_prompt(self):
         raise NotImplementedError
 
-    def get_knowledge_prompt(self):
-        raise NotImplementedError
-
     def get_review_prompt(self):
         raise NotImplementedError
 
@@ -73,10 +69,6 @@ class BaseSubjectApp:
         raise NotImplementedError
 
     def split_exam(self, md_file, output_root, base_name, options=None):
-        raise NotImplementedError
-
-    def proofread_one(self, api_url, api_key, model, q_dir, q_name,
-                      is_knowledge, generate_pdf, source_mode="试卷"):
         raise NotImplementedError
 
     # ---- 零差异方法（7 科完全一致） ----
@@ -180,7 +172,7 @@ class BaseSubjectApp:
         if split_mode == "none":
             problems = [{"content": md_content}]
         elif split_mode == "manual":
-            problems = split_by_manual_markers(md_content)
+            problems = split_by_unit_markers(md_content)
         elif split_mode == "smart":
             api_url = options.get("api_url", "")
             api_key = options.get("api_key", "")

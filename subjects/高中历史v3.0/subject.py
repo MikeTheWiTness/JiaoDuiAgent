@@ -8,11 +8,10 @@ from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
     default_split_exam,
-    default_generate_knowledge,
     default_proofread_one,
     default_collect_paper_dirs,
 )
-from core.manual_split import split_by_manual_markers
+from core.manual_split import split_by_manual_markers, split_by_unit_markers
 from core.logging_utils import log
 from core.base_subject import BaseSubjectApp
 from shared.image_utils import copy_md_images
@@ -59,18 +58,9 @@ class SubjectApp(BaseSubjectApp):
         base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
         return base_prompt
 
-    def get_knowledge_prompt(self):
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                return "\n".join(agent_lines)
-        base_prompt = "\n".join(self.config.get("knowledge_prompt_lines", []))
-        return base_prompt
-
-
     def split_lecture(self, md_file, output_root, base_name, options):
-        from shared.decor_utils import strip_decor_images, strip_decor_images_from_file
-        from shared.split_post_utils import remove_navigation_units
+        from shared.decor_utils import strip_decor_images
+        from shared.split_post_utils import mark_navigation_units
 
         if options is None:
             options = {}
@@ -79,11 +69,10 @@ class SubjectApp(BaseSubjectApp):
 
         if split_mode == "rule":
             # 预清洗：去除装饰图片
-            strip_decor_images_from_file(str(md_file))
             result = default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
             # 后处理：删除导航/封面板块
             if result:
-                remove_navigation_units(output_root, base_name)
+                mark_navigation_units(output_root, base_name)
             return result
 
         with open(md_file, 'r', encoding='utf-8') as f:
@@ -95,7 +84,7 @@ class SubjectApp(BaseSubjectApp):
         if split_mode == "none":
             problems = [{"content": md_content}]
         elif split_mode == "manual":
-            problems = split_by_manual_markers(md_content)
+            problems = split_by_unit_markers(md_content)
         elif split_mode == "smart":
             api_url = options.get("api_url", "")
             api_key = options.get("api_key", "")

@@ -27,7 +27,6 @@ class TestConfigSchema:
         """合法配置应通过校验。"""
         self._write_config(config_dir, {
             "question_prompt_lines": ["题目提示词"],
-            "knowledge_prompt_lines": ["知识提示词"],
             "lecture_split": {"wrapped_patterns": [], "unwrapped_patterns": []},
             "exam_split": {"question_pattern": r"^\d+[.)]"},
         })
@@ -38,7 +37,6 @@ class TestConfigSchema:
     def test_missing_required_field_raises(self, config_dir):
         """缺少必填字段应报错。"""
         self._write_config(config_dir, {
-            "knowledge_prompt_lines": ["知识"],
         })
         with pytest.raises(ValueError, match="question_prompt_lines"):
             validate_config(config_dir)
@@ -47,7 +45,6 @@ class TestConfigSchema:
         """字段类型错误应报错。"""
         self._write_config(config_dir, {
             "question_prompt_lines": "应该是数组不是字符串",
-            "knowledge_prompt_lines": ["知识"],
         })
         with pytest.raises(ValueError):
             validate_config(config_dir)
@@ -56,7 +53,6 @@ class TestConfigSchema:
         """空提示词数组应报错。"""
         self._write_config(config_dir, {
             "question_prompt_lines": [],
-            "knowledge_prompt_lines": ["知识"],
         })
         with pytest.raises(ValueError):
             validate_config(config_dir)
@@ -65,7 +61,6 @@ class TestConfigSchema:
         """可选字段缺失不报错，使用默认值。"""
         self._write_config(config_dir, {
             "question_prompt_lines": ["题"],
-            "knowledge_prompt_lines": ["知"],
         })
         result = validate_config(config_dir)
         assert result["lecture_wrapped_patterns"] == []
@@ -73,7 +68,6 @@ class TestConfigSchema:
     def test_error_message_mentions_file(self, config_dir):
         """错误信息应包含文件名和具体字段。"""
         self._write_config(config_dir, {
-            "knowledge_prompt_lines": ["知识"],
         })
         with pytest.raises(ValueError) as exc:
             validate_config(config_dir)
@@ -84,7 +78,6 @@ class TestConfigSchema:
         """含 knowledge_agent_prompt_lines 的配置应通过。"""
         self._write_config(config_dir, {
             "question_prompt_lines": ["题"],
-            "knowledge_prompt_lines": ["知"],
             "knowledge_agent_prompt_lines": ["知识 agent prompt"],
         })
         result = validate_config(config_dir)

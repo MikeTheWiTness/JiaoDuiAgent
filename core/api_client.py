@@ -1,4 +1,4 @@
-import json, time, re, os
+import json, time, re, os, traceback
 from pathlib import Path
 import requests
 from core.logging_utils import log
@@ -197,6 +197,7 @@ def execute_tool(tool_instances, tool_name, arguments):
                     result = json.dumps(result, ensure_ascii=False)
                 return result
             except Exception as e:
+                log(f"   ⚠️ 工具 {tool_name} 执行异常: {e}\n{traceback.format_exc()}")
                 return f"工具执行错误: {e}"
     return f"未知工具: {tool_name}"
 
@@ -279,32 +280,6 @@ def _is_empty_or_duplicate(result: str, recent_results: list) -> bool:
     return False
 
 
-def _strip_search_instructions(prompt: str) -> str:
-    """移除系统提示词中的联网搜索相关指令。
-    （保留用于 _format_retry 场景，call_api 主流程使用压缩历史替代清空重来）
-
-    清理目标：
-    - "## 可用的联网搜索工具" 整段（工具介绍 + 使用规则）
-    - 残留的 web_search / web_fetch 提及
-    然后追加明确指令，禁止 LLM 继续尝试搜索。
-    """
-    # 移除工具介绍段落（"## 可用的联网搜索工具" 到下一个 "## " 标题前）
-    cleaned = re.sub(
-        r'\n*## 可用的联网搜索工具\n.*?(?=\n## )',
-        '',
-        prompt,
-        flags=re.DOTALL,
-    )
-    # 清理可能残留的多余空行
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-    # 追加重试说明
-    cleaned = cleaned.rstrip() + (
-        "\n\n**注意：本次校对不提供联网搜索功能，"
-        "请直接根据你的知识和上文已搜索到的结果进行校对判断，不要再尝试调用搜索工具。**"
-    )
-    return cleaned
-
-
 def _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools):
     """将发送给 LLM 的初始请求记录到文件。"""
     lines = []
@@ -375,7 +350,7 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header):
             f.write("".join(lines))
         log(f"   📝 完整对话记录已保存: {log_path}")
     except Exception as e:
-        log(f"   ⚠️ 保存对话记录失败: {e}")
+        log(f"   ⚠️ 保存对话记录失败: {e}\n{traceback.format_exc()}")
 
 
 def _save_conversation_log_full(messages, output_dir, q_title, initial_header):

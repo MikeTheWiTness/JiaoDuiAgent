@@ -10,6 +10,7 @@ ChemistryIndependentSolveTool：
 """
 import json
 import os
+import threading
 import requests
 from typing import Any
 from pathlib import Path
@@ -17,21 +18,72 @@ from pathlib import Path
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-# ---- 模块级 API 配置（在 default_proofread_one 中注入） ----
 
-_api_config: dict = {}
-"""存储 API 调用所需的配置：api_url, api_key, model, output_dir"""
+# ---- 化学式解析（canonical 实现，与 sympy_tools/templates.py 内联版本保持同步） ----
+
+def parse_chemical_formula(formula: str) -> dict[str, int]:
+    """解析化学式字符串，返回元素 → 计数映射。支持括号嵌套，如 Ca(OH)2 → {"Ca": 1, "O": 2, "H": 2}。
+
+    此函数为 canonical 实现。sympy_tools/templates.py 中的 chemistry_balance 模板
+    内联了同逻辑的 `_parse_formula`（由于模板在隔离 exec 环境中运行，无法 import），
+    两端须保持同步。
+    """
+    counts: dict[str, int] = {}
+    i = 0
+    n = len(formula)
+
+    def _parse_group() -> dict[str, int]:
+        nonlocal i
+        gc: dict[str, int] = {}
+        while i < n and formula[i] != ')':
+            if formula[i] == '(':
+                i += 1  # skip '('
+                inner = _parse_group()
+                if i < n and formula[i] == ')':
+                    i += 1
+                num_start = i
+                while i < n and formula[i].isdigit():
+                    i += 1
+                mult = int(formula[num_start:i]) if i > num_start else 1
+                for el, cnt in inner.items():
+                    gc[el] = gc.get(el, 0) + cnt * mult
+            elif formula[i].isupper():
+                el_start = i
+                i += 1
+                while i < n and formula[i].islower():
+                    i += 1
+                el = formula[el_start:i]
+                num_start = i
+                while i < n and formula[i].isdigit():
+                    i += 1
+                cnt = int(formula[num_start:i]) if i > num_start else 1
+                gc[el] = gc.get(el, 0) + cnt
+            else:
+                i += 1
+        return gc
+
+    return _parse_group()
+
+
+# ---- 模块级 API 配置（线程安全：threading.local() 参照 shared/bash_tool.py） ----
+
+_api_config: threading.local = threading.local()
+"""每线程独立的 API 配置，避免并行校对时竞态写错目录。"""
 
 
 def set_chemistry_api_config(api_url: str, api_key: str, model: str, output_dir: str | None = None):
     """在 ReAct 工具循环开始前注入 API 配置，供 ChemistryIndependentSolveTool 内部使用。"""
-    global _api_config
-    _api_config = {
+    _api_config.value = {
         "api_url": api_url,
         "api_key": api_key,
         "model": model,
         "output_dir": output_dir,
     }
+
+
+def _get_api_config() -> dict:
+    """获取当前线程的 API 配置，未设置时返回空 dict。"""
+    return getattr(_api_config, "value", {})
 
 
 # ---- ChemistryIndependentSolveTool ----
@@ -88,11 +140,11 @@ class ChemistryIndependentSolveTool(BaseTool):
         Returns:
             JSON 字符串：{"answer": str, "reasoning": str, "ok": bool, "error": str|None}
         """
-        global _api_config
-        api_url = _api_config.get("api_url", "")
-        api_key = _api_config.get("api_key", "")
-        model = _api_config.get("model", "")
-        output_dir = _api_config.get("output_dir")
+        cfg = _get_api_config()
+        api_url = cfg.get("api_url", "")
+        api_key = cfg.get("api_key", "")
+        model = cfg.get("model", "")
+        output_dir = cfg.get("output_dir")
 
         if not api_url or not api_key:
             return json.dumps({
@@ -205,7 +257,10 @@ class ChemistryIndependentSolveTool(BaseTool):
                 f.write("".join(lines))
 
         except Exception:
-            pass  # 落盘失败不影响解题主流程
+            # 落盘失败不影响解题主流程，但需记录以便排查
+            import traceback
+            from core.logging_utils import log
+            log(f"   ⚠️ _化学求解.md 落盘失败: {traceback.format_exc()}")
 
     async def _arun(self, *args: Any, **kwargs: Any) -> str:
         raise NotImplementedError

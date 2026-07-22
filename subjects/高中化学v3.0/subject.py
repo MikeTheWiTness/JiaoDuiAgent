@@ -17,7 +17,6 @@ from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
     default_split_exam,
-    default_generate_knowledge,
     default_proofread_one,
     default_collect_paper_dirs,
 )
@@ -101,18 +100,6 @@ class SubjectApp(BaseSubjectApp):
                 return base_prompt
         return "\n".join(self.config.get("question_prompt_lines", []))
 
-    def get_knowledge_prompt(self):
-        """获取知识校对提示词。ReAct 模式统一使用 agent_prompt（已合并题/知识/混合）。"""
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                base_prompt = "\n".join(agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-        return "\n".join(self.config.get("knowledge_prompt_lines", []))
-
     def get_review_prompt(self):
         """获取批注评审提示词。"""
         from shared.review_mode import build_review_prompt
@@ -135,8 +122,6 @@ class SubjectApp(BaseSubjectApp):
         if options is None:
             options = {}
         do_clean = options.get("do_clean", True)
-        from shared.decor_utils import strip_decor_images_from_file
-        strip_decor_images_from_file(md_file)
         return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
 

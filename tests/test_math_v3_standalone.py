@@ -62,7 +62,7 @@ class TestImportAndInit(unittest.TestCase):
     def test_config_loaded(self):
         app = SubjectApp(MATH_DIR)
         self.assertIn("question_prompt_lines", app.config)
-        self.assertIn("knowledge_prompt_lines", app.config)
+        self.assertNotIn("knowledge_prompt_lines", app.config)
         # agent_prompt_lines 应该从 agent_prompt.json 加载
         self.assertIn("agent_prompt_lines", app.config)
         agent_lines = app.config["agent_prompt_lines"]
@@ -260,7 +260,7 @@ class TestToolExecution(unittest.TestCase):
 # ═══════════════════════════════════════════════════════════════
 
 class TestPromptGeneration(unittest.TestCase):
-    """验证 get_question_prompt / get_knowledge_prompt / get_tool_instructions"""
+    """验证 get_question_prompt / get_tool_instructions"""
 
     @classmethod
     def setUpClass(cls):
@@ -274,30 +274,26 @@ class TestPromptGeneration(unittest.TestCase):
         self.assertIn("evaluate_expression", prompt)
 
     def test_question_prompt_react(self):
-        """React 模式使用 agent_prompt.json + 工具指令"""
+        """React 模式使用 agent_prompt.json + 工具指令（三阶段结构）"""
         self.app.react_mode = True
         self.app.tools = self.app.build_tools()
         prompt = self.app.get_question_prompt()
-        # 核心结构检查
+        # 核心结构检查（ADR-0017 后改为预处理/主校对/输出三阶段）
         checks = [
-            ("固定流程声明", "按照固定的工作流程"),
-            ("第 1 步：错词错字", "第 1 步"),
-            ("第 2 步：格式问题", "第 2 步"),
-            ("第 3 步：数字/符号/单位", "第 3 步"),
-            ("第 4 步：题干可做性与配图", "第 4 步"),
-            ("第 5 步：解析验算", "第 5 步"),
-            ("第 6 步：独立解题", "第 6 步"),
-            ("第 7 步：综合评判", "第 7 步"),
-            ("第 8 步：输出校对报告", "第 8 步"),
-            ("第 9 步：格式审查", "第 9 步"),
-            ("难题判据", "判为难题"),
+            ("预处理阶段", "预处理阶段"),
+            ("第 0 步：类型判定", "第 0 步"),
+            ("主校对阶段", "主校对阶段"),
+            ("第一阶段：通用检查", "第一阶段"),
+            ("第二阶段：题目专项", "题目专项"),
+            ("第二阶段：知识专项", "知识专项"),
+            ("第三阶段：输出", "第三阶段"),
             ("反思机制", "反思"),
-            ("自检清单", "自检清单"),
+            ("格式自检", "格式自检"),
+            ("强制返回格式", "强制返回格式"),
             ("independent_solve", "independent_solve"),
             ("geometry 工具", "geometry"),
             ("web_search", "web_search"),
-            ("标记格式规则", "标记格式规则"),
-            ("单位换算验证", "单位换算"),
+            ("单位符号", "单位"),
         ]
         for label, keyword in checks:
             self.assertIn(keyword, prompt, f"React prompt 缺少: {label}")
@@ -311,12 +307,6 @@ class TestPromptGeneration(unittest.TestCase):
         # 不应包含导航工具
         self.assertNotIn("plan_update", instructions)
         self.assertNotIn("locate_paragraph", instructions)
-
-    def test_knowledge_prompt_react(self):
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
-        prompt = self.app.get_knowledge_prompt()
-        self.assertIn("按照固定的工作流程", prompt)
 
     def test_max_tool_loops(self):
         self.app.react_mode = False
@@ -358,10 +348,6 @@ class TestProofreadPipeline(unittest.TestCase):
         # 题目模式 → get_question_prompt
         prompt_q = self.app.get_question_prompt()
         self.assertIn("校对", prompt_q)
-
-        # 知识模式 → get_knowledge_prompt
-        prompt_k = self.app.get_knowledge_prompt()
-        self.assertIn("校对", prompt_k)
 
         # 批注评审模式 → get_review_prompt
         prompt_r = self.app.get_review_prompt()
@@ -405,14 +391,12 @@ class TestMarkupFormatRules(unittest.TestCase):
 
     def test_markup_rules_present(self):
         rules = [
-            "编号必须用 ASCII 数字",
-            "不得出现竖线",
-            "不得插入 $...$ 内部",
-            "粗体内部",
-            "不得标记不可见内容",
-            "原文字段必须逐字与原文一致",
-            "标记原文必须完整抄写题目全文",
-            "每一个标记都必须有一条对应的修改原因",
+            "ASCII 数字",
+            "无竖线",
+            "不插入 $...$",
+            "**...** 内部",
+            "逐字一致",
+            "每条标记对应一条原因",
         ]
         for rule in rules:
             self.assertIn(rule, self.prompt, f"标记规则缺失: {rule}")
@@ -424,10 +408,10 @@ class TestMarkupFormatRules(unittest.TestCase):
         self.assertIn("### 修改原因", self.prompt)
 
     def test_self_check_list(self):
-        """第 8 步自检清单包含数学特有项"""
+        """第 8 步自检清单包含数学特有项（合并为紧凑格式）"""
         checks = [
-            "标记数量 = 修改原因条目数量",
-            "几何题涉及测量",
+            "标记数=原因数",
+            "所有数值计算已调用 sympy 实算",
         ]
         for c in checks:
             self.assertIn(c, self.prompt, f"自检清单缺失: {c}")
@@ -449,9 +433,10 @@ class TestConfigConsistency(unittest.TestCase):
 
     def test_config_has_required_fields(self):
         self.assertIn("question_prompt_lines", self.config)
-        self.assertIn("knowledge_prompt_lines", self.config)
+        # knowledge_prompt_lines 已从 schema 移除，不再出现在 config 中
+        self.assertNotIn("knowledge_prompt_lines", self.config)
         self.assertIn("lecture_split", self.config)
-        self.assertIn("exam_split", self.config)
+        # exam_split 是可选的，默认值时不需写入
 
     def test_agent_prompt_is_valid_json(self):
         self.assertIn("agent_prompt_lines", self.agent)
@@ -481,12 +466,15 @@ class TestConfigConsistency(unittest.TestCase):
             self.assertIn(ref, tool_names,
                           f"agent_prompt 引用了不存在的工具: {ref}")
 
-    def test_react_prompt_has_nine_steps(self):
-        """验证 agent_prompt 明确包含 9 步"""
+    def test_react_prompt_has_three_stage_structure(self):
+        """验证 agent_prompt 采用预处理/主校对/输出三阶段结构（ADR-0017 后）"""
         agent_text = "\n".join(self.agent["agent_prompt_lines"])
-        self.assertIn("以下 9 步顺序固定", agent_text)
-        for i in range(1, 10):
-            self.assertIn(f"第 {i} 步", agent_text, f"缺少第 {i} 步")
+        self.assertIn("预处理阶段", agent_text)
+        self.assertIn("第 0 步", agent_text)
+        self.assertIn("主校对阶段", agent_text)
+        self.assertIn("第一阶段", agent_text)
+        self.assertIn("第二阶段", agent_text)
+        self.assertIn("第三阶段", agent_text)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -499,7 +487,7 @@ class TestUIFeatures(unittest.TestCase):
     def test_ui_features(self):
         app = SubjectApp(MATH_DIR)
         features = app.get_ui_features()
-        self.assertTrue(features["show_knowledge_option"])
+        self.assertFalse(features["show_knowledge_option"])
         self.assertTrue(features["show_pdf_option"])
         self.assertTrue(features["show_parallel_option"])
         self.assertIn("试卷", features["show_source_modes"])

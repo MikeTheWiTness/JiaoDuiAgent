@@ -17,7 +17,6 @@ from core.config_loader import load_config
 from core.defaults import (
     default_split_lecture,
     default_split_exam,
-    default_generate_knowledge,
     default_proofread_one,
     default_collect_paper_dirs,
 )
@@ -99,31 +98,6 @@ class SubjectApp(BaseSubjectApp):
             return base_prompt + "\n\n" + tool_instructions
         return base_prompt
 
-    def get_knowledge_prompt(self):
-        """获取知识提取提示词。ReAct 模式时使用知识专属 agent prompt。"""
-        if self.react_mode:
-            # 优先使用知识专属的 agent prompt（7 步，无难题判定和独立解题）
-            knowledge_agent_lines = self.config.get("knowledge_agent_prompt_lines")
-            if knowledge_agent_lines:
-                base_prompt = "\n".join(knowledge_agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-            # fallback
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                base_prompt = "\n".join(agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-        base_prompt = "\n".join(self.config.get("knowledge_prompt_lines", []))
-        tool_instructions = self.get_tool_instructions()
-        if tool_instructions:
-            return base_prompt + "\n\n" + tool_instructions
-        return base_prompt
-
     def get_review_prompt(self):
         """获取批注评审提示词。"""
         from shared.review_mode import build_review_prompt
@@ -144,8 +118,6 @@ class SubjectApp(BaseSubjectApp):
 
     def split_lecture(self, md_file, output_root, base_name, options):
         do_clean = options.get("do_clean", True)
-        from shared.decor_utils import strip_decor_images_from_file
-        strip_decor_images_from_file(md_file)
         return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
 

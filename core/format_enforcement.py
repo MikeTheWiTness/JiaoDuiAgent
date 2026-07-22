@@ -81,8 +81,10 @@ def _bash_format_fix(file_path: str, issues_desc: str,
     Returns:
         修正后的文件内容（str），失败时返回 None
     """
+    import traceback
     from shared.bash_tool import BashTool, FileReadTool, FileWriteTool
     from core.api_client import call_api
+    from core.session_context import SessionContext
 
     file_dir = os.path.dirname(os.path.abspath(file_path))
     file_name = os.path.basename(file_path)
@@ -125,21 +127,22 @@ def _bash_format_fix(file_path: str, issues_desc: str,
 
     try:
         log(f"   🔧 [bash修正] 启动 LLM 直接编辑文件...")
+        ctx = SessionContext.from_credentials(
+            api_url, api_key, model,
+            output_dir=file_dir,
+            max_loops=3,
+            max_tokens=16384,
+        )
         result = call_api(
-            api_url=api_url,
-            api_key=api_key,
-            model=model,
+            ctx,
             md_text=user_message,
             images=[],
             q_title="格式修正",
             system_prompt=system_prompt,
             tools=[read_tool, write_tool, bash_tool],
-            max_loops=3,          # 格式修正只需 read→write→read 三轮
-            max_tokens=16384,      # 格式修正不需要太长输出
-            output_dir=file_dir,
         )
     except Exception as e:
-        log(f"   ❌ [bash修正] API 调用异常: {e}")
+        log(f"   ❌ [bash修正] API 调用异常: {e}\n{traceback.format_exc()}")
         return None
 
     # 从文件重读修正后的内容
