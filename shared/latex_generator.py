@@ -201,17 +201,32 @@ def _extract_images(text: str) -> tuple[str, dict[str, str]]:
     return text, img_map
 
 
+def _convert_sup_sub_inner(inner: str) -> str:
+    """将 <上标>/<下标> XML 标记就地转为 LaTeX 命令。
+
+    用于 _extract_md_formatting 的 italic/bold 回调中，
+    处理 *v<下标>0</下标>* 这种斜体包裹上下标的边界情况。
+    因为 _convert_format_markers 在 _extract_md_formatting 之后运行，
+    无法发现已 placeholder 化的 inner 中残留的 XML 标记。
+    """
+    inner = inner.replace("<上标>", "\\textsuperscript{")
+    inner = inner.replace("</上标>", "}")
+    inner = inner.replace("<下标>", "\\textsubscript{")
+    inner = inner.replace("</下标>", "}")
+    return inner
+
+
 def _extract_md_formatting(text: str, placeholder_map: dict[str, str]) -> str:
     """提取 Markdown 粗/斜体为占位符，替换为 LaTeX 命令"""
 
     def _bold_repl(m):
         key = f"FMTBOLD{next(_counter)}"
-        placeholder_map[key] = r"\textbf{" + m.group(1) + "}"
+        placeholder_map[key] = r"\textbf{" + _convert_sup_sub_inner(m.group(1)) + "}"
         return key
 
     def _italic_repl(m):
         key = f"FMTIT{next(_counter)}"
-        placeholder_map[key] = r"\textit{" + m.group(1) + "}"
+        placeholder_map[key] = r"\textit{" + _convert_sup_sub_inner(m.group(1)) + "}"
         return key
 
     text = re.sub(r"\*\*(.+?)\*\*", _bold_repl, text)
@@ -447,6 +462,8 @@ def _apply_markers(md_content: str, corrections: list[dict]) -> tuple[str, list[
             # 将 math-only 命令包裹在 $...$ 中，避免 \times 等在文本模式报错
             converted = _unicode_math_to_latex(result[start:end])
             text_safe = _MATH_ONLY_RE.sub(r'$\\\1$', converted)
+            # 转义数学模式外的裸 ^ 和 _
+            text_safe = _escape_math_chars_outside_math(text_safe)
             result = (result[:start]
                       + r"\corrmark{" + text_safe + r"}{" + str(num) + r"}"
                       + result[end:])
@@ -542,7 +559,7 @@ _INLINE_MARKER_RE = re.compile(r'【([\d①-⑳]+)\|([^|]*?)\|([^】]*?)】')
 
 # math-only LaTeX 命令（仅数学模式有效），在文本模式中需包裹 $...$ 避免编译错误
 _MATH_ONLY_RE = re.compile(
-    r'\\(times|div|pm|mp|cdot|leq|geq|approx|neq|infty|sum|int|prod|partial|nabla|in|notin|subset|supset|rightarrow|leftarrow|Rightarrow|Leftarrow|circ|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)(?![a-zA-Z])'
+    r'\\(times|div|pm|mp|cdot|leq|geq|approx|neq|infty|sum|int|prod|partial|nabla|in|notin|subset|supset|rightarrow|leftarrow|Rightarrow|Leftarrow|circ|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|sim)(?![a-zA-Z])'
 )
 
 
@@ -613,6 +630,14 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
         # - 标记在文本中 → \corrmark{\(inner\)}{N} 红色底色高亮 + 圈号
         if orig.startswith("$") and orig.endswith("$") and len(orig) > 2:
             inner = orig[1:-1]
+            # 若 inner 仍含 $，说明 orig 是多个 $...$ 片段组成的混合文本
+            # 不剥不包，直接用原始 $...$ 结构（LaTeX 文本模式下 $ 天然切换数学模式）
+            if '$' in inner:
+                key = f"CORRMARK{num}"
+                placeholder_map[key] = (
+                    r"\corrmark{" + orig + r"}{" + str(num) + r"}"
+                )
+                return key
             before_marker = md_text[:m.start()]
             in_math = (before_marker.count("$") % 2 == 1)
             if in_math:
@@ -637,6 +662,12 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
 
         if orig.startswith("$$") and orig.endswith("$$") and len(orig) > 4:
             inner = orig[2:-2]
+            if '$' in inner:
+                key = f"CORRMARK{num}"
+                placeholder_map[key] = (
+                    r"\corrmark{" + orig + r"}{" + str(num) + r"}"
+                )
+                return key
             before_marker = md_text[:m.start()]
             in_math = (before_marker.count("$$") % 2 == 1)
             if in_math:
@@ -657,11 +688,33 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
                 )
                 return key
 
+        # \(...\) 包裹的 math：保留原始数学结构，不做额外转换
+        if orig.startswith(r"\(") and orig.endswith(r"\)") and len(orig) > 4:
+            inner = orig[2:-2]
+            key = f"CORRMARK{num}"
+            placeholder_map[key] = (
+                r"\corrmark{" + r"\(" + _unicode_math_to_latex(inner) + r"\)" + r"}"
+                + r"{" + str(num) + r"}"
+            )
+            return key
+
+        # \[...\] 包裹的 math：同上
+        if orig.startswith(r"\[") and orig.endswith(r"\]") and len(orig) > 4:
+            inner = orig[2:-2]
+            key = f"CORRMARK{num}"
+            placeholder_map[key] = (
+                r"\corrmark{" + r"\[" + _unicode_math_to_latex(inner) + r"\]" + r"}"
+                + r"{" + str(num) + r"}"
+            )
+            return key
+
         # 纯文本标记（无 $ 包裹）：红色底色高亮 + 圈号
         # Unicode→LaTeX 转换后，将 math-only 命令包裹在 $...$ 中
         # 避免 \times 等命令在 \textcolor 文本模式下触发 Missing $ 错误
         converted = _unicode_math_to_latex(orig)
         text_safe = _MATH_ONLY_RE.sub(r'$\\\1$', converted)
+        # 转义数学模式外的裸 ^ 和 _（LaTeX 文本模式下无效）
+        text_safe = _escape_math_chars_outside_math(text_safe)
         key = f"CORRMARK{num}"
         placeholder_map[key] = (
             r"\corrmark{" + text_safe + r"}{" + str(num) + r"}"
@@ -778,6 +831,94 @@ _UNICODE_MATH_MAP = {
     '⇒': r'\Rightarrow', '⇐': r'\Leftarrow',
     '°': r'^\circ',
 }
+
+
+def _escape_math_chars_outside_math(text: str) -> str:
+    """转义 $...$ 数学模式外的裸 ^ 和 _ 为 LaTeX 文本模式安全字符。
+
+    仅在 corrmark 文本模式参数中使用。\(...\) 和 $$...$$ 中的 ^ _ 不受影响。
+    使用 \\textasciicircum{}/\\textunderscore{} 而非 \\^{}/\\_{}，
+    因为后者空参数与 xeCJK 的 TU 字体编码冲突。
+    """
+    result = []
+    in_math = False
+    math_delim = ''  # '$', '$$', '\\(', '\\['
+    i = 0
+    while i < len(text):
+        # 检测数学模式进入
+        if not in_math:
+            if text[i:i+2] == '$$':
+                in_math = True
+                math_delim = '$$'
+                result.append('$$')
+                i += 2
+                continue
+            elif text[i:i+2] == r'\(':
+                in_math = True
+                math_delim = r'\)'
+                result.append(r'\(')
+                i += 2
+                continue
+            elif text[i:i+2] == r'\[':
+                in_math = True
+                math_delim = r'\]'
+                result.append(r'\[')
+                i += 2
+                continue
+            elif text[i] == '$':
+                in_math = True
+                math_delim = '$'
+                result.append('$')
+                i += 1
+                continue
+            elif text[i] == '^':
+                # 若后跟 {，说明是 Pandoc 转换的上标 ^{...}，包裹为 $^{...}$ 使其正确渲染
+                if i + 1 < len(text) and text[i + 1] == '{':
+                    j = i + 2
+                    depth = 1
+                    while j < len(text) and depth > 0:
+                        if text[j] == '{': depth += 1
+                        elif text[j] == '}': depth -= 1
+                        j += 1
+                    if depth == 0:
+                        result.append('$' + text[i:j] + '$')
+                        i = j
+                        continue
+                result.append(r'\textasciicircum{}')
+            elif text[i] == '_':
+                # 若后跟 {，说明是 Pandoc 转换的下标 _{...}，包裹为 $_{...}$ 使其正确渲染
+                if i + 1 < len(text) and text[i + 1] == '{':
+                    j = i + 2
+                    depth = 1
+                    while j < len(text) and depth > 0:
+                        if text[j] == '{': depth += 1
+                        elif text[j] == '}': depth -= 1
+                        j += 1
+                    if depth == 0:
+                        result.append('$' + text[i:j] + '$')
+                        i = j
+                        continue
+                result.append(r'\textunderscore{}')
+            else:
+                result.append(text[i])
+        else:
+            # 检测数学模式退出
+            if math_delim in ('$$', r'\)', r'\]') and text[i:i+len(math_delim)] == math_delim:
+                in_math = False
+                result.append(math_delim)
+                i += len(math_delim)
+                math_delim = ''
+                continue
+            elif math_delim == '$' and text[i] == '$':
+                in_math = False
+                result.append('$')
+                i += 1
+                math_delim = ''
+                continue
+            else:
+                result.append(text[i])
+        i += 1
+    return ''.join(result)
 
 
 def _unicode_math_to_latex(text: str) -> str:

@@ -527,32 +527,26 @@ def fix_pandoc_comment_anomaly(content):
     return content.replace('`<!-- -->`{=html}', '')
 
 
-def fix_tilde_in_math(content):
-    def repl(m):
-        return m.group(0).replace(r'\~', r'\sim')
-    content = re.sub(r'\$\$.*?\$\$', repl, content, flags=re.DOTALL)
-    content = re.sub(r'\$[^$]+\$', repl, content)
-    return content
+def normalize_caret_tilde(content):
+    """将 pandoc 的 ^x^ / ~x~ 记法统一转为 <上标> / <下标> XML 标记。
 
+    按以下顺序处理，确保 lookbehind 正确跳过 pandoc 转义号：
+    1. ~x~ → <下标>x</下标>    (regex: (?<!\\)~([^~\\s]+?)~)
+    2. ^x^ → <上标>x</上标>    (regex: (?<!\\)\\^([^\\^\\s]+?)\\^)
+    3. \\~  → ~                （还原 pandoc 转义的字面波浪号）
+    4. \\^  → ^                （还原 pandoc 转义的字面脱字号）
 
-def fix_tilde_in_text(content):
-    return content.replace(r'\~', '~')
-
-
-def convert_italics_to_math(content):
-    math_blocks = []
-    def save(m):
-        math_blocks.append(m.group(0))
-        return f'<<<MATHBLOCK{len(math_blocks)-1}>>>'
-    content = re.sub(r'\$\$.*?\$\$', save, content, flags=re.DOTALL)
-    content = re.sub(r'\$[^$]*\$', save, content)
-    def italic_repl(m):
-        inner = m.group(1)
-        inner = re.sub(r'~(.+?)~', r'_{\1}', inner)
-        return f'${inner}$'
-    content = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', italic_repl, content)
-    for i, block in enumerate(math_blocks):
-        content = content.replace(f'<<<MATHBLOCK{i}>>>', block)
+    顺序是关键设计：先转 ^x^ → <上标>（用 lookbehind 跳过转义号），
+    再还原 \\^ → ^。若顺序反过来，还原后的 ^ 会和上标语法混淆。
+    """
+    # Step 1: ~x~ → <下标>x</下标>（跳过 pandoc 转义的 \\~）
+    content = re.sub(r'(?<!\\)~([^~\s]+?)~', r'<下标>\1</下标>', content)
+    # Step 2: ^x^ → <上标>x</上标>（跳过 pandoc 转义的 \\^）
+    content = re.sub(r'(?<!\\)\^([^\^\s]+?)\^', r'<上标>\1</上标>', content)
+    # Step 3: \\~ → ~（还原字面波浪号）
+    content = content.replace(r'\~', '~')
+    # Step 4: \\^ → ^（还原字面脱字号）
+    content = content.replace(r'\^', '^')
     return content
 
 
@@ -573,9 +567,7 @@ def post_process_md_zw(md_path):
         return
     original = content
     content = fix_pandoc_comment_anomaly(content)
-    content = fix_tilde_in_math(content)
-    content = fix_tilde_in_text(content)
-    content = convert_italics_to_math(content)
+    content = normalize_caret_tilde(content)
     content = convert_display_to_inline(content)
     if content != original:
         with open(md_path, 'w', encoding='utf-8') as f:
@@ -986,6 +978,17 @@ def default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax=False)
             return {"success": False, "needs_post_process": True}
         ok = convert_with_pandoc(file_path, output_md, img_dir, use_mathjax=use_mathjax)
         if ok:
+            # normalize_caret_tilde 必须在 enhance 之前执行：
+            # 先将 pandoc 的 ^x^/~x~ 转为 <上标>/<下标>，
+            # 之后 enhancer 的 avoidance 逻辑会跳过已标记的上下标区域。
+            try:
+                with open(output_md, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                content = normalize_caret_tilde(content)
+                with open(output_md, 'w', encoding='utf-8') as f:
+                    f.write(content)
+            except Exception as e:
+                log(f"   ⚠️ normalize_caret_tilde 失败: {e}")
             enhance_docx_conversion(file_path, output_md)
         return {"success": ok, "needs_post_process": True}
     

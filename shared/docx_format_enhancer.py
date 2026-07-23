@@ -169,6 +169,10 @@ def inject_format_markers(md_text, docx_path):
     for fmt_type, fmt_list in by_type.items():
         if fmt_type not in _FMT_MARKERS:
             continue
+        # ADR-0020: pandoc 已用 ^x^ / ~x~ 处理上下标，
+        # normalize_caret_tilde 后续统一转为 <上标>/<下标>，enhancer 不再注入。
+        if fmt_type in ("subscript", "superscript"):
+            continue
         open_marker, close_marker = _FMT_MARKERS[fmt_type]
 
         # 对每个格式项，尝试在 Markdown 中找到对应文本并包裹
