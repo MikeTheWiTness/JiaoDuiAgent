@@ -1,7 +1,8 @@
 # ADR 0022：UI 编排下沉到 core（ConversionService + ProofreadService）
 
-**状态**：已接受（待落地，独立支线）
-**日期**：2026-07-23（2026-07-24 修订：C2 不强行删 `task_interrupt` bool，保留作 mirror）
+**状态**：已实现（commit 552fe9a）（C2.3 unit_detect + C1/C2 服务骨架 + C3 测试）
+**日期**：2026-07-23（2026-07-24 修订）
+**实现日期**：2026-07-24
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0019 架构审查修复]](0019-architecture-review-fixes.md)、[[ADR 0013 UI 模式重设计]](0013-ui-mode-redesign.md)
 
