@@ -1,7 +1,8 @@
 # ADR 0027：工程化基线（ruff + pre-commit + pyproject + 锁文件）+ 集成测试复位（markers 取代 --ignore + 双平台 CI）
 
-**状态**：已接受（待落地，独立支线）
-**日期**：2026-07-23（2026-07-24 修订：C3 补"`pytest.ini addopts` 默认加 `-m` 排除" 保证本地 `pytest` 默认行为与现状一致）
+**状态**：已实现（commit 298498a）
+**日期**：2026-07-23（2026-07-24 修订）
+**实现日期**：2026-07-24
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0019 架构审查修复]](0019-architecture-review-fixes.md)、[[ADR 0022 UI 编排下沉]](0022-ui-orchestration-sink-to-core.md)
 
