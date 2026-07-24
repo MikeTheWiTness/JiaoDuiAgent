@@ -851,10 +851,10 @@ _UNICODE_MATH_MAP = {
 
 
 def _escape_math_chars_outside_math(text: str) -> str:
-    """转义 $...$ 数学模式外的裸 ^ 和 _ 为 LaTeX 文本模式安全字符。
+    r"""转义 $...$ 数学模式外的裸 ^ 和 _ 为 LaTeX 文本模式安全字符。
 
     仅在 corrmark 文本模式参数中使用。\(...\) 和 $$...$$ 中的 ^ _ 不受影响。
-    使用 \\textasciicircum{}/\\textunderscore{} 而非 \\^{}/\\_{}，
+    使用 \textasciicircum{}/\textunderscore{} 而非 \^{}/\_{}，
     因为后者空参数与 xeCJK 的 TU 字体编码冲突。
     """
     result = []
@@ -1092,7 +1092,7 @@ def _step_extract_media(state: _RenderState):
 
 
 def _step_fix_brackets(state: _RenderState):
-    """修复 Pandoc 转义残留：非数学内容的 \[...\] → [...]。"""
+    r"""修复 Pandoc 转义残留：非数学内容的 \[...\] → [...]。"""
     state.md_content = _fix_escaped_brackets(state.md_content)
 
 
