@@ -1,6 +1,6 @@
 # ADR 0024：latex_generator 大函数 pipeline 化 + 内部重复去重
 
-**状态**：已接受（待落地，独立支线）
+**状态**：已实现（commit 16d7fcf）（C5+C4+C1 已完成，C2+C3 为内部抽取优化）
 **日期**：2026-07-23（2026-07-24 修订：增"严格保留原差异 / log 输出逐字不变"两条原则；C2 删除"顺手补兜底"的修复构思——它是行为变更不是 refactor）
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0020 斜体/上下标分离修复]](0020-math-italics-separation.md)
