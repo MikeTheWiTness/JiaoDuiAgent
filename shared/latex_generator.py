@@ -610,6 +610,49 @@ def _strip_style(text: str) -> str:
     return text
 
 
+# ---- C2: _wrap_corrmark_math（ADR-0024） ----
+
+def _wrap_corrmark_math(num: int, inner: str, open_d: str, close_d: str,
+                         in_math: bool, with_dollar_guard: bool,
+                         placeholder_map: dict, md_text: str,
+                         m_start: int) -> str:
+    r"""为 corrmark 包裹数学内容，根据上下文选择文本模式或数学模式。
+
+    严格保留四分支原差异：
+    - $...$ / $$...$$ 启用 with_dollar_guard=True：inner 含 $ 则返回原始 corrmark
+    - in_math=True：返回数学占位符 + 上标圈号
+    - in_math=False（文本模式）：返回红色底色 \corrmark{...}{N}
+    - \(...\) / \[...\] 不启用 with_dollar_guard 和 in_math 检查
+    """
+    # dollar guard：inner 仍含 $ 时不剥不包，直接用原始结构
+    if with_dollar_guard and '$' in inner:
+        key = f"CORRMARK{num}"
+        placeholder_map[key] = (
+            r"\corrmark{" + open_d + inner + close_d + r"}{" + str(num) + r"}"
+        )
+        return key
+
+    if in_math:
+        # 数学模式内：裸内容 + 上标圈号
+        math_key = f"MATHPLACEHOLDER{num}"
+        placeholder_map[math_key] = inner
+        key = f"INLINEMARKER{num}"
+        placeholder_map[key] = (
+            r"\textsuperscript{\textcolor{red}{\redcircled{"
+            + str(num) + r"}}}"
+        )
+        return math_key + key
+    else:
+        # 文本模式：红色底色高亮 + 圈号
+        inner_safe = _escape_unescaped(inner, '%#')
+        key = f"CORRMARK{num}"
+        placeholder_map[key] = (
+            r"\corrmark{" + open_d + _unicode_math_to_latex(inner_safe) + close_d + r"}"
+            + r"{" + str(num) + r"}"
+        )
+        return key
+
+
 def _process_inline_markers(md_text: str, corrections: list[dict],
                             placeholder_map: dict[str, str]) -> tuple[str, list[dict]]:
     """处理新格式的 【N原文|改为】 内联标记。
@@ -647,83 +690,37 @@ def _process_inline_markers(md_text: str, corrections: list[dict],
         # - 标记在文本中 → \corrmark{\(inner\)}{N} 红色底色高亮 + 圈号
         if orig.startswith("$") and orig.endswith("$") and len(orig) > 2:
             inner = orig[1:-1]
-            # 若 inner 仍含 $，说明 orig 是多个 $...$ 片段组成的混合文本
-            # 不剥不包，直接用原始 $...$ 结构（LaTeX 文本模式下 $ 天然切换数学模式）
-            if '$' in inner:
-                key = f"CORRMARK{num}"
-                placeholder_map[key] = (
-                    r"\corrmark{" + orig + r"}{" + str(num) + r"}"
-                )
-                return key
             before_marker = md_text[:m.start()]
             in_math = (before_marker.count("$") % 2 == 1)
-            if in_math:
-                # 数学模式内：裸内容 + 上标圈号（保持现有行为）
-                math_key = f"MATHPLACEHOLDER{num}"
-                placeholder_map[math_key] = inner
-                key = f"INLINEMARKER{num}"
-                placeholder_map[key] = (
-                    r"\textsuperscript{\textcolor{red}{\redcircled{"
-                    + str(num) + r"}}}"
-                )
-                return math_key + key
-            else:
-                # 文本模式：红色底色高亮 + 圈号
-                inner = _escape_unescaped(inner, '%#')
-                key = f"CORRMARK{num}"
-                placeholder_map[key] = (
-                    r"\corrmark{" + r"\(" + _unicode_math_to_latex(inner) + r"\)" + r"}"
-                    + r"{" + str(num) + r"}"
-                )
-                return key
+            return _wrap_corrmark_math(
+                num, inner, r"\(", r"\)", in_math, with_dollar_guard=True,
+                placeholder_map=placeholder_map, md_text=md_text, m_start=m.start(),
+            )
 
         if orig.startswith("$$") and orig.endswith("$$") and len(orig) > 4:
             inner = orig[2:-2]
-            if '$' in inner:
-                key = f"CORRMARK{num}"
-                placeholder_map[key] = (
-                    r"\corrmark{" + orig + r"}{" + str(num) + r"}"
-                )
-                return key
             before_marker = md_text[:m.start()]
             in_math = (before_marker.count("$$") % 2 == 1)
-            if in_math:
-                math_key = f"MATHPLACEHOLDER{num}"
-                placeholder_map[math_key] = inner
-                key = f"INLINEMARKER{num}"
-                placeholder_map[key] = (
-                    r"\textsuperscript{\textcolor{red}{\redcircled{"
-                    + str(num) + r"}}}"
-                )
-                return math_key + key
-            else:
-                inner = _escape_unescaped(inner, '%#')
-                key = f"CORRMARK{num}"
-                placeholder_map[key] = (
-                    r"\corrmark{" + r"\[" + _unicode_math_to_latex(inner) + r"\]" + r"}"
-                    + r"{" + str(num) + r"}"
-                )
-                return key
+            return _wrap_corrmark_math(
+                num, inner, r"\[", r"\]", in_math, with_dollar_guard=True,
+                placeholder_map=placeholder_map, md_text=md_text, m_start=m.start(),
+            )
 
         # \(...\) 包裹的 math：保留原始数学结构，不做额外转换
         if orig.startswith(r"\(") and orig.endswith(r"\)") and len(orig) > 4:
             inner = orig[2:-2]
-            key = f"CORRMARK{num}"
-            placeholder_map[key] = (
-                r"\corrmark{" + r"\(" + _unicode_math_to_latex(inner) + r"\)" + r"}"
-                + r"{" + str(num) + r"}"
+            return _wrap_corrmark_math(
+                num, inner, r"\(", r"\)", in_math=False, with_dollar_guard=False,
+                placeholder_map=placeholder_map, md_text=md_text, m_start=m.start(),
             )
-            return key
 
         # \[...\] 包裹的 math：同上
         if orig.startswith(r"\[") and orig.endswith(r"\]") and len(orig) > 4:
             inner = orig[2:-2]
-            key = f"CORRMARK{num}"
-            placeholder_map[key] = (
-                r"\corrmark{" + r"\[" + _unicode_math_to_latex(inner) + r"\]" + r"}"
-                + r"{" + str(num) + r"}"
+            return _wrap_corrmark_math(
+                num, inner, r"\[", r"\]", in_math=False, with_dollar_guard=False,
+                placeholder_map=placeholder_map, md_text=md_text, m_start=m.start(),
             )
-            return key
 
         # 纯文本标记（无 $ 包裹）：红色底色高亮 + 圈号
         # Unicode→LaTeX 转换后，将 math-only 命令包裹在 $...$ 中
