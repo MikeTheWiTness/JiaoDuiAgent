@@ -256,6 +256,105 @@ def _format_compile_error(stage: str, retcode_info: str,
     )
 
 
+# ---- C1: _run_xelatex / _run_xdvipdfmx ----
+
+def _run_xelatex(xelatex_path: str, tmp_tex: str, tmpdir: str,
+                 base: str, log_path: str,
+                 build_env: dict | None) -> int:
+    """运行 xelatex -no-pdf 生成 XDV。失败时抛出 RuntimeError。
+
+    compile_kwargs 中的 subprocess 调用细节（subprocess.call、cwd、DEVNULL、
+    Windows CREATE_NO_WINDOW / STARTUPINFO）严格保留原样。
+    """
+    cmd = [
+        xelatex_path, "-no-pdf", "-interaction=nonstopmode",
+        f'-output-directory={tmpdir}', tmp_tex,
+    ]
+    compile_kwargs = {
+        'timeout': LATEX_COMPILE_TIMEOUT,
+        'cwd': tmpdir,
+        'stdout': subprocess.DEVNULL,
+        'stderr': subprocess.DEVNULL,
+    }
+    if build_env is not None:
+        compile_kwargs['env'] = build_env
+    if os.name == 'nt':
+        compile_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        compile_kwargs['startupinfo'] = si
+
+    retcode = subprocess.call(cmd, **compile_kwargs)
+    # nonstopmode 下 xelatex 即使只有 minor warnings 也会返回非零，
+    # 但 XDV 可能生成成功。以 XDV 是否有效为准。
+    xdv_path = os.path.join(tmpdir, f"{base}.xdv")
+    xdv_ok = os.path.isfile(xdv_path) and os.path.getsize(xdv_path) > 100
+    if not xdv_ok:
+        diagnostic, tail = _diagnose_log(log_path, tail_lines=10)
+        raise RuntimeError(_format_compile_error(
+            "XeLaTeX", f"retcode={retcode}", diagnostic, tail))
+    return retcode
+
+
+def _run_xdvipdfmx(xelatex_path: str, tmpdir: str, base: str,
+                   xdv_path: str, log_path: str,
+                   build_env: dict | None, texmf_root: str | None,
+                   retcode1: int,
+                   nt_startupinfo) -> str:
+    """运行 xdvipdfmx 将 XDV 转为 PDF。失败时抛出 RuntimeError。
+
+    返回生成的临时 PDF 路径。
+    """
+    _xdv_exe = "xdvipdfmx.exe" if os.name == 'nt' else "xdvipdfmx"
+    xdvipdfmx_path = os.path.join(os.path.dirname(xelatex_path), _xdv_exe)
+    if not os.path.isfile(xdvipdfmx_path) and os.name != 'nt':
+        xdvipdfmx_path = os.path.join(os.path.dirname(xelatex_path), "xdvipdfmx.exe")
+    tmp_pdf = os.path.join(tmpdir, f"{base}.pdf")
+    cmd = [xdvipdfmx_path, "-o", tmp_pdf, xdv_path]
+    compile_kwargs = {
+        'timeout': LATEX_COMPILE_TIMEOUT,
+        'cwd': tmpdir,
+        'stdout': subprocess.DEVNULL,
+        'stderr': subprocess.DEVNULL,
+    }
+    if texmf_root and build_env is not None:
+        env2 = build_env.copy()
+        texmf_dist = os.path.join(texmf_root, "texmf-dist")
+        env2["DVIPDFMXINPUTS"] = ".;" + texmf_dist + "/dvipdfmx//"
+        compile_kwargs['env'] = env2
+    if os.name == 'nt':
+        compile_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        compile_kwargs['startupinfo'] = nt_startupinfo
+
+    retcode2 = subprocess.call(cmd, **compile_kwargs)
+
+    # 检测 xdvipdfmx 阶段失败
+    pdf_exists = os.path.isfile(tmp_pdf)
+    pdf_size = os.path.getsize(tmp_pdf) if pdf_exists else 0
+    is_stub_pdf = pdf_exists and pdf_size < 1024
+
+    log_text = ""
+    if os.path.isfile(log_path):
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            log_text = f.read()
+    has_fatal_error = (
+        re.search(r'^Runaway argument\?', log_text, re.MULTILINE) is not None
+        or re.search(r'^Emergency stop', log_text, re.MULTILINE) is not None
+        or re.search(r'^No pages of output', log_text, re.MULTILINE) is not None
+    )
+
+    if retcode2 != 0 or is_stub_pdf or has_fatal_error:
+        diagnostic, tail = _diagnose_log(log_path, tail_lines=15, include_error_colon=True)
+        raise RuntimeError(_format_compile_error(
+            "xdvipdfmx",
+            f"xelatex_ret={retcode1}, xdvipdfmx_ret={retcode2}, "
+            f"pdf_exists={pdf_exists}, pdf_size={pdf_size}",
+            diagnostic, tail))
+
+    return tmp_pdf
+
+
 # ---- compile_to_pdf（编排主函数）----
 
 def compile_to_pdf(tex_path: str, output_dir: str | None = None,
@@ -330,97 +429,20 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
 
         # 在临时目录中编译
         # 两步法：xelatex -no-pdf 生成 XDV，然后 xdvipdfmx 转 PDF。
-        # 一步法（xelatex 内部调用 xdvipdfmx）在 Windows 便携版下会因
-        # "系统找不到指定的路径" 失败（xdvipdfmx 子进程搜索 dvipdfmx.cfg 时失败）。
-        # 两步法让 xdvipdfmx 作为独立进程运行，env vars 完整传递，可靠得多。
         xdv_path = os.path.join(tmpdir, f"{base}.xdv")
         log_path = os.path.join(tmpdir, f"{base}.log")
 
-        # Step 1: xelatex -no-pdf — 生成 XDV
-        cmd1 = [
-            xelatex_path, "-no-pdf", "-interaction=nonstopmode",
-            f'-output-directory={tmpdir}', tmp_tex,
-        ]
-        compile_kwargs = {
-            'timeout': LATEX_COMPILE_TIMEOUT,
-            'cwd': tmpdir,
-            'stdout': subprocess.DEVNULL,
-            'stderr': subprocess.DEVNULL,
-        }
-        if build_env is not None:
-            compile_kwargs['env'] = build_env
+        # 预计算 Windows STARTUPINFO（xdvipdfmx 复用）
+        nt_startupinfo = None
         if os.name == 'nt':
-            compile_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = subprocess.SW_HIDE
-            compile_kwargs['startupinfo'] = si
+            nt_startupinfo = si
 
-        retcode1 = subprocess.call(cmd1, **compile_kwargs)
-        # nonstopmode 下 xelatex 即使只有 minor warnings（如字体警告）
-        # 也会返回非零，但 XDV 可能生成成功。以 XDV 是否有效为准。
-        xdv_ok = os.path.isfile(xdv_path) and os.path.getsize(xdv_path) > 100
-        if not xdv_ok:
-            # xelatex 阶段失败——读取 .log 诊断
-            diagnostic, tail = _diagnose_log(log_path, tail_lines=10)
-            raise RuntimeError(_format_compile_error(
-                "XeLaTeX", f"retcode={retcode1}", diagnostic, tail))
-
-        # Step 2: xdvipdfmx — 将 XDV 转为 PDF
-        # macOS/Linux 上系统 TeX Live 的 xdvipdfmx 无 .exe 后缀
-        _xdv_exe = "xdvipdfmx.exe" if os.name == 'nt' else "xdvipdfmx"
-        xdvipdfmx_path = os.path.join(os.path.dirname(xelatex_path), _xdv_exe)
-        if not os.path.isfile(xdvipdfmx_path) and os.name != 'nt':
-            # 回退：尝试 .exe 后缀（某些 Windows 移植版）
-            xdvipdfmx_path = os.path.join(os.path.dirname(xelatex_path), "xdvipdfmx.exe")
-        tmp_pdf = os.path.join(tmpdir, f"{base}.pdf")
-        cmd2 = [xdvipdfmx_path, "-o", tmp_pdf, xdv_path]
-        compile_kwargs2 = {
-            'timeout': LATEX_COMPILE_TIMEOUT,
-            'cwd': tmpdir,
-            'stdout': subprocess.DEVNULL,
-            'stderr': subprocess.DEVNULL,
-        }
-        if texmf_root and build_env is not None:
-            env2 = build_env.copy()
-            texmf_dist = os.path.join(texmf_root, "texmf-dist")
-            env2["DVIPDFMXINPUTS"] = ".;" + texmf_dist + "/dvipdfmx//"
-            compile_kwargs2['env'] = env2
-        if os.name == 'nt':
-            compile_kwargs2['creationflags'] = subprocess.CREATE_NO_WINDOW
-            compile_kwargs2['startupinfo'] = compile_kwargs.get('startupinfo')
-
-        retcode2 = subprocess.call(cmd2, **compile_kwargs2)
-
-        tmp_pdf = os.path.join(tmpdir, f"{base}.pdf")
-
-        # 检测 xdvipdfmx 阶段失败
-        pdf_exists = os.path.isfile(tmp_pdf)
-        pdf_size = os.path.getsize(tmp_pdf) if pdf_exists else 0
-        is_stub_pdf = pdf_exists and pdf_size < 1024
-
-        # 从 xelatex .log 提取诊断信息（两步共享同一日志文件）
-        # 使用行首匹配避免子串误判：
-        # "I've just inserted will cause me to report a runaway argument"
-        # 是 TeX 解释性文本，并非真实的 Runaway argument 错误。
-        # 真正的致命错误以 "!" 开头且独占一行或以 "Runaway argument?" 开头。
-        log_text = ""
-        if os.path.isfile(log_path):
-            with open(log_path, encoding="utf-8", errors="replace") as f:
-                log_text = f.read()
-        has_fatal_error = (
-            re.search(r'^Runaway argument\?', log_text, re.MULTILINE) is not None
-            or re.search(r'^Emergency stop', log_text, re.MULTILINE) is not None
-            or re.search(r'^No pages of output', log_text, re.MULTILINE) is not None
-        )
-
-        if retcode2 != 0 or is_stub_pdf or has_fatal_error:
-            diagnostic, tail = _diagnose_log(log_path, tail_lines=15, include_error_colon=True)
-            raise RuntimeError(_format_compile_error(
-                "xdvipdfmx",
-                f"xelatex_ret={retcode1}, xdvipdfmx_ret={retcode2}, "
-                f"pdf_exists={pdf_exists}, pdf_size={pdf_size}",
-                diagnostic, tail))
+        retcode1 = _run_xelatex(xelatex_path, tmp_tex, tmpdir, base, log_path, build_env)
+        tmp_pdf = _run_xdvipdfmx(xelatex_path, tmpdir, base, xdv_path, log_path,
+                                 build_env, texmf_root, retcode1, nt_startupinfo)
 
         # 复制 PDF 到目标目录
         shutil.copy2(tmp_pdf, target_pdf)
