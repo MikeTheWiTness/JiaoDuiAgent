@@ -999,20 +999,5 @@ def default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax=False)
 
 
 def default_collect_paper_dirs(base_path):
-    result = []
-    base = Path(base_path)
-    if not base.exists(): return result
-    sub_items = [x for x in base.iterdir() if x.is_dir()]
-    sub_names = [x.name for x in sub_items]
-    def _is_unit_dir(name):
-        return '题' in name or name.startswith('板块') or name.startswith('单元')
-    has_question_dir = any(_is_unit_dir(n) for n in sub_names)
-    has_knowledge = any(n == '知识' for n in sub_names)
-    if has_question_dir or has_knowledge:
-        result.append(str(base))
-    else:
-        for d in sub_items:
-            inner = [x.name for x in d.iterdir() if x.is_dir()]
-            if any(_is_unit_dir(n) for n in inner) or '知识' in inner:
-                result.append(str(d))
-    return result
+    from core.unit_detect import scan_question_dirs
+    return [str(p) for p in scan_question_dirs(Path(base_path))]
