@@ -23,7 +23,7 @@ class SessionContext:
         api_key: str,
         model: str,
         output_dir: str | None = None,
-        max_loops: int = 3,
+        max_loops: int = 20,
         max_tokens: int = 16384,
         reasoning_effort: str = "high",
     ) -> "SessionContext":

@@ -1,27 +1,37 @@
 import logging
+import os
 import re
+import threading
 
 from core.config_schema import validate_config
 
 _log = logging.getLogger(__name__)
 
 _config_cache = {}
+_cache_lock = threading.Lock()
 
 
 def clear_config_cache():
-    _config_cache.clear()
+    with _cache_lock:
+        _config_cache.clear()
 
 
 def load_config(subject_dir):
-    cache_key = subject_dir
-    cached = _config_cache.get(cache_key)
+    """加载并缓存学科配置。使用 (subject_dir, mtime) 作缓存键，文件改动后自动失效。"""
+    config_path = os.path.join(subject_dir, "config.json")
+    mtime = os.path.getmtime(config_path) if os.path.isfile(config_path) else 0
+    cache_key = (subject_dir, mtime)
+
+    with _cache_lock:
+        cached = _config_cache.get(cache_key)
     if cached is not None:
         return cached
 
     # 校验 + 标准化（失败时抛出含文件名和字段的明确错误）
     config = validate_config(subject_dir)
 
-    _config_cache[cache_key] = config
+    with _cache_lock:
+        _config_cache[cache_key] = config
     return config
 
 

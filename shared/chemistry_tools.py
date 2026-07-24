@@ -93,25 +93,19 @@ def parse_chemical_formula(formula: str) -> dict[str, int]:
     return _parse_group()
 
 
-# ---- 模块级 API 配置（线程安全：threading.local() 参照 shared/bash_tool.py） ----
+# ---- 模块级 API 配置（线程安全：threading.local()，跨模块共享） ----
 
-_api_config: threading.local = threading.local()
-"""每线程独立的 API 配置，避免并行校对时竞态写错目录。"""
+from shared._subject_api_config import get_subject_api_config, set_subject_api_config
 
 
 def set_chemistry_api_config(api_url: str, api_key: str, model: str, output_dir: str | None = None):
-    """在 ReAct 工具循环开始前注入 API 配置，供 ChemistryIndependentSolveTool 内部使用。"""
-    _api_config.value = {
-        "api_url": api_url,
-        "api_key": api_key,
-        "model": model,
-        "output_dir": output_dir,
-    }
+    """在 ReAct 工具循环开始前注入 API 配置（薄包装，签名与参数顺序逐字一致）。"""
+    set_subject_api_config(api_url, api_key, model, output_dir)
 
 
 def _get_api_config() -> dict:
     """获取当前线程的 API 配置，未设置时返回空 dict。"""
-    return getattr(_api_config, "value", {})
+    return get_subject_api_config()
 
 
 # ---- ChemistryIndependentSolveTool ----
