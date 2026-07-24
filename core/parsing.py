@@ -2,6 +2,8 @@ import json
 import os
 import re
 
+from shared.comment_marker import INLINE_MARKER_DETECT_RE
+
 
 def _circle_to_int(ch: str) -> int | None:
     code = ord(ch)
@@ -156,12 +158,12 @@ def parse_proofread_md(text: str):
 
     # "无问题" 快速通道：仅当 LLM 真只输出"无问题"（无标记、无修改原因）时生效。
     # 若有标记混在文中，走正常内联解析流程，避免丢失校正数据。
-    has_markers = bool(re.search(r'【\d+\|.*\|[^】]*】', text))
+    has_markers = bool(INLINE_MARKER_DETECT_RE.search(text))
     has_reasons = bool(re.search(r'###\s*修改原因', text))
     if summary == "无问题" and not has_markers and not has_reasons:
         return {"corrections": [], "summary": "无问题", "marked_text": ""}
 
-    if "### 标记原文" in text and re.search(r'【\d+\|.*\|[^】]*】', text):
+    if "### 标记原文" in text and INLINE_MARKER_DETECT_RE.search(text):
         result = _parse_inline_format(text, summary)
         if result:
             return result
@@ -169,7 +171,7 @@ def parse_proofread_md(text: str):
     # 兜底：即使缺少 ### 标记原文 标题，只要有 【N|原文|改为】 标记 +
     # ### 修改原因 段落，也能提取校对数据。格式修正 LLM 常常忘记加
     # 标记原文标题但实际内容已在文中。
-    if re.search(r'【\d+\|.*\|[^】]*】', text) and re.search(r'###\s*修改原因', text):
+    if INLINE_MARKER_DETECT_RE.search(text) and re.search(r'###\s*修改原因', text):
         result = _parse_inline_format(text, summary)
         if result:
             return result

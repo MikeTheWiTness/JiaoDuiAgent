@@ -227,7 +227,7 @@ def extract_comments_to_md(docx_path, output_md_path):
 # 批注占位符：pandoc 转换前往 docx 注入，转换后留在 md 里精确定位批注位置。
 # CMTEND{N}Z —— 纯 ASCII 字母+数字，无标点（避开 md 特殊字符与 post_process 标点转换），
 # 尾部 Z 防止 id 数字与后文数字粘连。
-_COMMENT_END_TOKEN_RE = re.compile(r'CMTEND(\d+)Z')
+from shared.comment_marker import COMMENT_END_TOKEN_RE as _COMMENT_END_TOKEN_RE
 
 
 def inject_comment_placeholders(docx_path):

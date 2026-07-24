@@ -155,6 +155,8 @@ def _extract_quotes_to_placeholders(text: str, placeholder_map: dict[str, str]) 
 
 
 _QUOTE_RE = re.compile(r'"')
+_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+_ITALIC_RE = re.compile(r'(?<!\*)\*([^*\n]+?)\*(?!\*)')
 
 
 def _extract_images(text: str) -> tuple[str, dict[str, str]]:
@@ -229,13 +231,13 @@ def _extract_md_formatting(text: str, placeholder_map: dict[str, str]) -> str:
         placeholder_map[key] = r"\textit{" + _convert_sup_sub_inner(m.group(1)) + "}"
         return key
 
-    text = re.sub(r"\*\*(.+?)\*\*", _bold_repl, text)
-    text = re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", _italic_repl, text)
+    text = _BOLD_RE.sub(_bold_repl, text)
+    text = _ITALIC_RE.sub(_italic_repl, text)
     return text
 
 
 # Word 批注 <批注 id=N><原>原文</原><改>建议</改></批注> 的标记正则
-_COMMENT_RE = re.compile(r'<批注\s+id=(\d+)><原>(.*?)</原><改>(.*?)</改></批注>')
+from shared.comment_marker import XML_ANNOTATION_RE as _COMMENT_RE
 
 
 def _extract_comments_to_placeholders(text: str, comments: list[dict],
@@ -394,9 +396,9 @@ def _find_math_close(text: str, start: int) -> int:
 def _md_key_to_latex(text: str) -> str:
     """将 Markdown 格式的搜索键转为 LaTeX 形式，用于在已处理内容中 fallback 搜索。"""
     # 粗体 **text** → \textbf{text}
-    text = re.sub(r'\*\*(.+?)\*\*', r'\\textbf{\1}', text)
+    text = _BOLD_RE.sub(r'\\textbf{\1}', text)
     # 斜体 *text* → \textit{text}
-    text = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'\\textit{\1}', text)
+    text = _ITALIC_RE.sub(r'\\textit{\1}', text)
     return text
 
 
@@ -479,8 +481,8 @@ def _format_right_entry(corr: dict, placeholder_map: dict[str, str] | None = Non
 
     # 处理 Markdown 粗/斜体
     def _fmt_md(s):
-        s = re.sub(r'\*\*(.+?)\*\*', r'\\textbf{\1}', s)
-        s = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'\\textit{\1}', s)
+        s = _BOLD_RE.sub(r'\\textbf{\1}', s)
+        s = _ITALIC_RE.sub(r'\\textit{\1}', s)
         return s
     reason = _fmt_md(reason)
     corrected = _fmt_md(corrected)
@@ -555,7 +557,7 @@ def _circled_char(n: int) -> str:
     return str(n)
 
 
-_INLINE_MARKER_RE = re.compile(r'【([\d①-⑳]+)\|([^|]*?)\|([^】]*?)】')
+from shared.comment_marker import INLINE_MARKER_CAPTURE_RE as _INLINE_MARKER_RE
 
 # math-only LaTeX 命令（仅数学模式有效），在文本模式中需包裹 $...$ 避免编译错误
 _MATH_ONLY_RE = re.compile(

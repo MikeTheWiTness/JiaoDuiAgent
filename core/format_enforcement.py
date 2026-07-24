@@ -10,6 +10,7 @@ import os
 import re
 
 from core.logging_utils import log
+from shared.comment_marker import INLINE_MARKER_DETECT_RE
 
 
 def _is_no_issue(res: str) -> bool:
@@ -34,7 +35,7 @@ def _enforce_format(res: str):
     marker_match = re.search(r'###\s*标记原文[^\n]*\n(.*?)(?=\n###\s*修改原因|\Z)', res, re.DOTALL)
     reason_match = re.search(r'###\s*修改原因[^\n]*\n(.*?)(?=\n###\s*修改|\Z)', res, re.DOTALL)
     # 内联标记检测：只要存在 【N|原文|改为】 标记即视为内联格式
-    has_inline_markers = bool(re.search(r'【\d+\|.*\|[^】]*】', res))
+    has_inline_markers = bool(INLINE_MARKER_DETECT_RE.search(res))
     if not marker_match and not has_inline_markers:
         issues.append("缺少 ### 标记原文 段落 且无内联标记")
     if not reason_match:
