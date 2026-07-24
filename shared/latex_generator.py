@@ -857,6 +857,31 @@ def _build_math_only_re():
 _MATH_ONLY_RE = _build_math_only_re()
 
 
+# ---- C3: _consume_braced_superscript（ADR-0024） ----
+
+def _consume_braced_superscript(text: str, i: int, marker: str,
+                                 fallback: str, result: list) -> int:
+    """消费 ^{...} 或 _{...} 模式，返回消费完成后的索引位置。
+
+    若后跟 {，消费完整花括号组并包裹为 $^{...}$ / $_{...}$ 使其正确渲染；
+    否则追加 fallback 命令（\\textasciicircum{} / \\textunderscore{}）。
+    """
+    if i + 1 < len(text) and text[i + 1] == '{':
+        j = i + 2
+        depth = 1
+        while j < len(text) and depth > 0:
+            if text[j] == '{':
+                depth += 1
+            elif text[j] == '}':
+                depth -= 1
+            j += 1
+        if depth == 0:
+            result.append('$' + marker + text[i + 1:j] + '$')
+            return j
+    result.append(fallback)
+    return i + 1
+
+
 def _escape_math_chars_outside_math(text: str) -> str:
     r"""转义 $...$ 数学模式外的裸 ^ 和 _ 为 LaTeX 文本模式安全字符。
 
@@ -896,33 +921,12 @@ def _escape_math_chars_outside_math(text: str) -> str:
                 i += 1
                 continue
             elif text[i] == '^':
-                # 若后跟 {，说明是 Pandoc 转换的上标 ^{...}，包裹为 $^{...}$ 使其正确渲染
-                if i + 1 < len(text) and text[i + 1] == '{':
-                    j = i + 2
-                    depth = 1
-                    while j < len(text) and depth > 0:
-                        if text[j] == '{': depth += 1
-                        elif text[j] == '}': depth -= 1
-                        j += 1
-                    if depth == 0:
-                        result.append('$' + text[i:j] + '$')
-                        i = j
-                        continue
-                result.append(r'\textasciicircum{}')
+                i = _consume_braced_superscript(
+                    text, i, '^', r'\textasciicircum{}', result)
+                continue
             elif text[i] == '_':
-                # 若后跟 {，说明是 Pandoc 转换的下标 _{...}，包裹为 $_{...}$ 使其正确渲染
-                if i + 1 < len(text) and text[i + 1] == '{':
-                    j = i + 2
-                    depth = 1
-                    while j < len(text) and depth > 0:
-                        if text[j] == '{': depth += 1
-                        elif text[j] == '}': depth -= 1
-                        j += 1
-                    if depth == 0:
-                        result.append('$' + text[i:j] + '$')
-                        i = j
-                        continue
-                result.append(r'\textunderscore{}')
+                i = _consume_braced_superscript(
+                    text, i, '_', r'\textunderscore{}', result)
             else:
                 result.append(text[i])
         else:
