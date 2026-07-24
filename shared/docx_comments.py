@@ -1,11 +1,10 @@
-import re
 import os
-import zipfile
+import re
 import tempfile
-import shutil
+import zipfile
 
 from core.logging_utils import log
-from core.pandoc_utils import convert_with_pandoc, check_pandoc
+from core.pandoc_utils import check_pandoc, convert_with_pandoc
 
 
 def normalize_text(s):
@@ -206,7 +205,7 @@ def extract_comments_to_md(docx_path, output_md_path):
         return True
 
     try:
-        with open(output_md_path, 'r', encoding='utf-8') as f:
+        with open(output_md_path, encoding='utf-8') as f:
             md_text = f.read()
     except Exception as e:
         log(f"❌ 读取 md 失败: {e}")

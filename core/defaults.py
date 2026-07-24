@@ -1,12 +1,14 @@
-import os, re, base64, shutil
+import base64
+import os
+import re
 from pathlib import Path
-from core.parsing import save_proofread_json
-from core.api_client import call_api, MAX_FILE_SIZE, StopReason
-from core.logging_utils import log
-from core.format_enforcement import _enforce_format, enforce_and_fix
-from core import config_loader
-from shared.image_utils import copy_md_images
 
+from core import config_loader
+from core.api_client import MAX_FILE_SIZE, StopReason, call_api
+from core.format_enforcement import _enforce_format, enforce_and_fix
+from core.logging_utils import log
+from core.parsing import save_proofread_json
+from shared.image_utils import copy_md_images
 
 # ============================================================
 # 题目识别标志（用于【出题意图】清理等场景）
@@ -97,7 +99,7 @@ def fix_latex_escapes(md_file):
     2. 保护 $...$ / $$...$$ 数学块，避免内部 LaTeX 命令被破坏
     3. 字面替换仅作用于非数学文本；数学内部仅做安全的还原（下标、上标、分组）
     """
-    with open(md_file, 'r', encoding='utf-8') as f:
+    with open(md_file, encoding='utf-8') as f:
         content = f.read()
 
     # ===== Phase 1: 全局反斜杠规约（lines 33-35，安全，数学内外均需） =====
@@ -209,7 +211,7 @@ def comprehensive_clean(md_content):
 
 
 def fix_floating_images(md_file):
-    with open(md_file, "r", encoding="utf-8") as f:
+    with open(md_file, encoding="utf-8") as f:
         content = f.read()
 
     lines = content.split("\n")
@@ -255,7 +257,7 @@ def fix_floating_images(md_file):
 
 def normalize_option_spacing(md_file):
     import re as _re
-    with open(md_file, "r", encoding="utf-8") as f:
+    with open(md_file, encoding="utf-8") as f:
         content = f.read()
 
     new_content = _re.sub(r" {4,}", "  ", content)
@@ -268,7 +270,7 @@ def normalize_option_spacing(md_file):
 
 def clean_md_file(md_file):
     try:
-        with open(md_file, 'r', encoding='utf-8') as f:
+        with open(md_file, encoding='utf-8') as f:
             content = f.read()
         cleaned = comprehensive_clean(content)
         with open(md_file, 'w', encoding='utf-8') as f:
@@ -314,7 +316,7 @@ def clean_intent_md_file(md_file, problem_markers=None):
         problem_markers: 题目编号正则列表，默认使用 DEFAULT_INTENT_PROBLEM_MARKERS
     """
     try:
-        with open(md_file, 'r', encoding='utf-8') as f:
+        with open(md_file, encoding='utf-8') as f:
             content = f.read()
         cleaned = clean_intent_markers(content, problem_markers=problem_markers)
         with open(md_file, 'w', encoding='utf-8') as f:
@@ -332,7 +334,7 @@ def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     from shared.decor_utils import strip_decor_images_from_file
     strip_decor_images_from_file(md_file)
 
-    with open(md_file, 'r', encoding='utf-8') as f:
+    with open(md_file, encoding='utf-8') as f:
         md_content = f.read()
 
     split_mode = "section"
@@ -560,7 +562,7 @@ def convert_display_to_inline(content):
 
 def post_process_md_zw(md_path):
     try:
-        with open(md_path, 'r', encoding='utf-8') as f:
+        with open(md_path, encoding='utf-8') as f:
             content = f.read()
     except Exception as e:
         log(f"   ❌ 后处理读取失败: {e}")
@@ -637,7 +639,7 @@ def parse_end_answers(answer_lines):
 
 def default_split_exam(md_file, output_root, base_name, config):
     base_name = base_name.strip()  # 防御：文件名可能带首尾空格，Windows 路径不支持
-    with open(md_file, 'r', encoding='utf-8') as f:
+    with open(md_file, encoding='utf-8') as f:
         md_content = f.read()
     lines = md_content.splitlines()
     qs = config_loader.get_exam_question_pattern(config)
@@ -772,7 +774,7 @@ def read_md_for_unit(q_dir: str, q_name: str) -> str | None:
     """
     target_md = os.path.join(q_dir, f"{q_name}.md")
     if os.path.exists(target_md):
-        with open(target_md, 'r', encoding='utf-8') as fm:
+        with open(target_md, encoding='utf-8') as fm:
             return fm.read()
     return None
 
@@ -921,7 +923,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
                     if usage_text:
                         f.write(usage_text)
                 # 同步存档结构化数据
-                import shutil, json as _json
+                import shutil
                 src_json = os.path.join(q_dir, "_校对数据.json")
                 if os.path.exists(src_json):
                     shutil.copy2(src_json, artifact_dir / "_校对数据.json")
@@ -958,17 +960,17 @@ def get_supported_extensions():
 
 def default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax=False):
     """默认的文件转 Markdown 方法（仅支持 Word 文档）。
-    
+
     Args:
         file_path: 输入文件路径
         output_md: 输出 Markdown 文件路径
         img_dir: 图片输出目录
         use_mathjax: 是否使用 MathJax
-    
+
     Returns:
         dict: 包含 success 和 needs_post_process 等信息
     """
-    from core.pandoc_utils import convert_with_pandoc, check_pandoc, enhance_docx_conversion
+    from core.pandoc_utils import check_pandoc, convert_with_pandoc, enhance_docx_conversion
 
     ext = os.path.splitext(file_path)[1].lower()
 
@@ -982,7 +984,7 @@ def default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax=False)
             # 先将 pandoc 的 ^x^/~x~ 转为 <上标>/<下标>，
             # 之后 enhancer 的 avoidance 逻辑会跳过已标记的上下标区域。
             try:
-                with open(output_md, 'r', encoding='utf-8') as f:
+                with open(output_md, encoding='utf-8') as f:
                     content = f.read()
                 content = normalize_caret_tilde(content)
                 with open(output_md, 'w', encoding='utf-8') as f:
@@ -991,7 +993,7 @@ def default_convert_file_to_md(file_path, output_md, img_dir, use_mathjax=False)
                 log(f"   ⚠️ normalize_caret_tilde 失败: {e}")
             enhance_docx_conversion(file_path, output_md)
         return {"success": ok, "needs_post_process": True}
-    
+
     log(f"❌ 不支持的文件格式: {ext}")
     return {"success": False, "needs_post_process": False}
 

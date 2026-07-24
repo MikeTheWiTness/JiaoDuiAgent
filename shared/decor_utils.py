@@ -36,7 +36,7 @@ def strip_decor_images(text: str) -> str:
 
 def strip_decor_images_from_file(md_file: str) -> bool:
     """读入文件 → 清除装饰图标 → 写回。返回是否做了修改。"""
-    with open(md_file, "r", encoding="utf-8") as f:
+    with open(md_file, encoding="utf-8") as f:
         content = f.read()
     new_content = _DECOR_IMG_RE.sub(_is_decor, content)
     if new_content != content:

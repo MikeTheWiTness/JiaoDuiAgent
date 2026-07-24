@@ -1210,10 +1210,10 @@ def _is_right_column_empty(numbered, comments, review_judgments, review_suppleme
 
 
 def generate_tex(json_path: str, md_path: str, output_path: str) -> str:
-    with open(json_path, "r", encoding="utf-8") as f:
+    with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
 
-    with open(md_path, "r", encoding="utf-8") as f:
+    with open(md_path, encoding="utf-8") as f:
         md_content = f.read()
 
     corrections = data.get("corrections", [])
@@ -1225,7 +1225,7 @@ def generate_tex(json_path: str, md_path: str, output_path: str) -> str:
 
     title = os.path.splitext(os.path.basename(md_path))[0]
 
-    with open(_get_template_file(), "r", encoding="utf-8") as f:
+    with open(_get_template_file(), encoding="utf-8") as f:
         template = f.read()
 
     full_tex = template.replace("{{CONTENT}}", paracol_content)
@@ -1289,19 +1289,19 @@ def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -
         if not os.path.isfile(json_path) or not md_path:
             continue
 
-        with open(json_path, "r", encoding="utf-8") as f:
+        with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
 
         marked_text = data.get("marked_text", "")
         if marked_text:
             md_content = marked_text.replace(chr(92) + 'n', '\n')
         else:
-            with open(md_path, "r", encoding="utf-8") as f:
+            with open(md_path, encoding="utf-8") as f:
                 md_content = f.read()
 
         # 从原始 md 文件中提取批注（marked_text 可能被 LLM 丢弃了批注标记）
         try:
-            with open(md_path, "r", encoding="utf-8") as f:
+            with open(md_path, encoding="utf-8") as f:
                 orig_md = f.read()
             orig_comments = extract_comments_from_md(orig_md)
         except Exception:
@@ -1342,7 +1342,7 @@ def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -
     combined = ("\n\n" + chr(92) + "newpage\n\n").join(sections)
     lecture_name = os.path.basename(lecture_dir.rstrip("/\\"))
 
-    with open(_get_template_file(), "r", encoding="utf-8") as f:
+    with open(_get_template_file(), encoding="utf-8") as f:
         template = f.read()
 
     full_tex = template.replace("{{CONTENT}}", combined)

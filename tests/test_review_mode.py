@@ -1,14 +1,14 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.review_mode import (
-    is_review_mode,
     build_review_prompt,
-    parse_review_result,
     extract_comments_from_md,
+    is_review_mode,
+    parse_review_result,
 )
 
 

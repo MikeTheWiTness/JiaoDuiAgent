@@ -4,15 +4,15 @@
 """
 import logging
 import tempfile
-import os
-import pytest
 from pathlib import Path
 
+import pytest
+
 from core.logging_utils import (
-    setup_logging,
     get_logger,
     log,  # 兼容旧接口
     set_log_func,  # UI 桥接
+    setup_logging,
 )
 
 

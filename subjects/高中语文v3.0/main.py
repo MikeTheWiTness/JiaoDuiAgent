@@ -1,5 +1,8 @@
-import sys, os, importlib.util
+import importlib.util
+import os
+import sys
 from typing import Any
+
 
 def _get_resource_path(relative_path: str) -> str:
     try:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """extract_body_segment 与前置 diff 噪音修复的回归测试。
 
 用 output/拆题结果/高中语文教研实习生笔试试卷 下的真实题目做 fixture：
@@ -8,18 +7,18 @@
 并验证 preprocess_for_proofread 注入的「前置参考」差异条数从修复前的 111/51
 降到个位数～十几条（回归护栏），且韦凑题的真错误（雇→顾 等）确实出现在差异列表里。
 """
-import sys
 import os
+import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import shared.chinese_classics_tools as cc
 from shared.chinese_classics_tools import (
+    _clean_for_matching,
     extract_body_segment,
     preprocess_for_proofread,
-    _clean_for_matching,
 )
-import shared.chinese_classics_tools as cc
 
 PAPER = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

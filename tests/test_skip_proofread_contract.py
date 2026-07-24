@@ -1,11 +1,11 @@
-import unittest
 import os
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.split_post_utils import mark_navigation_units, SKIP_MARKER_FILE
+from shared.split_post_utils import SKIP_MARKER_FILE, mark_navigation_units
 
 
 class TestSkipProofreadContract(unittest.TestCase):

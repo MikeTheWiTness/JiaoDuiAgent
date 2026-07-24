@@ -3,8 +3,8 @@ Word 文档格式增强模块
 提取 Pandoc 转换时会丢失的特殊格式（着重号、下划线、删除线等），
 在 Markdown 中用自定义标记保留，供校对流程使用。
 """
-import os
 import re
+
 from core.logging_utils import log
 
 

@@ -2,10 +2,9 @@
 
 验证 call_api 能正确提取和累计 token 使用量。
 """
-import json
-import pytest
-from unittest.mock import patch, MagicMock
-from core.api_client import call_api, StopReason
+from unittest.mock import MagicMock, patch
+
+from core.api_client import StopReason, call_api
 from core.session_context import SessionContext
 
 

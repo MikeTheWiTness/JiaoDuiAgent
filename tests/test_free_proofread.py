@@ -1,8 +1,8 @@
-import unittest
-import sys
 import os
-import tempfile
 import shutil
+import sys
+import tempfile
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -25,7 +25,7 @@ class TestCreateFreeProofreadMd(unittest.TestCase):
         md_path = create_free_proofread_md(text, output_dir=self.tmpdir)
         self.assertTrue(os.path.exists(md_path))
         self.assertTrue(md_path.endswith(".md"))
-        with open(md_path, 'r', encoding='utf-8') as f:
+        with open(md_path, encoding='utf-8') as f:
             content = f.read()
         self.assertIn("这是一段要校对的文字", content)
 
@@ -39,7 +39,7 @@ class TestCreateFreeProofreadMd(unittest.TestCase):
 
         md_path = create_free_proofread_md(text, images=[img_path], output_dir=self.tmpdir)
         self.assertTrue(os.path.exists(md_path))
-        with open(md_path, 'r', encoding='utf-8') as f:
+        with open(md_path, encoding='utf-8') as f:
             content = f.read()
         self.assertIn("![图片", content)
 

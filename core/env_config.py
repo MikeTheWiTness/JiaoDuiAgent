@@ -1,5 +1,6 @@
 import os
 import traceback
+
 from core.logging_utils import log
 
 
@@ -9,7 +10,7 @@ def load_env_config(subject_dir):
     if not os.path.exists(env_file):
         return cfg
     try:
-        with open(env_file, 'r', encoding='utf-8') as f:
+        with open(env_file, encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):

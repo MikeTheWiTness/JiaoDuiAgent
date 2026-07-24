@@ -1,7 +1,7 @@
-import zipfile
-import re
 import os
+import re
 import unittest
+import zipfile
 
 path = r'C:\Users\witne\Desktop\校对临时\高中语文教研实习生笔试试卷(1).docx'
 

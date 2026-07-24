@@ -1,9 +1,9 @@
 """文言文/诗歌校对工具集 —— 文本类型识别、前置搜索、自动 diff。"""
-import re
-import os
-import difflib
-import requests
 import json
+import os
+import re
+
+import requests
 
 from core.logging_utils import log
 
@@ -814,8 +814,9 @@ def search_original_text(text_type, sample_text):
     log(f"   🔍 搜索关键词: {sample}")
 
     try:
-        from shared.web_tools import WebFetchTool, WebSearchTool
         import urllib.parse
+
+        from shared.web_tools import WebFetchTool, WebSearchTool
 
         fetcher = WebFetchTool()
         searcher = WebSearchTool()
@@ -823,7 +824,10 @@ def search_original_text(text_type, sample_text):
         # 第1优先：识典古籍（文言文，Playwright 可用时）
         if text_type == "classical":
             try:
-                from shared.shidianguji_playwright import is_playwright_available, search_and_extract
+                from shared.shidianguji_playwright import (
+                    is_playwright_available,
+                    search_and_extract,
+                )
                 # 只在 Playwright 可用时才尝试识典
                 if is_playwright_available():
                     log(f"   📚 尝试识典古籍搜索...")
@@ -993,7 +997,7 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None, q_
         clean_path = os.path.join(q_dir, f"{q_name}_clean.md")
         if os.path.exists(clean_path):
             try:
-                with open(clean_path, 'r', encoding='utf-8') as f:
+                with open(clean_path, encoding='utf-8') as f:
                     match_text = f.read()
                 log(f"   📄 已读取 _clean.md 用于匹配 ({len(match_text)} 字)")
             except Exception:

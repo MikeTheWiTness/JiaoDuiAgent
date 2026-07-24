@@ -9,7 +9,6 @@ xelatex 查找优先级：
 """
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -294,7 +293,7 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
             # xelatex 阶段失败——读取 .log 诊断
             log_text = ""
             if os.path.isfile(log_path):
-                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                with open(log_path, encoding="utf-8", errors="replace") as f:
                     log_text = f.read()
             diag = [ln.strip() for ln in log_text.splitlines()
                     if ln.strip().startswith("!") or "fatal" in ln.strip().lower()
@@ -340,7 +339,7 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
         # 从 xelatex .log 提取诊断信息（两步共享同一日志文件）
         log_text = ""
         if os.path.isfile(log_path):
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(log_path, encoding="utf-8", errors="replace") as f:
                 log_text = f.read()
 
         # 使用行首匹配避免子串误判：

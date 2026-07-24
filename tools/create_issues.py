@@ -1,9 +1,8 @@
 """创建 GitHub Issues - 高中语文 v2.0 切片"""
-import requests
-import json
-import time
 import subprocess
-import sys
+import time
+
+import requests
 
 REPO = "MikeTheWiTness/JiaoDuiAgent"
 API_BASE = "https://api.github.com/repos"
@@ -420,7 +419,7 @@ for i, issue in enumerate(issues):
     for old_num, new_num in issue_map.items():
         body = body.replace(f"#{old_num} ", f"#{new_num} ")
         body = body.replace(f"- #{old_num}", f"- #{new_num}")
-    
+
     num = create_issue(issue["title"], body)
     if num:
         issue_map[i + 1] = num  # i+1 是切片编号

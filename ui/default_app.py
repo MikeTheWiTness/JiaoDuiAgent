@@ -1,23 +1,31 @@
-import os, re, json, base64, time, shutil, subprocess, threading, zipfile, sys, dataclasses
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import dataclasses
+import os
+import re
+import shutil
+import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext, messagebox
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from core.env_config import load_env_config, save_env_config
-from core.logging_utils import set_log_func, log
 from core.config_loader import clear_config_cache, load_config
-from core.pandoc_utils import check_pandoc, convert_with_pandoc
 from core.defaults import (
-    fix_latex_escapes, clean_md_file, clean_intent_md_file, fix_floating_images,
-    normalize_option_spacing, post_process_md_zw,
+    clean_intent_md_file,
+    clean_md_file,
+    fix_floating_images,
+    fix_latex_escapes,
+    normalize_option_spacing,
+    post_process_md_zw,
 )
+from core.env_config import load_env_config, save_env_config
+from core.logging_utils import log, set_log_func
+from core.pandoc_utils import check_pandoc, convert_with_pandoc
+from core.session_context import SessionContext
 from shared.latex_generator import generate_combined_pdf
 from shared.session import SessionManager
-from core.session_context import SessionContext
-from ui.widgets import LogPanel, ApiDialog
 from ui.pipeline import PipelineBar, setup_pipeline_styles
-
+from ui.widgets import ApiDialog, LogPanel
 
 DEFAULT_OUTPUT = "output"
 BATCH_SIZE = 10
@@ -783,8 +791,9 @@ class DefaultApp:
 
         if is_free_mode:
             log(f"开始转换，模式=自由校对")
-            from shared.free_proofread import create_free_proofread_md
             import datetime
+
+            from shared.free_proofread import create_free_proofread_md
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             basename = f"自由校对_{ts}"
 
@@ -803,7 +812,7 @@ class DefaultApp:
                 ext = os.path.splitext(fpath)[1].lower()
                 if ext in ('.md', '.txt'):
                     try:
-                        with open(fpath, 'r', encoding='utf-8') as f:
+                        with open(fpath, encoding='utf-8') as f:
                             content = f.read()
                         all_text_parts.append(content)
                         log(f"   📄 已读取文件: {os.path.basename(fpath)}")
@@ -893,7 +902,7 @@ class DefaultApp:
                         ok = False
                 else:
                     use_mathjax = (source == "讲义")
-                    
+
                     convert_func = getattr(self.subject_app, 'convert_file_to_md', None)
                     if convert_func:
                         result = convert_func(convert_source, raw_md, img_dir, use_mathjax=use_mathjax)
@@ -947,7 +956,7 @@ class DefaultApp:
                 if is_review_mode and not is_md_file:
                     from shared.docx_comments import insert_comments_from_docx
                     try:
-                        with open(raw_md, 'r', encoding='utf-8') as f:
+                        with open(raw_md, encoding='utf-8') as f:
                             md_content = f.read()
                         comment_md = insert_comments_from_docx(file_path, md_content)
                         with open(raw_md, 'w', encoding='utf-8') as f:
@@ -1101,7 +1110,7 @@ class DefaultApp:
                     json_path = os.path.join(q_dir, "_校对数据.json")
                     if os.path.exists(md_path) and os.path.exists(json_path):
                         try:
-                            with open(md_path, 'r', encoding='utf-8') as f:
+                            with open(md_path, encoding='utf-8') as f:
                                 cached_result = f.read()
                             self.proofread_result[q_dir] = cached_result
                             paper_results[q_dir] = cached_result

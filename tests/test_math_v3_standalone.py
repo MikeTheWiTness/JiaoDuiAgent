@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """小学数学 v3.0 隔离测试 —— 不依赖 API、不跑 exe、不涉及多学科交叉。
 
 覆盖：
@@ -426,9 +425,9 @@ class TestConfigConsistency(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(MATH_DIR, "config.json"), "r", encoding="utf-8") as f:
+        with open(os.path.join(MATH_DIR, "config.json"), encoding="utf-8") as f:
             cls.config = json.load(f)
-        with open(os.path.join(MATH_DIR, "agent_prompt.json"), "r", encoding="utf-8") as f:
+        with open(os.path.join(MATH_DIR, "agent_prompt.json"), encoding="utf-8") as f:
             cls.agent = json.load(f)
 
     def test_config_has_required_fields(self):

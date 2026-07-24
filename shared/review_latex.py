@@ -9,10 +9,7 @@
 3. 补充发现区
 """
 import json
-import os
 import re
-import sys
-
 
 _CIRCLED_NUMBERS = [
     "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
@@ -83,10 +80,10 @@ def _verdict_icon(verdict: str) -> str:
 
 
 def generate_review_latex(md_path, json_path, output_tex_path, title="批注评审报告"):
-    with open(md_path, 'r', encoding='utf-8') as f:
+    with open(md_path, encoding='utf-8') as f:
         md_content = f.read()
 
-    with open(json_path, 'r', encoding='utf-8') as f:
+    with open(json_path, encoding='utf-8') as f:
         review_data = json.load(f)
 
     judgments = review_data.get("judgments", [])

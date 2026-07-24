@@ -1,4 +1,6 @@
-import os, subprocess
+import os
+import subprocess
+
 from core.logging_utils import log
 
 
@@ -21,7 +23,7 @@ def enhance_docx_conversion(docx_path, output_md):
         return False
 
     try:
-        with open(output_md, 'r', encoding='utf-8') as f:
+        with open(output_md, encoding='utf-8') as f:
             md_text = f.read()
 
         enhanced = inject_format_markers(md_text, docx_path)
@@ -56,7 +58,7 @@ def _gen_clean_md(md_path):
     """从 raw.md 生成 _clean.md（去除所有格式标记和批注，保留正文文字）"""
     from shared.docx_format_enhancer import strip_format_markers
 
-    with open(md_path, 'r', encoding='utf-8') as f:
+    with open(md_path, encoding='utf-8') as f:
         text = f.read()
 
     # Step 1: 去掉【着重】【下划线】等格式标记对

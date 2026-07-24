@@ -3,11 +3,11 @@
 用于格式修正等场景：LLM 不再返回修正后的文本（可能格式再出错），
 而是直接编辑目标文件，编辑后由 Python 端重读验证。
 """
-import subprocess
 import os
-from pydantic import BaseModel, Field
-from langchain_core.tools import BaseTool
+import subprocess
 
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
 
 # ─── BashTool ───────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ class EditFileTool(BaseTool):
             return "错误：old_string 不能为空"
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 content = f.read()
         except FileNotFoundError:
             return f"错误：文件不存在 — {path}"
@@ -166,7 +166,7 @@ class FileReadTool(BaseTool):
 
     def _run(self, path: str) -> str:
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 content = f.read()
             return f"文件内容 ({len(content)} 字符):\n\n{content}"
         except Exception as e:
@@ -207,8 +207,8 @@ class FileWriteTool(BaseTool):
 
 # ─── 校对标记工具（ADR-0016） ──────────────────────────────────
 
-import threading
 import re as _re_mod
+import threading
 
 _current_file: threading.local = threading.local()
 _mark_counter: threading.local = threading.local()

@@ -4,29 +4,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+from core.base_subject import BaseSubjectApp
+from core.defaults import (
+    default_split_lecture,
+)
 from shared.sympy_tools.tools import (
-    EvaluateExpressionTool,
-    SolveEquationTool,
-    CheckEqualityTool,
-    SimplifyExpressionTool,
     BalanceChemicalEquationTool,
+    CheckEqualityTool,
+    EvaluateExpressionTool,
+    SimplifyExpressionTool,
+    SolveEquationTool,
     StoichiometryCalcTool,
 )
 from shared.web_tools import WebSearchTool
-from core.config_loader import load_config
-from core.defaults import (
-    default_split_lecture,
-    default_split_exam,
-    default_proofread_one,
-    default_collect_paper_dirs,
-)
-from core.manual_split import split_by_manual_markers
-from core.logging_utils import log
-from core.base_subject import BaseSubjectApp
-from shared.image_utils import copy_md_images
-import shutil
-import re
-from pathlib import Path
 
 
 class SubjectApp(BaseSubjectApp):
@@ -51,9 +42,9 @@ class SubjectApp(BaseSubjectApp):
             WebSearchTool(),
         ]
         if self.react_mode:
+            from shared.chemistry_tools import ChemistryIndependentSolveTool
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            from shared.chemistry_tools import ChemistryIndependentSolveTool
             # 化学 nudge 置空：自检靠 prompt 第 8 步，不依赖工具 nudge（对标 ADR-0006 决策 2）
             base.append(PlanUpdateTool(nudge_template=""))
             base.append(LocateParagraphTool())

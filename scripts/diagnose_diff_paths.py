@@ -1,18 +1,17 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """诊断：同一 diff 算法，为何测试得 ~7 条差异，真实管线得 111 条。
 
 对比两条路径（都用本地保存的 weicou_full.txt，不联网）：
   路径A — test_shidianguji_search.run_pipeline 用的 25 字手摘开头
   路径B — preprocess_for_proofread 用的整道题 clean.md
 """
-import sys
 import os
 import re
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.chinese_classics_tools import extract_excerpt_from_full, diff_characters
+from shared.chinese_classics_tools import diff_characters, extract_excerpt_from_full
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_search_results")
 PAPER = os.path.join(
@@ -50,7 +49,7 @@ diff_path("路径A（测试 run_pipeline: 25字开头 WEICOU_EXCERPT）", WEICOU
 diff_path("路径B（真实管线 preprocess_for_proofread: 整道题 clean.md）", clean_md)
 
 # 路径C：新管线 —— extract_body_segment 切正文段 + _clean_for_matching 两侧纯汉字
-from shared.chinese_classics_tools import extract_body_segment, _clean_for_matching
+from shared.chinese_classics_tools import _clean_for_matching, extract_body_segment
 
 with open(os.path.join(PAPER, "第1题", "第1题.md"), encoding="utf-8") as f:
     raw1 = f.read()

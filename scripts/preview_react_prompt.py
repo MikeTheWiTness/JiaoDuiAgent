@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """预览 ReAct 校对发送给 LLM 的完整提示词（不调用 LLM）。
 
 用 tests/_search_results 下已保存的预检索全文（*_full.txt）替代联网搜索，
@@ -11,10 +10,10 @@
     python -X utf8 tests/preview_react_prompt.py --q 4      # 只看第4题（戴胄）
     python -X utf8 tests/preview_react_prompt.py --q 1      # 只看第1题（韦凑）
 """
-import sys
-import os
 import argparse
 import importlib.util
+import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -56,12 +55,12 @@ def build_prompt_preview(q_num: int):
     q_dir = os.path.join(PAPER_DIR, f"第{q_num}题")
     q_name = f"第{q_num}题"
     target_md = os.path.join(q_dir, f"{q_name}.md")
-    with open(target_md, "r", encoding="utf-8") as f:
+    with open(target_md, encoding="utf-8") as f:
         raw_md = f.read()
 
     # 读已保存的预检索全文，monkeypatch 掉联网搜索
     full_path = os.path.join(DATA_DIR, f"{name}_full.txt")
-    with open(full_path, "r", encoding="utf-8") as f:
+    with open(full_path, encoding="utf-8") as f:
         saved_full = f.read()
 
     real_search = cc.search_original_text

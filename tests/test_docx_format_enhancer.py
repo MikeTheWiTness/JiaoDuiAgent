@@ -2,18 +2,20 @@ import os
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.logging_utils import log
+pytestmark = pytest.mark.slow
+
 
 
 def create_test_docx(output_path):
     """创建一个包含各种格式的测试 Word 文档"""
     from docx import Document
-    from docx.shared import Pt
     from docx.enum.text import WD_UNDERLINE
-    from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
 
     doc = Document()
 
@@ -135,14 +137,13 @@ def test_extract_formats():
 def test_inject_markers():
     """测试注入格式标记"""
     print("\n=== 测试 inject_format_markers ===")
-    from shared.docx_format_enhancer import inject_format_markers
 
     with tempfile.TemporaryDirectory() as tmpdir:
         docx_path = os.path.join(tmpdir, "test.docx")
         create_test_docx(docx_path)
 
         # 先用 pandoc 转换
-        from core.pandoc_utils import convert_with_pandoc, check_pandoc
+        from core.pandoc_utils import check_pandoc, convert_with_pandoc
         if not check_pandoc():
             print("⚠️ Pandoc 未安装，跳过完整转换测试")
             return
@@ -154,7 +155,7 @@ def test_inject_markers():
         ok = convert_with_pandoc(docx_path, output_md, img_dir, enhance_formats=True)
         assert ok, "Pandoc 转换应该成功"
 
-        with open(output_md, 'r', encoding='utf-8') as f:
+        with open(output_md, encoding='utf-8') as f:
             md_text = f.read()
 
         print("转换后的 Markdown 内容:")

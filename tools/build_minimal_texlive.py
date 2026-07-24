@@ -19,7 +19,6 @@ Output structure:
 
 import argparse
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -178,7 +177,7 @@ def find_fls_files(search_dir):
 def parse_fls(fls_path):
     """Parse a .fls file, return set of absolute paths from INPUT lines."""
     paths = set()
-    with open(fls_path, "r", encoding="utf-8", errors="replace") as f:
+    with open(fls_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if line.startswith("INPUT "):

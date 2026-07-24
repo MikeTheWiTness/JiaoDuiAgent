@@ -1,11 +1,10 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.manual_split import split_by_manual_markers, split_by_unit_markers, parse_unit_markers
-
+from core.manual_split import parse_unit_markers, split_by_manual_markers, split_by_unit_markers
 
 # ─── 已有的 manual split 测试（保持不变） ──────────────────────
 

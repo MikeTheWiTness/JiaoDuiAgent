@@ -7,19 +7,19 @@
     python -X utf8 tests/test_shidianguji_search.py --file   # 用本地保存的搜索结果
 """
 
-import sys
 import os
 import re
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.chinese_classics_tools import (
-    detect_text_type,
-    search_original_text,
-    extract_excerpt_from_full,
     _clean_for_matching,
     _find_best_excerpt_range,
+    detect_text_type,
     diff_characters,
+    extract_excerpt_from_full,
+    search_original_text,
 )
 from shared.shidianguji_playwright import is_playwright_available
 
@@ -66,7 +66,7 @@ def step2_search(text_type: str, text: str, use_local: bool = False):
         name = "weicou" if "韦凑" in text else "daizhou"
         path = os.path.join(DATA_DIR, f"{name}_full.txt")
         if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 original = f.read()
             print(f"  OK: 从本地加载 ({len(original)} 字)")
             return original
@@ -202,9 +202,9 @@ def test_with_local_files():
             print(f"\n  {name}: SKIP (文件不存在)")
             continue
 
-        with open(full_path, 'r', encoding='utf-8') as f:
+        with open(full_path, encoding='utf-8') as f:
             full = f.read()
-        with open(clean_path, 'r', encoding='utf-8') as f:
+        with open(clean_path, encoding='utf-8') as f:
             clean_md = f.read()
 
         print(f"\n  --- {name} ---")

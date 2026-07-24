@@ -1,11 +1,11 @@
 """测试 PlanUpdateTool：校对计划管理工具"""
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.plan_tools import PlanUpdateTool, PlanItem
+from shared.plan_tools import PlanItem, PlanUpdateTool
 
 
 class TestPlanUpdateTool(unittest.TestCase):

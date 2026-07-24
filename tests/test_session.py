@@ -4,12 +4,11 @@
 """
 import json
 import tempfile
-import os
-import time
 from pathlib import Path
+
 import pytest
 
-from shared.session import SessionManager, QuestionStatus
+from shared.session import QuestionStatus, SessionManager
 
 
 @pytest.fixture
@@ -83,7 +82,7 @@ class TestSessionManager:
         mgr.mark_completed("第1题")
 
         # 验证文件是合法 JSON
-        with open(mgr.session_file, 'r', encoding='utf-8') as f:
+        with open(mgr.session_file, encoding='utf-8') as f:
             data = json.load(f)
         assert data["questions"][0]["status"] == "completed"
 

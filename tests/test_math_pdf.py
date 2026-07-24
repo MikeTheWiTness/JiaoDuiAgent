@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """小学数学 LaTeX→PDF 独立编译测试
 
 模拟打包后的便携 TeX Live 环境，使用与 compile_to_pdf() 完全相同的
@@ -16,7 +15,6 @@ xelatex 调用逻辑，验证：
 """
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -160,7 +158,7 @@ def _compile_tex(tex_source, tex_name="test"):
 
         log_text = ""
         if os.path.isfile(log_path):
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(log_path, encoding="utf-8", errors="replace") as f:
                 log_text = f.read()
 
         if not xdv_ok:
@@ -287,7 +285,7 @@ class TestProofreadTemplate(unittest.TestCase):
         """模板基础结构（不含 paracol 内容）"""
         template_path = os.path.join(
             PROJECT_ROOT, "shared", "templates", "proofread_template.tex")
-        with open(template_path, "r", encoding="utf-8") as f:
+        with open(template_path, encoding="utf-8") as f:
             template = f.read()
 
         # 替换 {{CONTENT}} 为简单内容
@@ -305,7 +303,7 @@ class TestProofreadTemplate(unittest.TestCase):
         """paracol 双栏排版"""
         template_path = os.path.join(
             PROJECT_ROOT, "shared", "templates", "proofread_template.tex")
-        with open(template_path, "r", encoding="utf-8") as f:
+        with open(template_path, encoding="utf-8") as f:
             template = f.read()
 
         content = r"""
@@ -356,7 +354,7 @@ class TestProofreadTemplate(unittest.TestCase):
         """\corrmark 内嵌数学公式"""
         template_path = os.path.join(
             PROJECT_ROOT, "shared", "templates", "proofread_template.tex")
-        with open(template_path, "r", encoding="utf-8") as f:
+        with open(template_path, encoding="utf-8") as f:
             template = f.read()
 
         content = r"""
@@ -383,7 +381,7 @@ class TestProofreadTemplate(unittest.TestCase):
         """下划线/删除线/着重号"""
         template_path = os.path.join(
             PROJECT_ROOT, "shared", "templates", "proofread_template.tex")
-        with open(template_path, "r", encoding="utf-8") as f:
+        with open(template_path, encoding="utf-8") as f:
             template = f.read()
 
         content = r"""

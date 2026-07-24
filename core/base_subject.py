@@ -5,16 +5,16 @@ get_max_tool_loops / prompt 方法 / split 方法 / proofread_one），
 零差异方法自动继承。
 """
 import re
-import shutil
 from pathlib import Path
+
 from core.config_loader import load_config
 from core.defaults import (
     default_collect_paper_dirs,
-    default_split_exam,
     default_proofread_one,
+    default_split_exam,
 )
-from core.manual_split import split_by_manual_markers, split_by_unit_markers
 from core.logging_utils import log
+from core.manual_split import split_by_unit_markers
 from shared.image_utils import copy_md_images
 
 
@@ -166,7 +166,7 @@ class BaseSubjectApp:
         if split_mode == "rule":
             return default_split_exam(md_file, output_root, base_name, self.config)
 
-        with open(md_file, 'r', encoding='utf-8') as f:
+        with open(md_file, encoding='utf-8') as f:
             md_content = f.read()
 
         if split_mode == "none":

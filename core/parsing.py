@@ -1,4 +1,6 @@
-import os, re, json
+import json
+import os
+import re
 
 
 def _circle_to_int(ch: str) -> int | None:

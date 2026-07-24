@@ -3,26 +3,27 @@
 验证异常层级定义、分类重试策略和熔断机制。
 """
 import time
+from unittest.mock import MagicMock, patch
+
 import pytest
 import requests as req_mod
-from unittest.mock import patch, MagicMock
 
 from core.api_client import (
-    ProofreadError,
-    APITimeoutError,
-    APIRateLimitError,
+    MAX_RETRY,
     APIAuthError,
     APIBadRequestError,
+    APIRateLimitError,
+    APITimeoutError,
     FormatError,
-    ToolExecutionError,
-    _classify_error,
-    _should_retry,
-    _backoff_delay,
-    _model_supports_reasoning_effort,
-    _model_supports_images,
-    call_api,
+    ProofreadError,
     StopReason,
-    MAX_RETRY,
+    ToolExecutionError,
+    _backoff_delay,
+    _classify_error,
+    _model_supports_images,
+    _model_supports_reasoning_effort,
+    _should_retry,
+    call_api,
 )
 from core.session_context import SessionContext
 

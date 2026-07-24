@@ -1,8 +1,8 @@
 """测试 _clean.md 全链路生成（ADR 0004 决策 3 + Issue #2）"""
-import os
-import tempfile
 import re
+
 import pytest
+
 from shared.docx_format_enhancer import strip_format_markers
 
 

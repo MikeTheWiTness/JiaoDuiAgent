@@ -2,11 +2,15 @@
 
 验证：软依赖设计——Playwright 可用时提取正文，不可用时静默不可用。
 """
-import unittest
 import os
 import sys
+import unittest
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+pytestmark = pytest.mark.network
 
 
 class TestShidiangujiPlaywright(unittest.TestCase):
@@ -19,7 +23,6 @@ class TestShidiangujiPlaywright(unittest.TestCase):
                               "必须返回布尔值，不能抛异常")
 
     def test_module_imports_without_playwright_installed(self):
-        from shared import shidianguji_playwright
         self.assertTrue(True)
 
     def test_search_and_extract_returns_none_for_empty_key(self):
@@ -31,7 +34,7 @@ class TestShidiangujiPlaywright(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_extract_chapter_returns_dict_or_none(self):
-        from shared.shidianguji_playwright import is_playwright_available, extract_chapter
+        from shared.shidianguji_playwright import extract_chapter, is_playwright_available
         if not is_playwright_available():
             self.skipTest("Playwright 不可用")
         result = extract_chapter("SK0724", "1l9yzpxkqkr3b")

@@ -3,10 +3,10 @@
 验证：当目录中有多个 .md 文件时，read_md_for_unit 精确读取与目录同名的 .md。
 本文件导入 core.defaults.read_md_for_unit 真实实现进行断言。
 '''
-import unittest
 import os
 import sys
 import tempfile
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -39,7 +39,7 @@ class TestProofreadOneFileSelection(unittest.TestCase):
         '''旧逻辑：遍历目录取第一个 .md（有 bug）'''
         for f in os.listdir(q_dir):
             if f.endswith(".md"):
-                with open(os.path.join(q_dir, f), 'r', encoding='utf-8') as fm:
+                with open(os.path.join(q_dir, f), encoding='utf-8') as fm:
                     return fm.read()
         return None
 

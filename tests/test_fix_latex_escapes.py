@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """测试 core/defaults.py 的 fix_latex_escapes 函数
 
 重点验证：
@@ -9,10 +8,9 @@
 5. 嵌套/边界情况
 """
 
-import sys
 import os
+import sys
 import tempfile
-import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.defaults import fix_latex_escapes
@@ -25,7 +23,7 @@ def _run_fix(input_text):
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(input_text)
         fix_latex_escapes(tmp_path)
-        with open(tmp_path, 'r', encoding='utf-8') as f:
+        with open(tmp_path, encoding='utf-8') as f:
             return f.read()
     finally:
         os.unlink(tmp_path)

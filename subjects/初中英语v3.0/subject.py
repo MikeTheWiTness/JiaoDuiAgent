@@ -4,20 +4,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.config_loader import load_config
+
+from core.base_subject import BaseSubjectApp
 from core.defaults import (
     default_split_lecture,
-    default_split_exam,
-    default_proofread_one,
-    default_collect_paper_dirs,
 )
-from core.manual_split import split_by_manual_markers
-from core.logging_utils import log
-from core.base_subject import BaseSubjectApp
-from shared.image_utils import copy_md_images
-import shutil
-import re
-from pathlib import Path
 
 
 class SubjectApp(BaseSubjectApp):

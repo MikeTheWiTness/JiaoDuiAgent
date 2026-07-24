@@ -6,8 +6,9 @@
 - 恰好 1 项 in_progress；全部 completed 时追加自查 nudge
 """
 from typing import Literal
-from pydantic import BaseModel, Field
+
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
 
 
 class PlanItem(BaseModel):

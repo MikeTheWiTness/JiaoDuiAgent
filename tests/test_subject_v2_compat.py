@@ -1,9 +1,7 @@
-import unittest
-import sys
-import os
 import importlib.util
-import tempfile
-import shutil
+import os
+import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -97,7 +95,7 @@ class TestSubjectAppMethodSignatures(unittest.TestCase):
 class TestAppCleanPathHack(unittest.TestCase):
     def test_app_py_no_path_hack(self):
         app_path = os.path.join(SUBJECT_DIR, "app.py")
-        with open(app_path, 'r', encoding='utf-8') as f:
+        with open(app_path, encoding='utf-8') as f:
             content = f.read()
         self.assertNotIn("replace(r'subjects", content)
         self.assertNotIn("sys.path[0]", content)

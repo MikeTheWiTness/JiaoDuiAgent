@@ -1,6 +1,6 @@
 """校对会话上下文 —— 封装 API 配置，消除参数传递链。"""
-from dataclasses import dataclass, field
 import threading
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

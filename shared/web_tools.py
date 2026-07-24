@@ -6,15 +6,14 @@
 - WebSearchTool: 搜索互联网获取结果列表，支持多后端切换
 """
 
-import re
 import json
-import requests
+import re
 from html import unescape as _html_unescape
 from typing import Any
 
+import requests
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
-
 
 # ============================================================
 # HTML 文本提取（共用）

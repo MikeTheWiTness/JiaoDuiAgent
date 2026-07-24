@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """测试 ADR-0020 新增/修改的函数：normalize_caret_tilde、注入跳过、上下标清洗。
 
 覆盖：
@@ -9,14 +8,12 @@
 5. _MATH_ONLY_RE — sim 命令防御性包裹
 """
 
-import sys
 import os
+import sys
 import tempfile
-import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.defaults import normalize_caret_tilde, post_process_md_zw
-
 
 # ═══════════════════════════════════════════════════════════════
 # normalize_caret_tilde 纯函数测试
@@ -75,10 +72,10 @@ class TestNormalizeCaretTildeEscapes:
 
     def test_escaped_then_superscript(self):
         r"""\^a^ — 字面 ^ 后恰好有 ^a^ 上标模式。
-        
+
         实际行为：step 2 先运行，此时 \^ 处 lookbehind 跳过，末位 ^ 后无内容无法形成匹配。
         step 4 还原 \^ → ^，结果为 ^a^（未转为 <上标>）。
-        
+
         这是正确行为——\^ 是 pandoc 对字面脱字号的转义，不应触发上标转换。
         """
         result = normalize_caret_tilde(r"\^a^")
@@ -163,7 +160,6 @@ class TestInjectMarkersSkipSupSub:
         inject 不应再注入——但即使尝试，avoidance 逻辑也应跳过已标记区域。
         本测试验证 inject 不会破坏已有的 <上标> 标记。
         """
-        from shared.docx_format_enhancer import inject_format_markers
 
         # 构造一个简单 docx（不含 superscript 格式），验证空输入不崩溃
         # inject 需要实际 docx 文件，此处仅验证无异常
@@ -244,7 +240,7 @@ class TestMathOnlyReSim:
 
     def test_sim_in_text_only_context(self):
         r"""_MATH_ONLY_RE 仅在文本模式参数中使用，不处理 $...$ 内命令。
-        
+
         实际调用链：corrmark 的 text_safe 路径对已剥离 $ 的纯文本应用此正则，
         因此 \sim 在文本中出现时才被包裹。数学模式内的 \sim 不经过此路径。
         """
@@ -456,7 +452,7 @@ class TestPostProcessMdZwIntegration:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write("速度v^2^和时间t~0~\n")
             post_process_md_zw(tmp_path)
-            with open(tmp_path, 'r', encoding='utf-8') as f:
+            with open(tmp_path, encoding='utf-8') as f:
                 result = f.read()
             assert "v<上标>2</上标>" in result
             assert "t<下标>0</下标>" in result
@@ -477,7 +473,7 @@ class TestPostProcessMdZwIntegration:
             mtime_after = os.path.getmtime(tmp_path)
             # 内容没变 → 不应重写 → mtime 不变
             assert mtime_before == mtime_after
-            with open(tmp_path, 'r', encoding='utf-8') as f:
+            with open(tmp_path, encoding='utf-8') as f:
                 assert f.read() == content
         finally:
             os.unlink(tmp_path)

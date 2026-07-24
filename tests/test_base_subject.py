@@ -2,12 +2,12 @@
 
 验证零差异方法在继承后的行为正确性。
 """
-import os
 import json
+import os
 import tempfile
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from pathlib import Path
 
 from core.base_subject import BaseSubjectApp
 

@@ -1,15 +1,15 @@
-import unittest
-import sys
 import os
-import tempfile
 import shutil
+import sys
+import tempfile
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.review_latex import (
-    generate_review_latex,
     _escape_text,
     _replace_markers_with_circled_numbers,
+    generate_review_latex,
 )
 
 
@@ -90,7 +90,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
 
         generate_review_latex(md_path, json_path, out_path, title="测试标题")
 
-        with open(out_path, 'r', encoding='utf-8') as f:
+        with open(out_path, encoding='utf-8') as f:
             tex = f.read()
         self.assertIn("测试标题", tex)
 
@@ -102,7 +102,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
 
         generate_review_latex(md_path, json_path, out_path, title="测试")
 
-        with open(out_path, 'r', encoding='utf-8') as f:
+        with open(out_path, encoding='utf-8') as f:
             tex = f.read()
         self.assertIn("这是原文内容", tex)
 
@@ -119,7 +119,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
 
         generate_review_latex(md_path, json_path, out_path, title="测试")
 
-        with open(out_path, 'r', encoding='utf-8') as f:
+        with open(out_path, encoding='utf-8') as f:
             tex = f.read()
         self.assertIn("批注1", tex)
         self.assertIn("正确", tex)
@@ -136,7 +136,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
 
         generate_review_latex(md_path, json_path, out_path, title="测试")
 
-        with open(out_path, 'r', encoding='utf-8') as f:
+        with open(out_path, encoding='utf-8') as f:
             tex = f.read()
         self.assertIn("补充发现", tex)
         self.assertIn("第一处补充", tex)
@@ -157,7 +157,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
 
         generate_review_latex(md_path, json_path, out_path, title="测试")
 
-        with open(out_path, 'r', encoding='utf-8') as f:
+        with open(out_path, encoding='utf-8') as f:
             tex = f.read()
         self.assertIn("正确", tex)
         self.assertIn("有误", tex)
@@ -176,7 +176,7 @@ class TestGenerateReviewLatex(unittest.TestCase):
 
         generate_review_latex(md_path, json_path, out_path, title="测试")
 
-        with open(out_path, 'r', encoding='utf-8') as f:
+        with open(out_path, encoding='utf-8') as f:
             tex = f.read()
         self.assertIn("①", tex)
 

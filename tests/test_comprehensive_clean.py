@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """测试 core/defaults.py 的 comprehensive_clean 函数
 
 重点验证：
@@ -9,13 +8,11 @@
 5. 表格管道符清理
 """
 
-import sys
 import os
-import pytest
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.defaults import comprehensive_clean
-
 
 # ============================================================
 # 基础功能
@@ -488,7 +485,9 @@ class TestEdgeCases:
 # 出题意图清理（clean_intent_markers）
 # ============================================================
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.defaults import clean_intent_markers
 
@@ -780,7 +779,7 @@ class TestIntentMarkerCleanup:
 
     def test_get_intent_problem_markers_default_only(self):
         """无 config 时返回纯默认常量"""
-        from core.defaults import get_intent_problem_markers, DEFAULT_INTENT_PROBLEM_MARKERS
+        from core.defaults import DEFAULT_INTENT_PROBLEM_MARKERS, get_intent_problem_markers
         result = get_intent_problem_markers(config=None)
         assert result == DEFAULT_INTENT_PROBLEM_MARKERS
 

@@ -8,6 +8,7 @@
 """
 import os
 import re
+
 from core.logging_utils import log
 
 
@@ -82,9 +83,10 @@ def _bash_format_fix(file_path: str, issues_desc: str,
         修正后的文件内容（str），失败时返回 None
     """
     import traceback
-    from shared.bash_tool import BashTool, FileReadTool, FileWriteTool
+
     from core.api_client import call_api
     from core.session_context import SessionContext
+    from shared.bash_tool import BashTool, FileReadTool, FileWriteTool
 
     file_dir = os.path.dirname(os.path.abspath(file_path))
     file_name = os.path.basename(file_path)
@@ -147,7 +149,7 @@ def _bash_format_fix(file_path: str, issues_desc: str,
 
     # 从文件重读修正后的内容
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             fixed_content = f.read()
         log(f"   📥 [bash修正] 文件已重读，长度 {len(fixed_content)} 字符")
         return fixed_content

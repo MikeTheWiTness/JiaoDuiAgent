@@ -5,8 +5,6 @@
 """
 import json
 import os
-from pathlib import Path
-from typing import Optional
 
 
 def validate_config(subject_dir) -> dict:
@@ -22,7 +20,7 @@ def validate_config(subject_dir) -> dict:
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         raw = json.load(f)
 
     errors = []
@@ -84,7 +82,7 @@ def validate_config(subject_dir) -> dict:
     agent_file = os.path.join(subject_dir, "agent_prompt.json")
     if os.path.exists(agent_file):
         try:
-            with open(agent_file, "r", encoding="utf-8") as f:
+            with open(agent_file, encoding="utf-8") as f:
                 agent_data = json.load(f)
             config["agent_prompt_lines"] = agent_data.get("agent_prompt_lines", [])
         except Exception as e:

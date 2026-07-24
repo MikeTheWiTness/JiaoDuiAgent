@@ -1,5 +1,7 @@
-import sys, os, importlib.util
+import importlib.util
+import os
 import shutil
+import sys
 
 
 def _get_resource_path(relative_path):

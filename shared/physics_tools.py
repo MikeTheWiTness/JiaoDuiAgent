@@ -11,10 +11,9 @@ IndependentSolveTool：
 import json
 import os
 import threading
-import requests
 from typing import Any
-from pathlib import Path
 
+import requests
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -210,6 +209,7 @@ class IndependentSolveTool(BaseTool):
         except Exception:
             # 落盘失败不影响解题主流程，但需记录以便排查
             import traceback
+
             from core.logging_utils import log
             log(f"   ⚠️ _物理求解.md 落盘失败: {traceback.format_exc()}")
 

@@ -1,10 +1,15 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.smart_split import parse_problem_tags, smart_split_with_callable, smart_split, SMART_SPLIT_PROMPT
+from shared.smart_split import (
+    SMART_SPLIT_PROMPT,
+    parse_problem_tags,
+    smart_split,
+    smart_split_with_callable,
+)
 
 
 class TestParseProblemTags(unittest.TestCase):

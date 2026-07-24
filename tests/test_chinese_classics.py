@@ -1,15 +1,19 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+pytestmark = pytest.mark.network
+
 from shared.chinese_classics_tools import (
+    build_reference_section,
     detect_text_type,
     diff_characters,
-    build_reference_section,
-    search_original_text,
     preprocess_for_proofread,
+    search_original_text,
 )
 
 

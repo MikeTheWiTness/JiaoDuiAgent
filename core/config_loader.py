@@ -1,4 +1,6 @@
-import os, re, json, logging
+import logging
+import re
+
 from core.config_schema import validate_config
 
 _log = logging.getLogger(__name__)

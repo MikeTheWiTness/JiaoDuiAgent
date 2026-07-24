@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext, filedialog, messagebox
+from tkinter import scrolledtext, ttk
 
 
 class LogPanel:

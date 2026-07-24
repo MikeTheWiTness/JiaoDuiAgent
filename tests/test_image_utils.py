@@ -2,14 +2,14 @@
 
 验证 copy_md_images 在各类场景下的行为正确性。
 """
-import os
-import tempfile
 import shutil
-from pathlib import Path
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
+
 import pytest
 
-from shared.image_utils import copy_md_images, ImageCopyResult
+from shared.image_utils import ImageCopyResult, copy_md_images
 
 
 @dataclass

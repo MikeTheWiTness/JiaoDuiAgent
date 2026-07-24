@@ -1,8 +1,8 @@
-import unittest
 import json
 import os
 import sys
 import tempfile
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.parsing import save_proofread_json
@@ -21,7 +21,7 @@ class TestSaveProofreadJson(unittest.TestCase):
         return os.path.join(self.q_dir, "_校对数据.json")
 
     def _load_json(self):
-        with open(self._json_path(), "r", encoding="utf-8") as f:
+        with open(self._json_path(), encoding="utf-8") as f:
             return json.load(f)
 
     # ── 内联标记格式的校对文本 ─────────────────────────────────

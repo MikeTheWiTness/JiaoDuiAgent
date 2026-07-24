@@ -14,10 +14,9 @@
 import json
 import os
 import uuid
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
 
 
 class QuestionStatus(str, Enum):
@@ -134,7 +133,7 @@ class SessionManager:
         self.session_file = self.session_dir / f"session_{session_id}.json"
         if not self.session_file.exists():
             return False
-        with open(self.session_file, "r", encoding="utf-8") as f:
+        with open(self.session_file, encoding="utf-8") as f:
             self._data = json.load(f)
         return True
 
@@ -150,7 +149,7 @@ class SessionManager:
         unfinished = []
         for f in sorted(session_dir.glob("session_*.json")):
             try:
-                with open(f, "r", encoding="utf-8") as fh:
+                with open(f, encoding="utf-8") as fh:
                     data = json.load(fh)
                 questions = data.get("questions", [])
                 pending = [

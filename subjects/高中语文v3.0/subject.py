@@ -6,20 +6,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 联网搜索工具已禁用，仅保留 pre_proofread_hook 中的预搜索阶段
 # from shared.web_tools import WebSearchTool, WebFetchTool
-from core.config_loader import load_config
+from core.base_subject import BaseSubjectApp
 from core.defaults import (
     default_split_lecture,
-    default_split_exam,
-    default_proofread_one,
-    default_collect_paper_dirs,
 )
-from core.manual_split import split_by_manual_markers, split_by_unit_markers
 from core.logging_utils import log
-from core.base_subject import BaseSubjectApp
-import shutil
-import re
-from pathlib import Path
-from shared.image_utils import copy_md_images
+from core.manual_split import split_by_unit_markers
 
 
 class SubjectApp(BaseSubjectApp):
@@ -117,7 +109,7 @@ class SubjectApp(BaseSubjectApp):
         if split_mode == "rule":
             return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
 
-        with open(md_file, 'r', encoding='utf-8') as f:
+        with open(md_file, encoding='utf-8') as f:
             md_content = f.read()
 
         # 预清洗：去除装饰图片（对齐高中历史）

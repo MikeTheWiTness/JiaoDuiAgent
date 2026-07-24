@@ -1,9 +1,9 @@
 """text nav tools"""
-import re
 import threading
 from typing import Optional
-from pydantic import BaseModel, Field
+
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
 
 _thread_local = threading.local()
 

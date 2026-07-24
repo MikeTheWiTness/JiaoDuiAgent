@@ -2,12 +2,16 @@
 
 验证：文言文校对时自动从识典提取原文 → 截取节选 → diff → 注入 prompt。
 """
-import unittest
-import sys
 import os
 import re
+import sys
+import unittest
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+pytestmark = pytest.mark.e2e
 
 
 class TestE2EShidiangujiIntegration(unittest.TestCase):
@@ -15,7 +19,7 @@ class TestE2EShidiangujiIntegration(unittest.TestCase):
 
     def test_search_uses_first_10_chars(self):
         """搜索关键词应只取前 10 个汉字"""
-        from shared.chinese_classics_tools import _strip_leadin, _clean_annotations
+        from shared.chinese_classics_tools import _clean_annotations, _strip_leadin
 
         md_text = (
             "阅读下面的文言文，完成1-6题。"
@@ -57,7 +61,7 @@ class TestE2EShidiangujiIntegration(unittest.TestCase):
 
     def test_extract_excerpt_and_diff_integration(self):
         """识典全文 + 节选 → 精确截取 → diff 报告"""
-        from shared.chinese_classics_tools import extract_excerpt_from_full, diff_characters
+        from shared.chinese_classics_tools import diff_characters, extract_excerpt_from_full
 
         full = (
             "韦凑字彦宗，京兆万年人。祖叔谐，贞观中为库部郎中。"

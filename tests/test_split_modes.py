@@ -1,9 +1,9 @@
-import unittest
-import sys
-import os
-import tempfile
-import shutil
 import importlib.util
+import os
+import shutil
+import sys
+import tempfile
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

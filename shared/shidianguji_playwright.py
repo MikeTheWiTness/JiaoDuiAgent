@@ -6,8 +6,8 @@
 - wait_until="domcontentloaded"（不能用 networkidle——统计心跳导致超时）
 - 等 article.chapter-reader p 出现
 """
-import re
 import logging
+import re
 
 _log = logging.getLogger(__name__)
 
@@ -136,6 +136,7 @@ def _search_detail_url(keywords, timeout=30000):
         str: "/book/xxx/chapter/xxx" 路径，或 None
     """
     import urllib.parse
+
     import requests
 
     search_url = f"https://www.shidianguji.com/search/{urllib.parse.quote(keywords)}"

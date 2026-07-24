@@ -11,13 +11,11 @@ ChemistryIndependentSolveTool：
 import json
 import os
 import threading
-import requests
 from typing import Any
-from pathlib import Path
 
+import requests
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
-
 
 # ---- 化学式解析（canonical 实现，与 sympy_tools/templates.py 内联版本保持同步） ----
 
@@ -259,6 +257,7 @@ class ChemistryIndependentSolveTool(BaseTool):
         except Exception:
             # 落盘失败不影响解题主流程，但需记录以便排查
             import traceback
+
             from core.logging_utils import log
             log(f"   ⚠️ _化学求解.md 落盘失败: {traceback.format_exc()}")
 

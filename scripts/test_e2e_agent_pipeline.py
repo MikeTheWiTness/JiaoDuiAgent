@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """端到端测试：模拟 agent 收到前置参考后的完整校对流程。
 
 将搜索 → 节选 → diff 的结果组装为 agent 输入，
@@ -21,8 +20,8 @@
     python -X utf8 tests/test_e2e_agent_pipeline.py --q 3
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -51,16 +50,16 @@ def build_test_input(q_dir: str, q_name: str, api_url: str, api_key: str, model:
 
     返回 (system_prompt, md_content, q_title, has_reference)
     """
+    from core.defaults import _strip_search_from_prompt
     from core.logging_utils import log
     from shared.chinese_classics_tools import preprocess_for_proofread
-    from core.defaults import _strip_search_from_prompt
 
     # ── 1. 加载题目原始 md ──
     target_md = os.path.join(q_dir, f"{q_name}.md")
     if not os.path.exists(target_md):
         raise FileNotFoundError(f"题目文件不存在: {target_md}")
 
-    with open(target_md, "r", encoding="utf-8") as f:
+    with open(target_md, encoding="utf-8") as f:
         raw_md = f.read()
 
     # ── 2. 前置处理：搜索 + 节选 + diff ──

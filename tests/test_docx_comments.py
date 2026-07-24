@@ -1,18 +1,17 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.docx_comments import (
-    parse_comments_xml,
     extract_comment_anchors,
-    insert_comments_into_md,
-    insert_comments_from_docx,
-    inject_comment_placeholders,
-    replace_comment_placeholders,
-    normalize_text,
     fuzzy_insert_comment,
+    inject_comment_placeholders,
+    insert_comments_into_md,
+    normalize_text,
+    parse_comments_xml,
+    replace_comment_placeholders,
 )
 
 
@@ -159,8 +158,8 @@ class TestExtractCommentsToMd(unittest.TestCase):
         self.assertTrue(callable(extract_comments_to_md))
 
     def test_nonexistent_file_returns_false(self):
+
         from shared.docx_comments import extract_comments_to_md
-        import tempfile
         result = extract_comments_to_md("/nonexistent/path.docx", "/tmp/out.md")
         self.assertFalse(result)
 

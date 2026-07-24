@@ -3,10 +3,8 @@
 验证全局状态 _current_text 在线程并发下不会互相污染。
 """
 import threading
-import time
-import pytest
-from shared.text_nav_tools import set_current_text, LocateParagraphTool, ReadSectionTool
 
+from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool, set_current_text
 
 TEXT_A = """第一段 这是题目A的内容
 

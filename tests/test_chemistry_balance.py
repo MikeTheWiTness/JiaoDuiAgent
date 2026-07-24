@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """测试化学方程式配平工具的公式解析能力
 
 重点验证：
@@ -8,20 +7,20 @@
 4. 配平结果正确性
 """
 
-import sys
-import os
 import json
+import os
+import sys
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.chemistry_tools import parse_chemical_formula
-
 # ============================================================
 # 单元测试：_parse_formula 的提取版（直接测试解析逻辑）
 # ============================================================
-
 import re
+
+from shared.chemistry_tools import parse_chemical_formula
 
 
 def _parse_formula_v1(f):

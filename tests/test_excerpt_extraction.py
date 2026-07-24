@@ -1,6 +1,8 @@
 """测试 difflib 节选精确截取算法（ADR 0004 决策 2 + Issue #4）"""
+import os
+import re
+import sys
 import unittest
-import sys, os, re, difflib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

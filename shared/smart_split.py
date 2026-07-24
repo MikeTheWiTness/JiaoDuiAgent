@@ -1,10 +1,9 @@
 import re
-import os
 from pathlib import Path
-from core.logging_utils import log
-from core.api_client import call_api
-from core.manual_split import parse_unit_markers
 
+from core.api_client import call_api
+from core.logging_utils import log
+from core.manual_split import parse_unit_markers
 
 SMART_SPLIT_PROMPT = """你是专业的语文试卷结构分析专家。请在给定的文档原文中，用 ###### 单元开始 ###### 和 ###### 单元结束 ###### 标记每个完整的单元。
 

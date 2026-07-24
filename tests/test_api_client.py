@@ -1,11 +1,8 @@
 """测试 call_api 核心改造：StopReason、压缩历史、返回值扩展"""
-import pytest
 from core.api_client import (
     StopReason,
     _compress_history,
     _is_empty_or_duplicate,
-    tool_to_openai,
-    execute_tool,
 )
 
 

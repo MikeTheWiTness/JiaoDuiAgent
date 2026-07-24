@@ -1,9 +1,9 @@
 """ADR-0012 Issue 6：配置 Schema 验证测试"""
 import json
 import tempfile
-import os
-import pytest
 from pathlib import Path
+
+import pytest
 
 from core.config_schema import validate_config
 

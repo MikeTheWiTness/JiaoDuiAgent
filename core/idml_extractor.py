@@ -6,10 +6,10 @@
 3. 按 Story 的起始页面排序，保证内容顺序正确
 4. 过滤无用内容（页码、装饰文字等）
 """
-import zipfile
-import xml.etree.ElementTree as ET
 import os
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 
@@ -102,11 +102,11 @@ def _get_story_positions(z, spread_files, story_data):
     def _iter_with_parent_transform(elem, parent_tx=0.0, parent_ty=0.0):
         """递归遍历元素，累加父元素的变换。"""
         tag = _get_tag(elem)
-        
+
         tx, ty = _parse_transform(elem.get('ItemTransform', ''))
         abs_tx = parent_tx + tx
         abs_ty = parent_ty + ty
-        
+
         if tag == 'TextFrame':
             story_id = elem.get('ParentStory', '')
             if story_id and story_id in story_data:
@@ -121,7 +121,7 @@ def _get_story_positions(z, spread_files, story_data):
                     'x': abs_tx,
                     'y': abs_ty,
                 }
-        
+
         for child in elem:
             if isinstance(child.tag, str):
                 yield from _iter_with_parent_transform(child, abs_tx, abs_ty)
@@ -149,7 +149,7 @@ def _get_story_positions(z, spread_files, story_data):
         for tf_info in _iter_with_parent_transform(sp_root):
             tx = tf_info['x']
             ty = tf_info['y']
-            
+
             page_name = None
             for page in pages:
                 if (page['x'] <= tx < page['x'] + page['w'] and
@@ -193,10 +193,10 @@ def _page_sort_key(page_name):
     m = re.search(r'(\d+)', name)
     if not m:
         return (9999, 9999)
-    
+
     num = int(m.group(1))
     has_leading_zero = name.strip().startswith('0') or (len(m.group(1)) >= 3)
-    
+
     if has_leading_zero:
         return (0, num)
     else:
@@ -221,17 +221,17 @@ def _annotation_sort_priority(story_id, story_data):
 
 def _sort_stories(story_start, story_data, y_bin_size=60.0):
     """对 story 进行智能排序：按页 → 按 y 分箱 → 正文在前批注在后 → 按 x。
-    
+
     Args:
         story_start: 每个 story 的起始位置信息
         story_data: 每个 story 的段落数据
         y_bin_size: y 坐标分箱大小（像素），同一行内的内容放在一起
-    
+
     Returns:
         排序后的 (story_id, start_info) 列表
     """
     items = list(story_start.items())
-    
+
     # 先按页分组
     pages = {}
     for story_id, info in items:
@@ -239,19 +239,19 @@ def _sort_stories(story_start, story_data, y_bin_size=60.0):
         if page not in pages:
             pages[page] = []
         pages[page].append((story_id, info))
-    
+
     result = []
     # 按页排序
     for page_name in sorted(pages.keys(), key=_page_sort_key):
         page_items = pages[page_name]
-        
+
         # 找出 y 范围
         y_values = [info['y'] for _, info in page_items]
         if not y_values:
             continue
         y_min = min(y_values)
         y_max = max(y_values)
-        
+
         # 按 y 分箱
         bins = {}
         for story_id, info in page_items:
@@ -259,7 +259,7 @@ def _sort_stories(story_start, story_data, y_bin_size=60.0):
             if bin_key not in bins:
                 bins[bin_key] = []
             bins[bin_key].append((story_id, info))
-        
+
         # 每个分箱内：正文在前，批注在后；同类型按 x 排序
         for bin_key in sorted(bins.keys()):
             bin_items = bins[bin_key]
@@ -269,7 +269,7 @@ def _sort_stories(story_start, story_data, y_bin_size=60.0):
                 item[1]['x']
             ))
             result.extend(bin_items)
-    
+
     return result
 
 
@@ -279,12 +279,12 @@ def _classify_heading(text, style):
     """
     if not style:
         return None
-    
+
     if _is_annotation_style(style):
         return None
-    
+
     style_lower = style.lower()
-    
+
     if style in ('第一讲', '讲内容'):
         return 1
     if style.startswith('（一）') or style.startswith('(一)'):
@@ -293,7 +293,7 @@ def _classify_heading(text, style):
         return 3
     if '标题' in style:
         return 3
-    
+
     return None
 
 
@@ -302,22 +302,22 @@ def _is_useless(text, style):
     stripped = text.strip()
     if not stripped:
         return True
-    
+
     if len(stripped) <= 3 and re.match(r'^\d+$', stripped):
         return True
-    
+
     if style == 'NormalParagraphStyle' and stripped in (
         '600字', '800字', '500字', '400字', '300字', '200字'
     ):
         return True
-    
+
     if len(stripped) <= 2 and re.match(r'^[①②③④⑤⑥⑦⑧⑨⑩]+$', stripped):
         return True
-    
+
     if style and '标题' in style and len(stripped) <= 2:
         if re.match(r'^[①②③④⑤⑥⑦⑧⑨⑩]+$', stripped):
             return True
-    
+
     return False
 
 
@@ -325,12 +325,12 @@ def _format_paragraph(text, style):
     """将段落格式化为 Markdown。"""
     if not style:
         return text
-    
+
     heading_level = _classify_heading(text, style)
     if heading_level:
         prefix = '#' * (heading_level + 1)
         return f'{prefix} {text}'
-    
+
     if _is_annotation_style(style):
         lines = text.split('\n')
         non_empty = [line.strip() for line in lines if line.strip()]
@@ -343,24 +343,24 @@ def _format_paragraph(text, style):
             else:
                 formatted.append(f'>    {line}')
         return '\n'.join(formatted)
-    
+
     if style in ('注释内容', '出处'):
         lines = text.split('\n')
         return '\n'.join('> ' + line for line in lines)
-    
+
     if '表格' in style and ('宋' in style or '楷' in style or '加粗' in style):
         return f'`{text}`'
-    
+
     return text
 
 
 def extract_idml_to_markdown(idml_path, output_md_path=None):
     """从 IDML 文件提取文本并生成 Markdown。
-    
+
     Args:
         idml_path: IDML 文件路径
         output_md_path: 输出 Markdown 文件路径（可选）
-    
+
     Returns:
         dict: 包含 markdown 文本、页数、段落数等信息
     """
