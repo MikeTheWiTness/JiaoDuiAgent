@@ -9,12 +9,27 @@ import json
 import os
 import re
 import sys
+from dataclasses import dataclass, field
 
 from shared.review_mode import extract_comments_from_md
 
 _counter = itertools.count(1)
 
 _TEMPLATE_FILE = None
+
+
+# ---- 渲染管线状态（ADR-0024 C1） ----
+
+@dataclass
+class _RenderState:
+    """build_paracol_content 渲染管线的中间状态。"""
+    md_content: str
+    corrections: list = field(default_factory=list)
+    comments: list | None = None
+    placeholder_map: dict = field(default_factory=dict)
+    numbered: list = field(default_factory=list)
+    has_inline: bool = False
+    marked: str = ""
 
 
 def _get_template_file():
@@ -1004,97 +1019,124 @@ def build_paracol_content(md_content: str, corrections: list[dict],
                           review_judgments: list[dict] | None = None,
                           review_supplements: list[str] | None = None,
                           comments: list[dict] | None = None) -> str:
+    """生成 paracol 双栏 LaTeX 内容（pipeline 编排，ADR-0024 C1）。"""
     corrections = corrections or []
     review_judgments = review_judgments or []
     review_supplements = review_supplements or []
 
-    # 1. 提取 Word 批注（优先用外部传入的，否则从 md_content 中提取）
-    #    当 marked_text 存在时，LLM 可能丢弃了批注标记，此时用原始 md 的批注
-    # 0. 剥离核查用的思考内容（仅出现在 _校对报告.md 中，不应进入 PDF）
-    md_content = re.sub(r'\n*---\n## 📋 模型思考过程.*$', '', md_content, flags=re.DOTALL)
-    # 工具调用日志同样包含未转义的 JSON 片段，不应进入 PDF
-    md_content = re.sub(r'\n*---\n## 📋 工具调用日志.*$', '', md_content, flags=re.DOTALL)
+    state = _RenderState(md_content=md_content, corrections=corrections,
+                         comments=comments)
 
-    # 0.1 清理 Pandoc 原生 span 语法: [text]{.underline} → text
-    md_content = re.sub(r'\[([^\]]+)\]\{\.(?:underline|smallcaps|center|rtl|ltr|mark)\}', r'\1', md_content)
+    # Pipeline：每步就地修改 _RenderState
+    _pipeline = [
+        ("strip_metadata", _step_strip_metadata),
+        ("clean_markup", _step_clean_markup),
+        ("init_comments", _step_init_comments),
+        ("extract_media", _step_extract_media),
+        ("fix_brackets", _step_fix_brackets),
+        ("detect_inline", _step_detect_inline),
+        ("convert_headings", _step_convert_headings),
+        ("format_and_escape", _step_format_and_escape),
+        ("apply_markers", _step_apply_markers),
+    ]
+    for _name, _fn in _pipeline:
+        _fn(state)
+
+    # 构建 paracol 输出
+    return _build_paracol_output(state, tool_calls, review_judgments, review_supplements)
+
+
+# ---- Pipeline Steps ----
+
+def _step_strip_metadata(state: _RenderState):
+    """剥离核查用的思考内容和工具调用日志。"""
+    state.md_content = re.sub(r'\n*---\n## 📋 模型思考过程.*$', '', state.md_content, flags=re.DOTALL)
+    state.md_content = re.sub(r'\n*---\n## 📋 工具调用日志.*$', '', state.md_content, flags=re.DOTALL)
+
+
+def _step_clean_markup(state: _RenderState):
+    """清理 Pandoc 原生 span 语法、修复破损 XML 标签、剥离反斜杠转义。"""
+    # 0.1 清理 Pandoc 原生 span 语法
+    state.md_content = re.sub(
+        r'\[([^\]]+)\]\{\.(?:underline|smallcaps|center|rtl|ltr|mark)\}', r'\1', state.md_content)
     # 0.2 修复破损 XML 标签
-    # 格式标签：允许标签名后有额外字符（如 < 下划线 7 > → <下划线>）
-    md_content = re.sub(
+    state.md_content = re.sub(
         r'<\s*(/?)\s*(下划线|着重|波浪线|删除线|双删除线|下标|上标)\s*[^>]*>',
-        r'<\1\2>', md_content)
-    # 嵌套标签：仅去空格（如 </改 > → </改>，< 原 > → <原>）
-    md_content = re.sub(
-        r'<\s*(/?)\s*(改|原)\s*>',
-        r'<\1\2>', md_content)
-    # 批注标签：去空格但保留 id=N（如 <批注 id = 7 > → <批注 id=7>）
-    md_content = re.sub(
-        r'<\s*批注\s+id\s*=\s*(\d+)\s*>', r'<批注 id=\1>', md_content)
-    md_content = re.sub(
-        r'<\s*/\s*批注\s*>', r'</批注>', md_content)
-    # 修复 </批注> 后面的多余 > 字符
-    md_content = re.sub(r'</批注>\s*>', '</批注>', md_content)
+        r'<\1\2>', state.md_content)
+    state.md_content = re.sub(r'<\s*(/?)\s*(改|原)\s*>', r'<\1\2>', state.md_content)
+    state.md_content = re.sub(r'<\s*批注\s+id\s*=\s*(\d+)\s*>', r'<批注 id=\1>', state.md_content)
+    state.md_content = re.sub(r'<\s*/\s*批注\s*>', r'</批注>', state.md_content)
+    state.md_content = re.sub(r'</批注>\s*>', '</批注>', state.md_content)
+    # 0.3 剥离 Markdown 反斜杠转义
+    state.md_content = state.md_content.replace(r'\.', '.')
+    state.md_content = state.md_content.replace(r'\_', '_')
+    state.md_content = state.md_content.replace(r'\*', '*')
+    state.md_content = state.md_content.replace(r'\#', '#')
+    state.md_content = state.md_content.replace(r'\[', '[')
+    state.md_content = state.md_content.replace(r'\]', ']')
+    state.md_content = state.md_content.replace(r'\"', '"')
 
-    # 0.3 剥离 Markdown 反斜杠转义（\. → . 、\_ → _ 等），
-    # 避免后续 _escape_text 把 \ 双重转义为 \textbackslash。
-    # 只剥离反斜杠后跟标点字符的情况，保留 \textbf 等 LaTeX 命令。
-    # 分两步：先用 str.replace 处理高频场景（\. 和 \_），再用正则处理其余标点。
-    md_content = md_content.replace(r'\.', '.')
-    md_content = md_content.replace(r'\_', '_')
-    md_content = md_content.replace(r'\*', '*')
-    md_content = md_content.replace(r'\#', '#')
-    # 剥离 Pandoc 单边方括号转义
-    md_content = md_content.replace(r'\[', '[')
-    md_content = md_content.replace(r'\]', ']')
-    # 剥离 Pandoc 双引号转义（\" → "），避免 PDF 中显示为 \" 字面值
-    md_content = md_content.replace(r'\"', '"')
 
-    if comments is None:
-        comments = extract_comments_from_md(md_content)
+def _step_init_comments(state: _RenderState):
+    """提取 Word 批注（优先用外部传入的，否则从 md_content 中提取）。"""
+    if state.comments is None:
+        state.comments = extract_comments_from_md(state.md_content)
 
-    md_processed, placeholder_map = _extract_images(md_content)
 
-    # 2. 将中文双引号转为 fallbacksymbols 占位符（必须在 _process_inline_markers
-    #    和 _escape_preserve_math 之前），避免后续在 LaTeX 命令内部误包裹 "。
-    md_processed = _extract_quotes_to_placeholders(md_processed, placeholder_map)
+def _step_extract_media(state: _RenderState):
+    """提取图片、中文双引号、批注为占位符。"""
+    state.md_content, state.placeholder_map = _extract_images(state.md_content)
+    state.md_content = _extract_quotes_to_placeholders(state.md_content, state.placeholder_map)
+    state.md_content = _extract_comments_to_placeholders(
+        state.md_content, state.comments or [], state.placeholder_map)
 
-    # 3. 将批注替换为上标圆圈数字占位符（必须在 escaping 之前完成）
-    md_processed = _extract_comments_to_placeholders(md_processed, comments, placeholder_map)
 
-    # 修复 Pandoc 转义残留：非数学内容的 \[...\] → [...]
-    # 必须在 _process_inline_markers 之前执行，避免 \[ 被捕获进 \corrmark 的 orig
-    # 参数，导致 \textcolor{red}{...\[...\]...} 中显示数学模式破坏颜色作用域。
-    md_processed = _fix_escaped_brackets(md_processed)
+def _step_fix_brackets(state: _RenderState):
+    """修复 Pandoc 转义残留：非数学内容的 \[...\] → [...]。"""
+    state.md_content = _fix_escaped_brackets(state.md_content)
 
-    # 检测新格式：内联标记 【N原文|改为】（必须在格式化之前）
-    has_inline = bool(_INLINE_MARKER_RE.search(md_processed))
-    if has_inline:
-        md_processed, numbered = _process_inline_markers(md_processed, corrections, placeholder_map)
 
-    # 将 ### heading 转为 **heading**（Markdown 粗体），后续由 _extract_md_formatting
-    # 转为 \textbf{...} 并放入 placeholder_map 保护，避免被 _escape_text 破坏。
-    # 放在 _extract_md_formatting 之前，让粗体提取逻辑复用。
-    md_processed = re.sub(r'^#{1,4}\s+(.+)', r'**\1**', md_processed, flags=re.MULTILINE)
+def _step_detect_inline(state: _RenderState):
+    """检测内联标记 【N|原文|改为】，若存在则调用 _process_inline_markers。"""
+    state.has_inline = bool(_INLINE_MARKER_RE.search(state.md_content))
+    if state.has_inline:
+        state.md_content, state.numbered = _process_inline_markers(
+            state.md_content, state.corrections, state.placeholder_map)
 
-    md_processed = _extract_md_formatting(md_processed, placeholder_map)
-    md_processed = _convert_format_markers(md_processed, placeholder_map)
 
-    escaped = _escape_preserve_math(md_processed)
-    escaped = _restore_placeholders(escaped, placeholder_map)
-    # 缺失字符用回退字体包裹（必须在 escaping 之后，避免 \fallbacksymbols 命令被转义）
+def _step_convert_headings(state: _RenderState):
+    """将 ### heading 转为 **heading**，供后续 _extract_md_formatting 处理。"""
+    state.md_content = re.sub(
+        r'^#{1,4}\s+(.+)', r'**\1**', state.md_content, flags=re.MULTILINE)
+
+
+def _step_format_and_escape(state: _RenderState):
+    """提取 Markdown 格式 → 占位符，转换格式标记，转义保留数学，恢复占位符。"""
+    state.md_content = _extract_md_formatting(state.md_content, state.placeholder_map)
+    state.md_content = _convert_format_markers(state.md_content, state.placeholder_map)
+    escaped = _escape_preserve_math(state.md_content)
+    escaped = _restore_placeholders(escaped, state.placeholder_map)
     escaped = _fix_missing_chars(escaped)
-    # 单换行 → LaTeX 换行
     escaped = _newline_to_latex(escaped)
+    state.md_content = escaped
 
-    if not has_inline:
-        marked, numbered = _apply_markers(escaped, corrections)
+
+def _step_apply_markers(state: _RenderState):
+    """非内联模式：对 escaped 文本应用校对标记。"""
+    if not state.has_inline:
+        state.marked, state.numbered = _apply_markers(state.md_content, state.corrections)
     else:
-        marked = escaped
+        state.marked = state.md_content
+
+
+def _build_paracol_output(state: _RenderState, tool_calls, review_judgments, review_supplements) -> str:
+    """根据 _RenderState 构建最终的 paracol LaTeX 输出。"""
+    comments = state.comments
+    numbered = state.numbered
 
     lines = [r"\begin{paracol}{2}", ""]
-    lines.append(marked)
+    lines.append(state.marked)
 
-    # 若右栏完全为空（无批注、无修改、无补充、无工具调用），
-    # 显示「校对无问题」提示，保持左右双栏布局完整。
     right_empty = _is_right_column_empty(numbered, comments, review_judgments,
                                           review_supplements, tool_calls)
     if right_empty:
@@ -1128,7 +1170,7 @@ def build_paracol_content(md_content: str, corrections: list[dict],
         lines.append(r"\bigskip")
         lines.append("")
 
-    # --- 右栏：批注评审（逐条评判） ---
+    # --- 右栏：批注评审 ---
     if review_judgments:
         lines.append(r"\textbf{\Large 🔍 批注评审}")
         lines.append(r"\\")
@@ -1137,8 +1179,6 @@ def build_paracol_content(md_content: str, corrections: list[dict],
             cid = j.get("id", 0)
             verdict = j.get("verdict", "未评判")
             reason = j.get("reason", "")
-
-            # 颜色编码：正确=绿色，部分正确=橙色，有误=红色
             if "正确" in verdict and "部分" not in verdict:
                 vcolor = "green"
             elif "有误" in verdict or "错误" in verdict:
@@ -1147,7 +1187,6 @@ def build_paracol_content(md_content: str, corrections: list[dict],
                 vcolor = "orange"
             else:
                 vcolor = "black"
-
             entry = (
                 r"\fbox{" + str(cid) + r"} "
                 + r"\textcolor{" + vcolor + r"}{\textbf{"
@@ -1155,14 +1194,13 @@ def build_paracol_content(md_content: str, corrections: list[dict],
             )
             if reason:
                 entry += r" \\ " + _escape_text(reason)
-
             lines.append(r"\correctionbox{" + entry + "}")
             lines.append(r"\medskip")
             lines.append("")
         lines.append(r"\bigskip")
         lines.append("")
 
-    # --- 右栏：补充发现（批注评审中发现的遗漏错误） ---
+    # --- 右栏：补充发现 ---
     if review_supplements:
         lines.append(r"\textbf{\Large 🔴 补充发现}")
         lines.append(r"\\")
@@ -1182,12 +1220,11 @@ def build_paracol_content(md_content: str, corrections: list[dict],
         lines.append(r"\\")
         lines.append("")
         for corr in numbered:
-            lines.append(r"\correctionbox{" + _format_right_entry(corr, placeholder_map) + "}")
+            lines.append(r"\correctionbox{" + _format_right_entry(corr, state.placeholder_map) + "}")
             lines.append(r"\bigskip")
             lines.append("")
 
     # 工具调用记录
-    # 简化显示：只列出调用了哪些工具，详细记录保存在原始 JSON 中
     if tool_calls:
         tool_names = []
         for tc in tool_calls:
