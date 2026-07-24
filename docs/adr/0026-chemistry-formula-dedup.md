@@ -1,6 +1,6 @@
 # ADR 0026：化学式解析双源同步测试锁（运行时保留字面量）
 
-**状态**：已接受（待落地，独立支线）
+**状态**：已实现（commit 7346cf4）
 **日期**：2026-07-23（2026-07-24 修订：回退主方案为字面量保留 + CI 同步锁；inspect.getsource runtime 注入方案被否决，因 PyInstaller 打包后 OSError 推翻）
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0019 架构审查修复]](0019-architecture-review-fixes.md)
