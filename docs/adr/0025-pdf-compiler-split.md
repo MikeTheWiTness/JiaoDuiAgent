@@ -1,7 +1,8 @@
 # ADR 0025：pdf_compiler 拆四函数 + 诊断去重
 
-**状态**：已接受（待落地，独立支线）
-**日期**：2026-07-23（2026-07-24 修订：C1 补 "texmf_root 为 None 时 `_build_compile_env` 返回 None 不传 env" 行为不变约束）
+**状态**：已实现（commit 待填入）
+**日期**：2026-07-23（2026-07-24 修订）
+**实现日期**：2026-07-24
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0024 latex_generator pipeline 重构]](0024-latex-generator-pipeline-refactor.md)、[[ADR 0021 call_api 重构]](0021-call-api-refactor-bashtool-safety-test-degradation.md)
 

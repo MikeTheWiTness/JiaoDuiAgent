@@ -17,6 +17,9 @@ import tempfile
 # 模块级缓存：已发现的 xelatex 路径
 _XELATEX_PATH = None
 
+# xelatex 编译超时（秒）
+LATEX_COMPILE_TIMEOUT = 120
+
 
 def _find_bundled_xelatex(exe_dir: str) -> str | None:
     """在内嵌便携 TeX 发行版中查找 xelatex.exe。
@@ -164,6 +167,83 @@ def _generate_runtime_fonts_conf(fonts_dir: str, tmpdir: str) -> str:
     return conf_path
 
 
+# ---- C1: _build_compile_env ----
+
+def _build_compile_env(texmf_root: str | None, tmpdir: str,
+                       fonts_tmp: str | None) -> dict | None:
+    """组装 xelatex 编译环境变量 dict。
+
+    texmf_root 为 None 时返回 None（系统 TeX 继承父进程 env）。
+    texmf_root 不为 None 时返回 os.environ.copy() + 覆盖 ~15 个 env vars，
+    字段名与值（含分号、路径拼接顺序）与现状逐字一致。
+    """
+    if texmf_root is None:
+        return None
+
+    env = os.environ.copy()
+    texmf_dist = os.path.join(texmf_root, "texmf-dist")
+    texmf_var = os.path.join(texmf_root, "texmf-var")
+
+    env["TEXMFDIST"] = texmf_dist
+    env["TEXMFVAR"] = tmpdir
+    env["TEXMF"] = texmf_var + ";" + tmpdir + ";!!" + texmf_dist
+    env["TEXMFCNF"] = texmf_root + ";" + texmf_dist + "/web2c"
+    fc_dir = os.path.join(tmpdir, "fonts", "cache")
+    os.makedirs(fc_dir, exist_ok=True)
+    env["FC_CACHEDIR"] = fc_dir
+    env["FONTCONFIG_PATH"] = tmpdir
+    env["FONTCONFIG_FILE"] = os.path.join(tmpdir, "fonts.conf")
+
+    env["TEXINPUTS"] = ".;" + texmf_dist + "/tex//"
+    env["TEXINPUTS.latex"] = ".;" + texmf_dist + "/tex/{latex,generic,xetex,}//"
+    env["TEXFORMATS"] = ".;" + tmpdir + "/web2c/{xetex,}//"
+
+    if fonts_tmp:
+        env["OPENTYPEFONTS"] = ".;" + fonts_tmp + "/opentype//"
+        env["TTFONTS"] = ".;" + fonts_tmp + "/truetype//"
+        env["T1FONTS"] = ".;" + fonts_tmp + "/type1//"
+        env["TFMFONTS"] = ".;" + fonts_tmp + "/tfm//"
+        env["TEXFONTMAPS"] = ".;" + fonts_tmp + "/map//"
+        env["ENCFONTS"] = ".;" + fonts_tmp + "/enc//"
+        env["TEXINPUTS"] = ".;" + texmf_dist + "/tex//;" + fonts_tmp + "/opentype//;" + fonts_tmp + "/truetype//"
+
+    return env
+
+
+# ---- C1: _diagnose_log ----
+
+def _diagnose_log(log_path: str, tail_lines: int = 15) -> tuple[str, str]:
+    """从 xelatex 日志提取诊断信息。
+
+    Returns:
+        (diagnostic: str, tail: str) — 诊断行摘要与日志尾部。
+    """
+    log_text = ""
+    if os.path.isfile(log_path):
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            log_text = f.read()
+
+    diag = [ln.strip() for ln in log_text.splitlines()
+            if ln.strip().startswith("!") or "fatal" in ln.strip().lower()
+            or "Error" in ln.strip()]
+    tail = [ln.strip() for ln in log_text.splitlines()[-tail_lines:] if ln.strip()]
+    return "\n".join(diag[-15:]), "\n".join(tail)
+
+
+# ---- C1: _format_compile_error ----
+
+def _format_compile_error(stage: str, retcode_info: str,
+                          diagnostic: str, tail: str) -> str:
+    """格式化编译错误 RuntimeError 消息文本。"""
+    return (
+        f"{stage} stage failed ({retcode_info}).\n"
+        f"--- DIAGNOSTIC ---\n{diagnostic}\n"
+        f"--- LOG TAIL ---\n{tail}"
+    )
+
+
+# ---- compile_to_pdf（编排主函数）----
+
 def compile_to_pdf(tex_path: str, output_dir: str | None = None,
                    images_map: dict | None = None) -> str:
     """编译 .tex 文件为 PDF。
@@ -205,10 +285,14 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
     # 内嵌便携版：将格式文件 + 字体映射复制到临时目录（ASCII 路径）
     # 避免 CJK 路径导致 xdvipdfmx 失败
     fonts_tmp = None
+    runtime_fonts_conf = None
     if texmf_root:
         _copy_fmt_to_tmpdir(texmf_root, tmpdir)
         fonts_tmp = _copy_mapfiles_to_tmpdir(texmf_root, tmpdir)
         runtime_fonts_conf = _generate_runtime_fonts_conf(fonts_tmp, tmpdir)
+
+    # 组装编译环境变量（texmf_root 为 None 时返回 None，主函数不传 env）
+    build_env = _build_compile_env(texmf_root, tmpdir, fonts_tmp)
 
     try:
         # 复制 .tex 到临时目录
@@ -244,40 +328,13 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
             f'-output-directory={tmpdir}', tmp_tex,
         ]
         compile_kwargs = {
-            'timeout': 120,
+            'timeout': LATEX_COMPILE_TIMEOUT,
             'cwd': tmpdir,
             'stdout': subprocess.DEVNULL,
             'stderr': subprocess.DEVNULL,
         }
-        if texmf_root:
-            env = os.environ.copy()
-            texmf_dist = os.path.join(texmf_root, "texmf-dist")
-            texmf_var = os.path.join(texmf_root, "texmf-var")
-
-            env["TEXMFDIST"] = texmf_dist
-            env["TEXMFVAR"] = tmpdir
-            env["TEXMF"] = texmf_var + ";" + tmpdir + ";!!" + texmf_dist
-            env["TEXMFCNF"] = texmf_root + ";" + texmf_dist + "/web2c"
-            fc_dir = os.path.join(tmpdir, "fonts", "cache")
-            os.makedirs(fc_dir, exist_ok=True)
-            env["FC_CACHEDIR"] = fc_dir
-            env["FONTCONFIG_PATH"] = tmpdir
-            env["FONTCONFIG_FILE"] = runtime_fonts_conf
-
-            env["TEXINPUTS"] = ".;" + texmf_dist + "/tex//"
-            env["TEXINPUTS.latex"] = ".;" + texmf_dist + "/tex/{latex,generic,xetex,}//"
-            env["TEXFORMATS"] = ".;" + tmpdir + "/web2c/{xetex,}//"
-
-            if fonts_tmp:
-                env["OPENTYPEFONTS"] = ".;" + fonts_tmp + "/opentype//"
-                env["TTFONTS"] = ".;" + fonts_tmp + "/truetype//"
-                env["T1FONTS"] = ".;" + fonts_tmp + "/type1//"
-                env["TFMFONTS"] = ".;" + fonts_tmp + "/tfm//"
-                env["TEXFONTMAPS"] = ".;" + fonts_tmp + "/map//"
-                env["ENCFONTS"] = ".;" + fonts_tmp + "/enc//"
-                env["TEXINPUTS"] = ".;" + texmf_dist + "/tex//;" + fonts_tmp + "/opentype//;" + fonts_tmp + "/truetype//"
-
-            compile_kwargs['env'] = env
+        if build_env is not None:
+            compile_kwargs['env'] = build_env
         if os.name == 'nt':
             compile_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
             si = subprocess.STARTUPINFO()
@@ -291,18 +348,9 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
         xdv_ok = os.path.isfile(xdv_path) and os.path.getsize(xdv_path) > 100
         if not xdv_ok:
             # xelatex 阶段失败——读取 .log 诊断
-            log_text = ""
-            if os.path.isfile(log_path):
-                with open(log_path, encoding="utf-8", errors="replace") as f:
-                    log_text = f.read()
-            diag = [ln.strip() for ln in log_text.splitlines()
-                    if ln.strip().startswith("!") or "fatal" in ln.strip().lower()
-                    or "Error" in ln.strip()]
-            tail = [ln.strip() for ln in log_text.splitlines()[-10:] if ln.strip()]
-            raise RuntimeError(
-                f"XeLaTeX stage failed (retcode={retcode1}).\n"
-                f"--- DIAGNOSTIC ---\n" + "\n".join(diag[-15:]) + "\n"
-                f"--- LOG TAIL ---\n" + "\n".join(tail))
+            diagnostic, tail = _diagnose_log(log_path, tail_lines=10)
+            raise RuntimeError(_format_compile_error(
+                "XeLaTeX", f"retcode={retcode1}", diagnostic, tail))
 
         # Step 2: xdvipdfmx — 将 XDV 转为 PDF
         # macOS/Linux 上系统 TeX Live 的 xdvipdfmx 无 .exe 后缀
@@ -314,13 +362,14 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
         tmp_pdf = os.path.join(tmpdir, f"{base}.pdf")
         cmd2 = [xdvipdfmx_path, "-o", tmp_pdf, xdv_path]
         compile_kwargs2 = {
-            'timeout': 120,
+            'timeout': LATEX_COMPILE_TIMEOUT,
             'cwd': tmpdir,
             'stdout': subprocess.DEVNULL,
             'stderr': subprocess.DEVNULL,
         }
-        if texmf_root:
-            env2 = env.copy()
+        if texmf_root and build_env is not None:
+            env2 = build_env.copy()
+            texmf_dist = os.path.join(texmf_root, "texmf-dist")
             env2["DVIPDFMXINPUTS"] = ".;" + texmf_dist + "/dvipdfmx//"
             compile_kwargs2['env'] = env2
         if os.name == 'nt':
@@ -337,15 +386,14 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
         is_stub_pdf = pdf_exists and pdf_size < 1024
 
         # 从 xelatex .log 提取诊断信息（两步共享同一日志文件）
-        log_text = ""
-        if os.path.isfile(log_path):
-            with open(log_path, encoding="utf-8", errors="replace") as f:
-                log_text = f.read()
-
         # 使用行首匹配避免子串误判：
         # "I've just inserted will cause me to report a runaway argument"
         # 是 TeX 解释性文本，并非真实的 Runaway argument 错误。
         # 真正的致命错误以 "!" 开头且独占一行或以 "Runaway argument?" 开头。
+        log_text = ""
+        if os.path.isfile(log_path):
+            with open(log_path, encoding="utf-8", errors="replace") as f:
+                log_text = f.read()
         has_fatal_error = (
             re.search(r'^Runaway argument\?', log_text, re.MULTILINE) is not None
             or re.search(r'^Emergency stop', log_text, re.MULTILINE) is not None
@@ -353,27 +401,12 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
         )
 
         if retcode2 != 0 or is_stub_pdf or has_fatal_error:
-            diagnostic_lines = []
-            for ln in log_text.splitlines():
-                stripped = ln.strip()
-                if not stripped:
-                    continue
-                if (stripped.startswith("!") or
-                    "fatal" in stripped.lower() or
-                    "error:" in stripped.lower() or
-                    "Error" in stripped):
-                    diagnostic_lines.append(stripped)
-
-            tail_lines = [ln.strip() for ln in log_text.splitlines()[-15:] if ln.strip()]
-            diagnostic = "\n".join(diagnostic_lines[-15:])
-            tail = "\n".join(tail_lines)
-
-            raise RuntimeError(
-                f"xdvipdfmx stage failed (xelatex_ret={retcode1}, "
-                f"xdvipdfmx_ret={retcode2}, pdf_exists={pdf_exists}, "
-                f"pdf_size={pdf_size}).\n"
-                f"--- DIAGNOSTIC ---\n{diagnostic}\n"
-                f"--- LOG TAIL ---\n{tail}")
+            diagnostic, tail = _diagnose_log(log_path, tail_lines=15)
+            raise RuntimeError(_format_compile_error(
+                "xdvipdfmx",
+                f"xelatex_ret={retcode1}, xdvipdfmx_ret={retcode2}, "
+                f"pdf_exists={pdf_exists}, pdf_size={pdf_size}",
+                diagnostic, tail))
 
         # 复制 PDF 到目标目录
         shutil.copy2(tmp_pdf, target_pdf)
