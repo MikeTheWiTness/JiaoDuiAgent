@@ -1,6 +1,6 @@
 # ADR 0022：UI 编排下沉到 core（ConversionService + ProofreadService）
 
-**状态**：已实现（commit 552fe9a）（C2.3 unit_detect + C1/C2 服务骨架 + C3 测试）
+**状态**：已落地（部分）— C2.3 unit_detect 单一源 + C1/C2 服务骨架 + C3 测试已交付（commit 552fe9a）；_conversion_thread / _proofread_thread 业务搬迁 + UI 接线待后续落地
 **日期**：2026-07-23（2026-07-24 修订）
 **实现日期**：2026-07-24
 **决策者**：MikeTheWiTness

@@ -212,8 +212,13 @@ def _build_compile_env(texmf_root: str | None, tmpdir: str,
 
 # ---- C1: _diagnose_log ----
 
-def _diagnose_log(log_path: str, tail_lines: int = 15) -> tuple[str, str]:
+def _diagnose_log(log_path: str, tail_lines: int = 15,
+                  include_error_colon: bool = False) -> tuple[str, str]:
     """从 xelatex 日志提取诊断信息。
+
+    Args:
+        tail_lines: 日志尾部行数（xelatex 阶段用 10，xdvipdfmx 阶段用 15）
+        include_error_colon: 是否额外匹配小写 "error:" 前缀（仅 xdvipdfmx 阶段用）
 
     Returns:
         (diagnostic: str, tail: str) — 诊断行摘要与日志尾部。
@@ -223,9 +228,18 @@ def _diagnose_log(log_path: str, tail_lines: int = 15) -> tuple[str, str]:
         with open(log_path, encoding="utf-8", errors="replace") as f:
             log_text = f.read()
 
-    diag = [ln.strip() for ln in log_text.splitlines()
-            if ln.strip().startswith("!") or "fatal" in ln.strip().lower()
-            or "Error" in ln.strip()]
+    diag = []
+    for ln in log_text.splitlines():
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        if (stripped.startswith("!") or
+                "fatal" in stripped.lower() or
+                "Error" in stripped):
+            diag.append(stripped)
+        elif include_error_colon and "error:" in stripped.lower():
+            diag.append(stripped)
+
     tail = [ln.strip() for ln in log_text.splitlines()[-tail_lines:] if ln.strip()]
     return "\n".join(diag[-15:]), "\n".join(tail)
 
@@ -401,7 +415,7 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
         )
 
         if retcode2 != 0 or is_stub_pdf or has_fatal_error:
-            diagnostic, tail = _diagnose_log(log_path, tail_lines=15)
+            diagnostic, tail = _diagnose_log(log_path, tail_lines=15, include_error_colon=True)
             raise RuntimeError(_format_compile_error(
                 "xdvipdfmx",
                 f"xelatex_ret={retcode1}, xdvipdfmx_ret={retcode2}, "

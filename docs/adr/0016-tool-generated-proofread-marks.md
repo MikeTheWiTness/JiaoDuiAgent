@@ -1,7 +1,8 @@
 # ADR 0016：工具生成校对标记 —— 替代 LLM 手写内联标记
 
-**状态**：设计中（Grill 阶段完成，待落地）
+**状态**：已实现（commit 541f66c）（EditFileTool + 手动标记统一；add_proofread_mark 工具在分支 feat/add-proofread-mark 待合并）
 **日期**：2026-07-07
+**实现日期**：2026-07-09
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0005 ReAct 机制]](0005-react-mechanism-architecture.md)、[[ADR 0015 统一校对流程]](0015-unified-proofread-flow.md)
 
