@@ -574,11 +574,6 @@ def _circled_char(n: int) -> str:
 
 from shared.comment_marker import INLINE_MARKER_CAPTURE_RE as _INLINE_MARKER_RE
 
-# math-only LaTeX 命令（仅数学模式有效），在文本模式中需包裹 $...$ 避免编译错误
-_MATH_ONLY_RE = re.compile(
-    r'\\(times|div|pm|mp|cdot|leq|geq|approx|neq|infty|sum|int|prod|partial|nabla|in|notin|subset|supset|rightarrow|leftarrow|Rightarrow|Leftarrow|circ|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|sim)(?![a-zA-Z])'
-)
-
 
 def _parse_marker_num(s: str) -> int:
     """'①' → 1, '1' → 1"""
@@ -845,6 +840,21 @@ _UNICODE_MATH_MAP = {
     '⇒': r'\Rightarrow', '⇐': r'\Leftarrow',
     '°': r'^\circ',
 }
+
+
+# math-only LaTeX 命令正则（从 _UNICODE_MATH_MAP 派生，保证双向同步）
+def _build_math_only_re():
+    """从 _UNICODE_MATH_MAP 的值提取 LaTeX 命令名构建正则。"""
+    cmds = set()
+    for v in _UNICODE_MATH_MAP.values():
+        if v.startswith('\\') and len(v) > 1:
+            name = v[1:]
+            if name.isalpha():
+                cmds.add(name)
+    cmds.update({"mp", "supset", "sim", "circ"})
+    return re.compile(r'\\(%s)(?![a-zA-Z])' % '|'.join(sorted(cmds)))
+
+_MATH_ONLY_RE = _build_math_only_re()
 
 
 def _escape_math_chars_outside_math(text: str) -> str:
