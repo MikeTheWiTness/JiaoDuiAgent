@@ -16,6 +16,14 @@ MAX_RETRY = 2
 TIME_OUT = (30, 1800)
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
+# 工具分类常量（供工具循环熔断/配额逻辑使用）
+_SEARCH_TOOLS = {"web_search", "web_fetch"}
+_MAX_SEARCH = 5
+_NAV_CONTROL_TOOLS = {
+    "plan_update", "locate_paragraph", "read_section",
+    "read_file", "write_file", "independent_solve",
+}
+
 # ---- 异常层级 ----
 
 class ProofreadError(Exception):
@@ -560,9 +568,6 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
     empty_streak = 0
     search_count = 0
 
-    _SEARCH_TOOLS = {"web_search", "web_fetch"}
-    _MAX_SEARCH = 5
-
     while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
         # 检查中断信号
         if ctx.interrupt_event and ctx.interrupt_event.is_set():
@@ -637,13 +642,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
             log(f"   🔧 {tool_name}({json.dumps(args, ensure_ascii=False)[:100]}) → {summary}")
 
             # 连续空结果检测（仅对检索/抓取类工具有效）
-            # read_file / write_file / plan_update / locate_paragraph /
-            # read_section 属于流程控制 / 文本 / 文件工具，不应计入
-            # 搜索工具（web_search / web_fetch）有独立配额，也不计入
-            _NAV_CONTROL_TOOLS = {
-                "plan_update", "locate_paragraph", "read_section",
-                "read_file", "write_file", "independent_solve",
-            }
+            # 搜索工具有独立配额，导航/控制/文件工具不计入
             recent_results.append(result)
             if tool_name not in _NAV_CONTROL_TOOLS and tool_name not in _SEARCH_TOOLS:
                 if _is_empty_or_duplicate(result, recent_results):
