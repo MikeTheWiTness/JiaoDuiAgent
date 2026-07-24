@@ -20,11 +20,15 @@ JiaoDuiAgent/
 │   ├── api_client.py         # API 调用（HTTP、重试、ReAct 工具循环）
 │   ├── parsing.py            # LLM 输出解析（内联标记 + 结构化 JSON）
 │   ├── defaults.py           # 默认拆分+校对参考实现
+│   ├── base_subject.py       # SubjectApp 基类
 │   ├── config_loader.py      # config.json + agent_prompt.json 加载
+│   ├── config_schema.py      # 配置 Schema 验证
 │   ├── format_enforcement.py # 格式审查（程序初筛 + LLM 修正）
+│   ├── session_context.py    # 会话上下文封装
 │   ├── pandoc_utils.py       # Pandoc 转换
 │   ├── env_config.py         # .env 读写
 │   ├── logging_utils.py      # 日志
+│   ├── paths.py              # 路径工具（frozen 兼容）
 │   └── manual_split.py       # 人工标记分割
 ├── shared/                   # 共享工具库
 │   ├── sympy_tools/          # 符号计算工具集
@@ -32,30 +36,37 @@ JiaoDuiAgent/
 │   ├── text_nav_tools.py     # ReAct 文本定位工具
 │   ├── web_tools.py          # 联网检索
 │   ├── smart_split.py        # 智能分割（LLM + XML标记）
-│   ├── chinese_classics_tools.py  # 文言文/诗歌校对（识典古籍 + 搜韵）
+│   ├── bash_tool.py          # Bash 命令执行工具
+│   ├── chinese_classics_tools.py  # 文言文/诗歌校对
 │   ├── shidianguji_playwright.py  # 识典古籍浏览器自动化
 │   ├── docx_comments.py      # Word 批注提取
 │   ├── docx_format_enhancer.py    # Word 格式标记增强
 │   ├── review_mode.py        # 批注评审模式
 │   ├── latex_generator.py    # Markdown → LaTeX
+│   ├── pdf_compiler.py       # XeLaTeX PDF 编译
 │   └── templates/
 ├── ui/                       # UI 组件库 + 默认模板
-│   ├── widgets.py            # 可复用组件（LogPanel/ApiDialog/ModeSelector）
-│   └── default_app.py        # DefaultApp — 默认 GUI 模板（含 ReAct 开关）
-├── subjects/                 # 学科独立程序
-│   ├── 高中语文v3.0/         # 高中语文 v3.0（ReAct 范例学科）
-│   ├── 高中物理v3.0/         # 高中物理 v3.0
-│   ├── 高中化学v3.0/         # 高中化学 v3.0
-│   ├── 初中英语v3.0/         # 初中英语 v3.0
-│   ├── 小学数学v3.0/         # 小学数学 v3.0
-│   └── 小学语文v3.0/         # 小学语文 v3.0
+│   ├── widgets.py            # 可复用组件
+│   └── default_app.py        # DefaultApp — 默认 GUI 模板
+├── subjects/                 # 学科独立程序（7 学科）
+│   ├── 高中语文v3.0/         # ReAct 范例学科
+│   ├── 高中物理v3.0/
+│   ├── 高中化学v3.0/
+│   ├── 初中英语v3.0/
+│   ├── 小学数学v3.0/
+│   ├── 小学语文v3.0/
+│   └── 高中历史v3.0/
 ├── tests/                    # 测试
+├── tools/                    # 工具脚本（create_issues.py 等）
 ├── docs/                     # 文档
-│   ├── packaging.md          # 打包指南
-│   └── adr/                  # 架构决策记录
+│   ├── adr/                  # 架构决策记录
+│   ├── issues/               # Issue 文档
+│   ├── notes/                # 杂项备忘
+│   └── packaging.md          # 打包指南
+├── memory/                   # 跨会话决策索引
 ├── specs/                    # PyInstaller spec 文件
 ├── requirements.txt
-└── CLAUDE.md                 # 项目工作约定
+└── AGENTS.md                 # 项目工作约定
 ```
 
 ## 快速开始
@@ -136,6 +147,7 @@ ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校
 | 小学数学 | v3.0 | ✅ | 7（4 sympy + 3 ReAct） | 算术验证、方程求解、五核校对 |
 | 初中英语 | v3.0 | ✅ | 3（plan + navigate） | 词汇/语法/题型分层校对 |
 | 小学语文 | v3.0 | ✅ | 3（plan + navigate） | 拼音/汉字/古诗词校对、IDML 支持 |
+| 高中历史 | v3.0 | ✅ | 3（plan + navigate） | 史料辨析、时序判断、史论结合校对 |
 
 ## 核心功能
 

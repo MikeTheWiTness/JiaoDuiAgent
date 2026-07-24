@@ -1,7 +1,8 @@
 # ADR 0018：智能拆分工具化 + 标记统一 —— 用 edit_file 插入 ###### 单元标记
 
-**状态**：设计中（待落地）
+**状态**：已实现（commit 6ddd08b）
 **日期**：2026-07-07
+**实现日期**：2026-07-09
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0016 工具生成校对标记]](0016-tool-generated-proofread-marks.md)、[[ADR 0017 统一规则拆分]](0017-unified-section-split.md)
 

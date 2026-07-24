@@ -20,3 +20,15 @@ bundled_texlive/
 *.zip
 *.exe
 output/
+
+# OS metadata
+.DS_Store
+
+# Dev tool directories
+/.kilo/
+.zcode/
+
+# Test artifacts
+.pytest_cache/
+tests/_search_results/
+_smart_split_raw*.md
