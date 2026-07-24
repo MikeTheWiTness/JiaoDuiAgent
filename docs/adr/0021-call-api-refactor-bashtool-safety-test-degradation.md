@@ -1,7 +1,8 @@
 # ADR 0021：call_api 重构拆分 + 退化测试修复 + 散落超时常量上提
 
-**状态**：已接受（待落地）
-**日期**：2026-07-23（2026-07-24 修订：C4 BashTool 安全收敛剥离到独立安全议题；C5 `generate_clean_md` 加 repl 参数保留学科差异；C2 加对外 dict 字段面冻结）
+**状态**：已实现（commit 待填入）
+**日期**：2026-07-23（2026-07-24 修订）
+**实现日期**：2026-07-24
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0019 架构审查修复]](0019-architecture-review-fixes.md)、[[ADR 0012 框架工程债]](0012-framework-engineering-debt.md)、[[ADR 0006 物理 ReAct 学科化]](0006-physics-react-subject-specialization.md)
 

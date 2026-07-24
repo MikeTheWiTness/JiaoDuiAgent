@@ -1,6 +1,11 @@
-import json, time, re, os, traceback
-from pathlib import Path
+import json
+import os
+import time
+import traceback
+from dataclasses import dataclass, field
+
 import requests
+
 from core.logging_utils import log
 
 MAX_RETRY = 2
@@ -164,7 +169,34 @@ class StopReason:
     TOOL_LOOP = "tool_loop"       # 连续 3 轮空/重复结果，触发压缩
     MAX_TURNS = "max_turns"       # max_loops 触顶，触发压缩
     ERROR = "error"               # API 调用异常
+    INTERRUPTED = "interrupted"   # 用户中断
 
+
+# ---- LoopResult（C2）----
+
+@dataclass
+class LoopResult:
+    """工具循环退出结果。stop_reason 复用 StopReason 常量。"""
+    content: str = ""
+    reasoning: str = ""
+    messages: list = field(default_factory=list)
+    stop_reason: str = ""
+    tool_calls_log: list = field(default_factory=list)
+    usage: dict = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        """转为与 call_api 对外返回一致的 6 key dict，key 集合及顺序逐字不变。"""
+        return {
+            "content": self.content,
+            "tool_calls_log": self.tool_calls_log,
+            "reasoning": self.reasoning,
+            "messages": self.messages,
+            "stop_reason": self.stop_reason,
+            "usage": self.usage,
+        }
+
+
+# ---- 工具定义 ----
 
 def tool_to_openai(tool):
     schema = tool.args_schema.model_json_schema()
@@ -202,10 +234,11 @@ def execute_tool(tool_instances, tool_name, arguments):
     return f"未知工具: {tool_name}"
 
 
-def _compress_history(messages: list, tool_calls_count: int) -> list:
+def _compress_history(messages: list, tool_calls_count: int, disable_all: bool = True) -> list:
     """压缩对话历史：移除工具调用对，插入压缩摘要。
 
     保留 system、user、assistant 文本消息，移除所有 tool_calls + tool_result 对。
+    disable_all=True 时提示禁止所有工具；False 时仅提示搜索工具已禁用。
     """
     compressed = []
 
@@ -217,11 +250,18 @@ def _compress_history(messages: list, tool_calls_count: int) -> list:
             continue
         compressed.append(msg)
 
-    summary = (
-        f"【系统提示】你共尝试调用工具 {tool_calls_count} 次，"
-        "均未获得有效新结果。请勿再使用任何工具，"
-        "直接基于你已有的知识和上文已获取的信息完成校对判断。"
-    )
+    if disable_all:
+        summary = (
+            f"【系统提示】你共尝试调用工具 {tool_calls_count} 次，"
+            "均未获得有效新结果。请勿再使用任何工具，"
+            "直接基于你已有的知识和上文已获取的信息完成校对判断。"
+        )
+    else:
+        summary = (
+            f"【系统提示】你共尝试调用工具 {tool_calls_count} 次，"
+            "均未获得有效新结果。搜索/抓取工具已被禁用，"
+            "但你仍可使用文件读写等工具。请基于已有知识和上文信息完成校对。"
+        )
     compressed.append({"role": "user", "content": summary})
     return compressed
 
@@ -302,13 +342,20 @@ def _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools)
     return "".join(lines)
 
 
-def _save_conversation_log(messages, output_dir, q_title, initial_header):
-    """将完整对话记录保存到文件。"""
+# ---- C3: 合并后的统一保存函数 ----
+
+def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix=""):
+    """将完整对话记录保存到文件。
+
+    Args:
+        suffix: 文件名后缀。"" → _API对话记录.md，"_full" → _API对话记录_full.md。
+    """
     if not output_dir:
         return
     try:
         os.makedirs(output_dir, exist_ok=True)
-        log_path = os.path.join(output_dir, "_API对话记录.md")
+        filename = f"_API对话记录{suffix}.md"
+        log_path = os.path.join(output_dir, filename)
         lines = [initial_header]
         turn = 0
         for msg in messages:
@@ -353,300 +400,51 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header):
         log(f"   ⚠️ 保存对话记录失败: {e}\n{traceback.format_exc()}")
 
 
-def _save_conversation_log_full(messages, output_dir, q_title, initial_header):
-    """与 _save_conversation_log 相同，但保存到 _API对话记录_full.md。
+# ---- C1: 抽取函数 ----
 
-    用于在压缩历史前保留完整的工具调用记录，便于排查问题。
+def _post_chat(chat_url, payload, headers):
+    """发送一次 chat completion 请求，返回 (choice_dict, usage_dict)。
+
+    封装 requests.post + raise_for_status + usage 提取 + choice 提取的共用样板。
     """
-    if not output_dir:
-        return
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-        log_path = os.path.join(output_dir, "_API对话记录_full.md")
-        lines = [initial_header]
-        turn = 0
-        for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            if role == "system":
-                continue
-            elif role == "user":
-                if isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            lines.append(f"### 用户输入\n\n```\n{part['text'][:5000]}\n```\n\n")
-                        elif isinstance(part, dict) and part.get("type") == "image_url":
-                            lines.append(f"### 用户输入（图片）\n\n[{part.get('image_url', {}).get('url', '')[:80]}...]\n\n")
-                else:
-                    lines.append(f"### 用户输入\n\n```\n{str(content)[:5000]}\n```\n\n")
-            elif role == "assistant":
-                turn += 1
-                tool_calls = msg.get("tool_calls", [])
-                if tool_calls:
-                    lines.append(f"### 第{turn}轮 — LLM 请求工具调用\n\n")
-                    if content:
-                        lines.append(f"**思考内容:**\n\n```\n{content[:2000]}\n```\n\n")
-                    for tc in tool_calls:
-                        tc_name = tc.get("function", {}).get("name", "?")
-                        tc_args = tc.get("function", {}).get("arguments", "{}")
-                        lines.append(f"- **工具**: `{tc_name}`\n")
-                        try:
-                            args_obj = json.loads(tc_args)
-                            lines.append(f"- **参数**: `{json.dumps(args_obj, ensure_ascii=False)[:300]}`\n\n")
-                        except Exception:
-                            lines.append(f"- **参数**: `{tc_args[:300]}`\n\n")
-                else:
-                    lines.append(f"### 第{turn}轮 — LLM 最终回复\n\n")
-                    lines.append(f"```\n{content[:10000]}{'...[截断]' if len(str(content)) > 10000 else ''}\n```\n\n")
-            elif role == "tool":
-                lines.append(f"### 工具返回\n\n```\n{str(content)[:5000]}\n```\n\n")
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write("".join(lines))
-    except Exception:
-        pass  # 完整的日志保存失败不应影响主流程
+    resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
+    resp.raise_for_status()
+    usage = _extract_usage(resp.json())
+    choice = resp.json()["choices"][0]
+    return choice, usage
 
 
-def call_api(ctx, md_text, images, q_title, system_prompt,
-             tools=None):
-    """校对 API 调用入口。ctx 为 SessionContext 实例。"""
-    err_msg = ""
-    proof_err = None
-    tool_calls_log = []
-    tool_instances = tools or []
-    openai_tools = [tool_to_openai(t) for t in tool_instances] if tool_instances else None
-    # 自动检测模型是否支持 reasoning_effort
-    reasoning_effort = ctx.reasoning_effort
-    if reasoning_effort and not _model_supports_reasoning_effort(ctx.model):
-        log(f"   ⚠️ 模型 {ctx.model} 不支持 reasoning_effort 参数，已自动跳过")
-        reasoning_effort = None
-    # 自动检测模型是否支持图片（纯文本模型发送 image_url 会触发 400）
-    effective_images = images
-    if images and not _model_supports_images(ctx.model):
-        log(f"   ⚠️ 模型 {ctx.model} 是纯文本模型，不支持图片输入，已自动跳过 {len(images)} 张图片")
-        effective_images = []
+def _handle_retry(proof_err, err_msg, retry, consecutive_errors, last_error_type):
+    """重试+熔断决策。返回 (should_continue, err_msg, consecutive_errors, last_error_type)。
+
+    调用方根据返回值决定：退避等待后重试 / 立即停止。
+    """
+    err_type = type(proof_err).__name__
+    if err_type == last_error_type:
+        consecutive_errors += 1
     else:
-        effective_images = images
-    # 注入当前校对文本，供 text_nav_tools（locate_paragraph/read_section）使用
-    from shared.text_nav_tools import set_current_text as _set_nav_text
-    _set_nav_text(md_text)
-    # 累计整个 call_api 过程的所有 token 消耗
-    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    # 连续相同类型错误计数（熔断器）
-    consecutive_errors = 0
-    last_error_type = None
-    chat_url = ctx.api_url.rstrip("/")
-    if not chat_url.endswith("/chat/completions"):
-        chat_url += "/chat/completions"
+        consecutive_errors = 1
+        last_error_type = err_type
 
-    for retry in range(MAX_RETRY + 1):
-        tool_calls_log.clear()
-        try:
-            recent_results = []
-            empty_streak = 0
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": [
-                    {"type": "text", "text": f"编号：{q_title}\n内容：\n{md_text}"},
-                    *effective_images
-                ]}
-            ]
-            payload = {
-                "model": ctx.model, "messages": messages,
-                "temperature": 0.3,
-                "max_tokens": ctx.max_tokens
-            }
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
-            if openai_tools:
-                payload["tools"] = openai_tools
+    # 非可重试错误 → 立即停止
+    if not _should_retry(proof_err):
+        log(f"   ❌ 不可重试错误 [{err_type}]: {err_msg[:200]}")
+        return False, err_msg, consecutive_errors, last_error_type
 
-            # 记录 payload 大小日志
-            _payload_size = len(json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8'))
-            log(f"   📤 发送请求 → 模型: {ctx.model}, 系统提示词: {len(system_prompt)}字符, "
-                f"文本: {len(md_text)}字符, 图片: {len(images)}张, "
-                f"工具: {len(openai_tools) if openai_tools else 0}个, "
-                f"payload: {_payload_size//1024}KB")
+    # 熔断：连续 3 次同类型可重试错误 → 停止
+    if consecutive_errors >= 3:
+        log(f"   🔌 熔断触发 [{err_type}]：连续 {consecutive_errors} 次相同错误，停止重试")
+        return False, err_msg, consecutive_errors, last_error_type
 
-            initial_header = _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools)
+    # 还有重试次数
+    if retry < MAX_RETRY:
+        return True, err_msg, consecutive_errors, last_error_type
 
-            headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
-            resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
-            resp.raise_for_status()
-            _accumulate_usage(total_usage, _extract_usage(resp.json()))
-            choice = resp.json()["choices"][0]
+    return False, err_msg, consecutive_errors, last_error_type
 
-            loop = 0
-            while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
-                # 检查中断信号
-                if ctx.interrupt_event and ctx.interrupt_event.is_set():
-                    log("   ⚠️ 收到中断信号，停止工具循环")
-                    return {
-                        "content": "",
-                        "tool_calls_log": tool_calls_log,
-                        "reasoning": "",
-                        "messages": messages,
-                        "stop_reason": "interrupted",
-                        "usage": total_usage,
-                    }
-                if loop >= ctx.max_loops:
-                    log(f"   ⚠️ 工具调用超限（{ctx.max_loops}轮），压缩历史 + 去工具...")
-                    # 保存压缩前的完整日志（含工具调用）
-                    _save_conversation_log_full(
-                        messages, ctx.output_dir, q_title, initial_header)
-                    messages = _compress_history(messages, len(tool_calls_log))
-                    openai_tools = None  # 关闭工具调用
-                    payload = {
-                        "model": ctx.model, "messages": messages,
-                        "temperature": 0.3,
-                        "max_tokens": ctx.max_tokens
-                    }
-                    if reasoning_effort:
-                        payload["reasoning_effort"] = reasoning_effort
-                    resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
-                    resp.raise_for_status()
-                    _accumulate_usage(total_usage, _extract_usage(resp.json()))
-                    choice = resp.json()["choices"][0]
-                    reasoning = choice.get("message", {}).get("reasoning_content", "")
-                    content = choice["message"]["content"]
-                    messages.append({"role": "assistant", "content": content})
-                    _save_conversation_log(messages, ctx.output_dir, q_title, initial_header)
-                    return {
-                        "content": content,
-                        "tool_calls_log": tool_calls_log,
-                        "reasoning": reasoning,
-                        "messages": messages,
-                        "stop_reason": StopReason.MAX_TURNS,
-                        "usage": total_usage,
-                    }
-                messages.append(choice["message"])
-                # 记录 LLM 返回的工具调用请求
-                assistant_text = choice["message"].get("content", "")
-                if assistant_text:
-                    log(f"   🤖 LLM 思考: {assistant_text[:150].replace(chr(10), ' ')}")
-                for tc in choice["message"]["tool_calls"]:
-                    tool_name = tc["function"]["name"]
-                    try:
-                        args = json.loads(tc["function"]["arguments"])
-                    except json.JSONDecodeError:
-                        args = {}
-                    result = execute_tool(tool_instances, tool_name, args)
-                    tool_calls_log.append({
-                        "tool": tool_name,
-                        "args": args,
-                        "result": result[:2000]
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result[:8000]
-                    })
-                    # 实时输出调用参数 + 返回摘要，方便排查搜索质量
-                    summary = result[:120].replace('\n', ' ').strip()
-                    log(f"   🔧 {tool_name}({json.dumps(args, ensure_ascii=False)[:100]}) → {summary}")
 
-                    # 连续空结果检测（仅对检索/抓取类工具有效）
-                    # read_file / write_file / plan_update / locate_paragraph /
-                    # read_section 属于流程控制 / 文本 / 文件工具，不应计入
-                    _NAV_CONTROL_TOOLS = {
-                        "plan_update", "locate_paragraph", "read_section",
-                        "read_file", "write_file", "independent_solve",
-                    }
-                    recent_results.append(result)
-                    if tool_name not in _NAV_CONTROL_TOOLS:
-                        if _is_empty_or_duplicate(result, recent_results):
-                            empty_streak += 1
-                        else:
-                            empty_streak = 0
-
-                    if empty_streak >= 3:
-                        log(f"   ⚠️ 连续 {empty_streak} 轮空结果，压缩历史 + 去工具...")
-                        # 保存压缩前的完整日志（含工具调用），_full 后缀避免被后续覆盖
-                        _save_conversation_log_full(
-                            messages, ctx.output_dir, q_title, initial_header)
-                        messages = _compress_history(messages, len(tool_calls_log))
-                        openai_tools = None
-                        payload["tools"] = None
-                        payload["messages"] = messages
-                        resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
-                        resp.raise_for_status()
-                        _accumulate_usage(total_usage, _extract_usage(resp.json()))
-                        choice = resp.json()["choices"][0]
-                        reasoning = choice.get("message", {}).get("reasoning_content", "")
-                        content = choice["message"]["content"]
-                        messages.append({"role": "assistant", "content": content})
-                        return {
-                            "content": content,
-                            "tool_calls_log": tool_calls_log,
-                            "reasoning": reasoning,
-                            "messages": messages,
-                            "stop_reason": StopReason.TOOL_LOOP,
-                            "usage": total_usage,
-                        }
-                resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
-                resp.raise_for_status()
-                _accumulate_usage(total_usage, _extract_usage(resp.json()))
-                choice = resp.json()["choices"][0]
-                loop += 1
-
-            reasoning = choice.get("message", {}).get("reasoning_content", "")
-            content = choice["message"]["content"]
-            if content:
-                messages.append({"role": "assistant", "content": content})
-            _save_conversation_log(messages, ctx.output_dir, q_title, initial_header)
-            return {
-                "content": content,
-                "tool_calls_log": tool_calls_log,
-                "reasoning": reasoning,
-                "messages": messages,
-                "stop_reason": StopReason.END_TURN,
-                "usage": total_usage,
-            }
-        except Exception as e:
-            proof_err = _classify_error(e)
-            err_msg = str(proof_err)
-
-            # 提取 HTTP 响应体（写入 err_msg，确保落入日志文件 _API对话记录.md）
-            resp_body = ""
-            try:
-                if hasattr(e, 'response') and e.response is not None:
-                    resp_body = (e.response.text[:1000]
-                                 if hasattr(e.response, 'text') else "")
-            except Exception:
-                pass
-            if resp_body:
-                err_msg = f"{err_msg}\n\nAPI 响应体：\n{resp_body}"
-
-            # 熔断器：连续同类型错误计数
-            err_type = type(proof_err).__name__
-            if err_type == last_error_type:
-                consecutive_errors += 1
-            else:
-                consecutive_errors = 1
-                last_error_type = err_type
-
-            # 非可重试错误 → 立即停止
-            if not _should_retry(proof_err):
-                log(f"   ❌ 不可重试错误 [{err_type}]: {err_msg[:200]}")
-                if resp_body:
-                    log(f"   📋 响应体: {resp_body[:500]}")
-                break
-
-            # 熔断：连续 3 次同类型可重试错误 → 停止
-            if consecutive_errors >= 3:
-                log(f"   🔌 熔断触发 [{err_type}]：连续 {consecutive_errors} 次相同错误，停止重试")
-                if resp_body:
-                    log(f"   📋 响应体: {resp_body[:500]}")
-                break
-
-            if retry < MAX_RETRY:
-                # 根据错误类型计算退避延迟
-                backoff_base = getattr(proof_err, 'backoff_base', 2.0)
-                delay = _backoff_delay(retry, base=backoff_base)
-                log(f"   ⚠️ {q_title} 第{retry+1}次重试（{err_type}，退避 {delay:.0f}s）...")
-                time.sleep(delay)
-    # ================================================================
-    # 所有重试耗尽或不可重试 → 构建详细的错误报告
-    # ================================================================
+def _build_error_report(ctx, proof_err, err_msg, q_title, consecutive_errors, last_error_type):
+    """构造三段 Markdown 错误摘要（不可重试 / 熔断 / 重试耗尽）。"""
     error_context = (
         f"- 模型：`{ctx.model}`\n"
         f"- API 端点：`{ctx.api_url.rstrip('/')}`\n"
@@ -713,7 +511,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
         timeout_hint = ""
         if last_error_type == "APITimeoutError":
             timeout_hint = (
-                f"\n\n> 💡 当前超时配置：连接 {TIME_OUT[0]}s / 读取 {TIME_OUT[1]}s（{TIME_OUT[1]//60} 分钟）。\n"
+                f"\n\n> 💡 当前超时配置：连接 {TIME_OUT[0]}s / 读取 {TIME_OUT[1]}s（{TIME_OUT[1] // 60} 分钟）。\n"
                 f"> 推理模型单次思考可能超过 10 分钟，如果频繁读取超时，"
                 f"可修改 `core/api_client.py` 中的 `TIME_OUT` 增大读取超时。"
             )
@@ -748,12 +546,297 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             f"### 最后一次错误\n{err_msg}"
         )
 
+    return error_summary
+
+
+# ---- C1: _run_tool_loop ----
+
+def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
+                   tool_calls_log, initial_header, payload, chat_url, headers,
+                   reasoning_effort, total_usage):
+    """工具调用循环状态机。返回 LoopResult，4 条退出路径各走各的 stop_reason。"""
+    loop = 0
+    recent_results = []
+    empty_streak = 0
+    search_count = 0
+
+    _SEARCH_TOOLS = {"web_search", "web_fetch"}
+    _MAX_SEARCH = 5
+
+    while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
+        # 检查中断信号
+        if ctx.interrupt_event and ctx.interrupt_event.is_set():
+            log("   ⚠️ 收到中断信号，停止工具循环")
+            return LoopResult(
+                stop_reason=StopReason.INTERRUPTED,
+                messages=messages,
+                tool_calls_log=tool_calls_log,
+                usage=total_usage,
+            )
+
+        if loop >= ctx.max_loops:
+            log(f"   ⚠️ 工具调用超限（{ctx.max_loops}轮），压缩历史 + 去工具...")
+            # 保存压缩前的完整日志（含工具调用）
+            _save_conversation_log(
+                messages, ctx.output_dir, q_title="", initial_header=initial_header,
+                suffix="_full",
+            )
+            messages = _compress_history(messages, len(tool_calls_log))
+            openai_tools = None  # 关闭工具调用
+            payload = {
+                "model": ctx.model, "messages": messages,
+                "temperature": 0.3,
+                "max_tokens": ctx.max_tokens,
+            }
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
+            choice, usage = _post_chat(chat_url, payload, headers)
+            _accumulate_usage(total_usage, usage)
+            reasoning = choice.get("message", {}).get("reasoning_content", "")
+            content = choice["message"]["content"]
+            messages.append({"role": "assistant", "content": content})
+            _save_conversation_log(messages, ctx.output_dir, q_title="", initial_header=initial_header)
+            return LoopResult(
+                content=content,
+                reasoning=reasoning,
+                messages=messages,
+                stop_reason=StopReason.MAX_TURNS,
+                tool_calls_log=tool_calls_log,
+                usage=total_usage,
+            )
+
+        messages.append(choice["message"])
+        # 记录 LLM 返回的工具调用请求
+        assistant_text = choice["message"].get("content", "")
+        if assistant_text:
+            log(f"   🤖 LLM 思考: {assistant_text[:150].replace(chr(10), ' ')}")
+
+        # 收集本轮工具名称，判断是否为纯搜索轮次（不占 loop，走独立配额）
+        turn_tool_names = {tc["function"]["name"] for tc in choice["message"]["tool_calls"]}
+        is_pure_search = turn_tool_names and turn_tool_names.issubset(_SEARCH_TOOLS)
+
+        for tc in choice["message"]["tool_calls"]:
+            tool_name = tc["function"]["name"]
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except json.JSONDecodeError:
+                args = {}
+            result = execute_tool(tool_instances, tool_name, args)
+            tool_calls_log.append({
+                "tool": tool_name,
+                "args": args,
+                "result": result[:2000],
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": result[:8000],
+            })
+            # 实时输出调用参数 + 返回摘要，方便排查搜索质量
+            summary = result[:120].replace('\n', ' ').strip()
+            log(f"   🔧 {tool_name}({json.dumps(args, ensure_ascii=False)[:100]}) → {summary}")
+
+            # 连续空结果检测（仅对检索/抓取类工具有效）
+            # read_file / write_file / plan_update / locate_paragraph /
+            # read_section 属于流程控制 / 文本 / 文件工具，不应计入
+            # 搜索工具（web_search / web_fetch）有独立配额，也不计入
+            _NAV_CONTROL_TOOLS = {
+                "plan_update", "locate_paragraph", "read_section",
+                "read_file", "write_file", "independent_solve",
+            }
+            recent_results.append(result)
+            if tool_name not in _NAV_CONTROL_TOOLS and tool_name not in _SEARCH_TOOLS:
+                if _is_empty_or_duplicate(result, recent_results):
+                    empty_streak += 1
+                else:
+                    empty_streak = 0
+
+            if empty_streak >= 3:
+                log("   ⚠️ 连续 3 轮空结果，压缩历史 + 移除搜索工具...")
+                # 保存压缩前的完整日志（含工具调用），_full 后缀避免被后续覆盖
+                _save_conversation_log(
+                    messages, ctx.output_dir, q_title="", initial_header=initial_header,
+                    suffix="_full",
+                )
+                messages = _compress_history(messages, len(tool_calls_log), disable_all=False)
+                # 只移除搜索/抓取工具，保留其他工具（read_file、write_file 等）
+                openai_tools = [t for t in openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if openai_tools else None
+                payload["tools"] = openai_tools
+                payload["messages"] = messages
+                choice, usage = _post_chat(chat_url, payload, headers)
+                _accumulate_usage(total_usage, usage)
+                reasoning = choice.get("message", {}).get("reasoning_content", "")
+                content = choice["message"]["content"]
+                messages.append({"role": "assistant", "content": content})
+                # 注意：TOOL_LOOP 路径不调用 _save_conversation_log，与原行为一致
+                return LoopResult(
+                    content=content,
+                    reasoning=reasoning,
+                    messages=messages,
+                    stop_reason=StopReason.TOOL_LOOP,
+                    tool_calls_log=tool_calls_log,
+                    usage=total_usage,
+                )
+
+        # 搜索独立配额：纯搜索轮次不占 loop，单独计数
+        if is_pure_search:
+            search_count += 1
+            log(f"   🔍 搜索轮次: {search_count}/{_MAX_SEARCH}")
+            if search_count >= _MAX_SEARCH:
+                log("   ⚠️ 搜索配额耗尽，移除搜索工具...")
+                openai_tools = [t for t in openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if openai_tools else None
+                payload["tools"] = openai_tools
+                messages.append({"role": "user", "content": "【系统提示】搜索次数已达上限，搜索/抓取工具已被禁用。请继续使用其他工具完成校对。"})
+        else:
+            loop += 1
+
+        choice, usage = _post_chat(chat_url, payload, headers)
+        _accumulate_usage(total_usage, usage)
+
+    # while 循环自然结束 → END_TURN
+    reasoning = choice.get("message", {}).get("reasoning_content", "")
+    content = choice["message"]["content"]
+    if content:
+        messages.append({"role": "assistant", "content": content})
+    return LoopResult(
+        content=content,
+        reasoning=reasoning,
+        messages=messages,
+        stop_reason=StopReason.END_TURN,
+        tool_calls_log=tool_calls_log,
+        usage=total_usage,
+    )
+
+
+# ---- call_api（重构后的编排主函数）----
+
+def call_api(ctx, md_text, images, q_title, system_prompt,
+             tools=None):
+    """校对 API 调用入口。ctx 为 SessionContext 实例。"""
+    err_msg = ""
+    proof_err = None
+    tool_calls_log = []
+    tool_instances = tools or []
+    openai_tools = [tool_to_openai(t) for t in tool_instances] if tool_instances else None
+    # 自动检测模型是否支持 reasoning_effort
+    reasoning_effort = ctx.reasoning_effort
+    if reasoning_effort and not _model_supports_reasoning_effort(ctx.model):
+        log(f"   ⚠️ 模型 {ctx.model} 不支持 reasoning_effort 参数，已自动跳过")
+        reasoning_effort = None
+    # 自动检测模型是否支持图片（纯文本模型发送 image_url 会触发 400）
+    if images and not _model_supports_images(ctx.model):
+        log(f"   ⚠️ 模型 {ctx.model} 是纯文本模型，不支持图片输入，已自动跳过 {len(images)} 张图片")
+        effective_images = []
+    else:
+        effective_images = images
+    # 注入当前校对文本，供 text_nav_tools（locate_paragraph/read_section）使用
+    from shared.text_nav_tools import set_current_text as _set_nav_text
+    _set_nav_text(md_text)
+    # 累计整个 call_api 过程的所有 token 消耗
+    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    # 连续相同类型错误计数（熔断器）
+    consecutive_errors = 0
+    last_error_type = None
+    chat_url = ctx.api_url.rstrip("/")
+    if not chat_url.endswith("/chat/completions"):
+        chat_url += "/chat/completions"
+
+    headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
+
+    for retry in range(MAX_RETRY + 1):
+        tool_calls_log.clear()
+        try:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": [
+                    {"type": "text", "text": f"编号：{q_title}\n内容：\n{md_text}"},
+                    *effective_images,
+                ]},
+            ]
+            payload = {
+                "model": ctx.model, "messages": messages,
+                "temperature": 0.3,
+                "max_tokens": ctx.max_tokens,
+            }
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
+            if openai_tools:
+                payload["tools"] = openai_tools
+
+            # 记录 payload 大小日志
+            _payload_size = len(json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8'))
+            log(f"   📤 发送请求 → 模型: {ctx.model}, 系统提示词: {len(system_prompt)}字符, "
+                f"文本: {len(md_text)}字符, 图片: {len(effective_images)}张, "
+                f"工具: {len(openai_tools) if openai_tools else 0}个, "
+                f"payload: {_payload_size // 1024}KB")
+
+            initial_header = _dump_initial_payload(q_title, system_prompt, md_text, effective_images, openai_tools)
+
+            # 首次请求
+            choice, usage = _post_chat(chat_url, payload, headers)
+            _accumulate_usage(total_usage, usage)
+
+            # 工具循环
+            result = _run_tool_loop(
+                ctx, choice, messages, tool_instances, openai_tools,
+                tool_calls_log, initial_header, payload, chat_url, headers,
+                reasoning_effort, total_usage,
+            )
+
+            # END_TURN 路径在 _run_tool_loop 内未保存日志，此处补存
+            if result.stop_reason == StopReason.END_TURN:
+                _save_conversation_log(
+                    result.messages, ctx.output_dir, q_title, initial_header,
+                )
+
+            return result.as_dict()
+
+        except Exception as e:
+            proof_err = _classify_error(e)
+            err_msg = str(proof_err)
+
+            # 提取 HTTP 响应体（写入 err_msg，确保落入日志文件 _API对话记录.md）
+            resp_body = ""
+            try:
+                if hasattr(e, 'response') and e.response is not None:
+                    resp_body = (e.response.text[:1000]
+                                 if hasattr(e.response, 'text') else "")
+            except Exception:
+                pass
+            if resp_body:
+                err_msg = f"{err_msg}\n\nAPI 响应体：\n{resp_body}"
+
+            # 重试决策
+            should_continue, err_msg, consecutive_errors, last_error_type = _handle_retry(
+                proof_err, err_msg, retry, consecutive_errors, last_error_type,
+            )
+
+            if resp_body and not should_continue:
+                log(f"   📋 响应体: {resp_body[:500]}")
+
+            if not should_continue:
+                break
+
+            # 退避等待
+            backoff_base = getattr(proof_err, 'backoff_base', 2.0)
+            delay = _backoff_delay(retry, base=backoff_base)
+            err_type = type(proof_err).__name__
+            log(f"   ⚠️ {q_title} 第{retry + 1}次重试（{err_type}，退避 {delay:.0f}s）...")
+            time.sleep(delay)
+
+    # ================================================================
+    # 所有重试耗尽或不可重试 → 构建详细的错误报告
+    # ================================================================
+    error_summary = _build_error_report(
+        ctx, proof_err, err_msg, q_title, consecutive_errors, last_error_type,
+    )
+
     # 保存错误日志到文件
     _save_conversation_log(
         [], ctx.output_dir, q_title,
         f"# API 请求记录 — {q_title}\n\n"
-        f"## 上下文\n{error_context}\n\n"
-        f"## 错误报告\n{error_summary}\n"
+        f"## 上下文\n- 模型：`{ctx.model}`\n- API 端点：`{ctx.api_url.rstrip('/')}`\n- 题目：{q_title}\n\n"
+        f"## 错误报告\n{error_summary}\n",
     )
     return {
         "content": error_summary,
@@ -763,7 +846,6 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
         "stop_reason": StopReason.ERROR,
         "usage": total_usage,
     }
-
 
 
 def call_api_continue(

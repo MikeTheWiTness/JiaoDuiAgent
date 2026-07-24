@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 
 # ─── BashTool ───────────────────────────────────────────────
 
+BASH_TIMEOUT = 30  # Bash 命令执行超时（秒）
+
 class BashParams(BaseModel):
     command: str = Field(
         description="要执行的 bash 命令。支持管道、重定向、python -c 等。"
@@ -47,7 +49,7 @@ class BashTool(BaseTool):
                 capture_output=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=30,
+                timeout=BASH_TIMEOUT,
                 cwd=cwd,
             )
             out = result.stdout
@@ -61,7 +63,7 @@ class BashTool(BaseTool):
                 parts.append("(无输出，命令执行成功)")
             return "\n".join(parts)
         except subprocess.TimeoutExpired:
-            return "错误：命令执行超时（30秒）"
+            return f"错误：命令执行超时（{BASH_TIMEOUT}秒）"
         except Exception as e:
             return f"错误：{e}"
 

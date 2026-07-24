@@ -238,3 +238,20 @@ def strip_format_markers(text):
 def get_format_marker_list():
     """返回所有格式标记列表，用于校对时的识别。"""
     return _FMT_MARKERS.copy()
+
+
+def generate_clean_md(md_text, repl):
+    """生成干净版 Markdown：去除格式标记、批注、粗体/斜体标记。
+
+    Args:
+        md_text: 原始 Markdown 文本
+        repl: 粗体/斜体替换文本（"\\x01" 删除粗体，r"\\1" 保留粗体文本）
+
+    Returns:
+        str: 清洗后的 Markdown 文本
+    """
+    clean = strip_format_markers(md_text)
+    clean = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', clean, flags=re.DOTALL)
+    clean = re.sub(r'\*\*([^*]+)\*\*', repl, clean)
+    clean = re.sub(r'__([^_]+)__', repl, clean)
+    return clean

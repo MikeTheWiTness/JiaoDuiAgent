@@ -212,12 +212,8 @@ class BaseSubjectApp:
 
             # 同步生成 _clean.md
             try:
-                from shared.docx_format_enhancer import strip_format_markers
-                clean = strip_format_markers(new_content)
-                clean = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', clean, flags=re.DOTALL)
-                repl = self._clean_bold_replacement
-                clean = re.sub(r'\*\*([^*]+)\*\*', repl, clean)
-                clean = re.sub(r'__([^_]+)__', repl, clean)
+                from shared.docx_format_enhancer import generate_clean_md
+                clean = generate_clean_md(new_content, self._clean_bold_replacement)
                 (q_dir / f"第{idx}题_clean.md").write_text(clean, encoding='utf-8')
             except Exception:
                 pass

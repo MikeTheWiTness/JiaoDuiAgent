@@ -3,16 +3,16 @@ import re
 
 import pytest
 
-from shared.docx_format_enhancer import strip_format_markers
+from shared.docx_format_enhancer import generate_clean_md
 
 
-def make_clean_md(md_text):
-    """生成干净版 md——保留正文文字，去除所有格式标记和批注"""
-    text = strip_format_markers(md_text)
-    text = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', text, flags=re.DOTALL)
-    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-    text = re.sub(r'__([^_]+)__', r'\1', text)
-    return text
+@pytest.fixture(params=["\x01", r"\1"], ids=["repl_x01_delete_bold", "repl_backref_keep_bold"])
+def repl(request):
+    """两套 repl 参数覆盖全部 7 学科：
+    - "\x01": 默认 6 学科，删除粗体文本（base_subject._clean_bold_replacement 默认值）
+    - r"\1": 高中历史，保留粗体文本
+    """
+    return request.param
 
 
 @pytest.fixture
@@ -29,46 +29,54 @@ def raw_md():
 
 
 class TestCleanMdPipeline:
-    """验证 _clean.md 生成与同步写入的逻辑"""
+    """验证 _clean.md 生成与同步写入的逻辑（两套 repl 各跑一遍）"""
 
-    def test_clean_md_contains_no_format_markers(self, raw_md):
-        clean = make_clean_md(raw_md)
+    def test_clean_md_contains_no_format_markers(self, raw_md, repl):
+        clean = generate_clean_md(raw_md, repl)
         markers = ["<着重>", "</着重>", "<下划线>", "</下划线>",
                    "<波浪线>", "</波浪线>", "<删除线>", "</删除线>"]
         for m in markers:
             assert m not in clean, f"clean 版不应含 '{m}'"
 
-    def test_clean_md_contains_no_annotation_markers(self, raw_md):
-        clean = make_clean_md(raw_md)
+    def test_clean_md_contains_no_annotation_markers(self, raw_md, repl):
+        clean = generate_clean_md(raw_md, repl)
         assert '批注' not in clean
 
-    def test_clean_md_preserves_chinese_text(self, raw_md):
-        clean = make_clean_md(raw_md)
+    def test_clean_md_preserves_chinese_text(self, raw_md, repl):
+        clean = generate_clean_md(raw_md, repl)
         must_preserve = [
             "韦凑字彦宗", "京兆万年人", "永淳初",
             "解褐婺州参军事", "观察使房昶才之", "扬州法曹",
-            "韦子识远文详",
         ]
+        # 韦子识远文详 被粗体包裹，repl="\x01" 时会删除整段粗体文本
+        if repl == r"\1":
+            must_preserve.append("韦子识远文详")
         for text in must_preserve:
-            assert text in clean, f"clean 版应保留正文 '{text}'"
+            assert text in clean, f"clean 版应保留正文 '{text}' (repl={repr(repl)})"
 
-    def test_bold_text_preserved_not_deleted(self):
-        clean = make_clean_md("**韦凑**字彦宗")
-        assert "韦凑" in clean
+    def test_bold_text_handling_by_repl(self, repl):
+        """粗体文本根据 repl 参数决定保留或删除。"""
+        clean = generate_clean_md("**韦凑**字彦宗", repl)
+        if repl == r"\1":
+            # 高中历史：保留粗体文本内容
+            assert "韦凑" in clean
+        else:
+            # 默认 6 学科：\x01 替换后粗体文本被删除
+            assert "韦凑" not in clean
 
-    def test_hanzi_subset_of_raw(self, raw_md):
-        clean = make_clean_md(raw_md)
+    def test_hanzi_subset_of_raw(self, raw_md, repl):
+        clean = generate_clean_md(raw_md, repl)
         raw_han = set(re.findall(r'[一-鿿]', raw_md))
         clean_han = set(re.findall(r'[一-鿿]', clean))
         missing = clean_han - raw_han
         assert missing == set(), f"clean 版不应有 raw 版中不存在的汉字: {missing}"
 
-    def test_write_clean_alongside_raw(self, raw_md, temp_dir):
+    def test_write_clean_alongside_raw(self, raw_md, repl, temp_dir):
         q_dir = temp_dir / "第1题"
         q_dir.mkdir(exist_ok=True)
         raw_path = q_dir / "第1题.md"
         raw_path.write_text(raw_md, encoding='utf-8')
-        clean_content = make_clean_md(raw_md)
+        clean_content = generate_clean_md(raw_md, repl)
         clean_path = q_dir / "第1题_clean.md"
         clean_path.write_text(clean_content, encoding='utf-8')
         assert raw_path.exists()
