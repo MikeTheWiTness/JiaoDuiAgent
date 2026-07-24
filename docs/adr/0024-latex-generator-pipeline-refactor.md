@@ -1,6 +1,6 @@
 # ADR 0024：latex_generator 大函数 pipeline 化 + 内部重复去重
 
-**状态**：已实现（commit 16d7fcf）（C5+C4+C1 已完成，C2+C3 为内部抽取优化）
+**状态**：已实现（commit 16d7fcf）
 **日期**：2026-07-23（2026-07-24 修订：增"严格保留原差异 / log 输出逐字不变"两条原则；C2 删除"顺手补兜底"的修复构思——它是行为变更不是 refactor）
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0020 斜体/上下标分离修复]](0020-math-italics-separation.md)
@@ -33,7 +33,7 @@
 
 ### C1：`build_paracol_content` 改造为 pipeline 步骤列表
 
-抽出模块级 `_PIPELINE = [(name, fn), ...]` 列表，每步为纯函数（签名 `(state: _RenderState) -> _RenderState` 或 `(text, state) -> text`）。`build_paracol_content` 退化为按序调用 pipeline 并维护中间产物。
+抽出 `_PIPELINE` 步骤列表，每步为纯函数（签名 `(state: _RenderState) -> None`）。`build_paracol_content` 退化为按序调用 pipeline 并维护中间产物。
 
 **关键纪律**：
 - 每步独立可单测——传入构造好的 `state`，断言该步输出。
