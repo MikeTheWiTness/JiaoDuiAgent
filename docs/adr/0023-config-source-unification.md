@@ -1,6 +1,6 @@
 # ADR 0023：物理/化学跨模块凭证设置逻辑去重 + 缓存锁 + env 持久化保键
 
-**状态**：已接受（待落地，独立支线）
+**状态**：已实现（commit 72ada63）
 **日期**：2026-07-23（2026-07-24 修订：回退 C1 方案为纯去重，不动第三轨跨模块传递时序）
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0019 架构审查修复]](0019-architecture-review-fixes.md)、[[ADR 0006 物理 ReAct 学科化]](0006-physics-react-subject-specialization.md)
