@@ -4,6 +4,7 @@
 而是直接编辑目标文件，编辑后由 Python 端重读验证。
 """
 import os
+import re
 import subprocess
 
 from langchain_core.tools import BaseTool
@@ -12,6 +13,74 @@ from pydantic import BaseModel, Field
 # ─── BashTool ───────────────────────────────────────────────
 
 BASH_TIMEOUT = 30  # Bash 命令执行超时（秒）
+
+# 危险命令模式（阻止 LLM 执行）
+_DANGEROUS_PATTERNS = [
+    r'\brm\s+-rf?\b',            # rm -rf / rm -r
+    r'\bcurl\b',                  # 数据外传
+    r'\bwget\b',                  # 数据外传
+    r'\bnc\b',                    # netcat
+    r'\bsudo\b',                  # 提权
+    r'>\s*/dev/',                 # 写入设备文件
+    r'\bchmod\b',                 # 权限修改
+    r'\bchown\b',                 # 所有者修改
+    r'\bkill\b',                  # 进程终止
+    r'\breboot\b',                # 系统重启
+    r'\bshutdown\b',              # 关机
+    r'\bmkfs\.',                  # 格式化
+    r'\bdd\s+if=',                # 磁盘操作
+]
+
+# 允许的命令前缀（仅这些命令可通过 BashTool 执行）
+_ALLOWED_COMMANDS = [
+    "python", "python3",
+    "sed", "cat", "type", "dir", "ls",
+    "echo", "grep", "find", "head", "tail",
+    "wc", "sort", "uniq", "tr", "cut",
+    "mkdir", "cp", "mv",
+]
+
+
+def _validate_bash_command(command: str, allowed_dir: str | None) -> str | None:
+    """验证 bash 命令安全性。返回错误消息，通过返回 None。
+
+    检查：
+    1. 命令非空
+    2. 不含危险模式（rm -rf / curl / wget 等）
+    3. 仅使用允许的命令
+    4. 如有 allowed_dir，禁止绝对路径和 cd 越界
+    """
+    stripped = command.strip()
+    if not stripped:
+        return "错误：命令不能为空"
+
+    # 1. 危险模式检查
+    for pat in _DANGEROUS_PATTERNS:
+        if re.search(pat, stripped):
+            return f"错误：命令包含禁止的模式（{pat}）"
+
+    # 2. 命令白名单（取管道/分隔符前的第一个命令）
+    first_cmd = re.split(r'[;|&]', stripped)[0].strip().split()[0] if stripped.split() else ""
+    # 对于 python -c "..." 形式，first_cmd 就是 python
+    if first_cmd and first_cmd not in _ALLOWED_COMMANDS:
+        return f"错误：不允许的命令 '{first_cmd}'。允许的命令: {', '.join(_ALLOWED_COMMANDS[:6])}..."
+
+    # 3. 路径越界检查（如有 allowed_dir）
+    if allowed_dir:
+        allowed = os.path.abspath(allowed_dir)
+        # 禁止 cd 命令（可能用于目录穿越）
+        if re.search(r'(\b|;)\s*cd\s+', stripped):
+            return "错误：不允许 cd 命令"
+
+        # 禁止绝对路径引用（/etc/、/home/ 等），
+        # 但允许 python -c 内部的字符串（不做静态分析）
+        # 简单策略：禁止以 / 开头的路径参数
+        for token in stripped.split():
+            if token.startswith('/') and not token.startswith(allowed):
+                return f"错误：禁止访问 allowed_dir 外的路径: {token}"
+
+    return None
+
 
 class BashParams(BaseModel):
     command: str = Field(
@@ -25,7 +94,7 @@ class BashTool(BaseTool):
     用途：格式修正时，LLM 用 cat/type 读取文件内容，用 sed / python -c 等
     直接修改文件，Python 端在工具返回后重读文件进行验证。
 
-    安全约束：通过 allowed_dir 限制可操作的文件目录。
+    安全约束：命令白名单 + 危险模式拦截 + allowed_dir 路径限制。
     """
 
     name: str = "bash"
@@ -41,6 +110,11 @@ class BashTool(BaseTool):
     allowed_dir: str | None = None
 
     def _run(self, command: str) -> str:
+        # 安全校验
+        err = _validate_bash_command(command, self.allowed_dir)
+        if err:
+            return err
+
         cwd = self.allowed_dir if self.allowed_dir else os.getcwd()
         try:
             result = subprocess.run(
