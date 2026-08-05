@@ -113,3 +113,51 @@ class TestProofreadOneFileSelection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProofreadPersistenceDecoupled(unittest.TestCase):
+    """单题报告落盘与 generate_pdf 勾选解耦——generate_pdf=False 时仍落盘。"""
+
+    def setUp(self):
+        import shutil
+        self.tmpdir = tempfile.mkdtemp(prefix="tdd_persist_")
+        self.q_dir = os.path.join(self.tmpdir, "第1题")
+        os.makedirs(self.q_dir, exist_ok=True)
+        with open(os.path.join(self.q_dir, "第1题.md"), "w", encoding="utf-8") as f:
+            f.write("1．题目\n\n【1|错误|正确】\n")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _run_proofread(self, generate_pdf):
+        from unittest import mock
+        from core import defaults
+        from core.session_context import SessionContext
+        from core.api_client import StopReason
+
+        ctx = SessionContext(api_url="http://x", api_key="k", model="m",
+                             max_loops=1, output_dir=self.tmpdir)
+        fake_result = {
+            "content": "轻微问题\n\n### 标记原文\n编号：第1题\n内容：\n1．题目【1|错误|正确】\n\n### 修改原因\n1. 修正错误。",
+            "tool_calls_log": [],
+            "reasoning": "思考",
+            "usage": {"total_tokens": 100},
+            "stop_reason": StopReason.END_TURN,
+        }
+        with mock.patch.object(defaults, "call_api", return_value=fake_result), \
+                mock.patch.object(defaults, "_enforce_format", return_value=(True, [])):
+            return defaults.default_proofread_one(
+                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=generate_pdf)
+
+    def test_report_persists_when_generate_pdf_false(self):
+        r = self._run_proofread(generate_pdf=False)
+        self.assertTrue(r["success"])
+        self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对报告.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对数据.json")))
+
+    def test_report_persists_when_generate_pdf_true(self):
+        r = self._run_proofread(generate_pdf=True)
+        self.assertTrue(r["success"])
+        self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对报告.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对数据.json")))

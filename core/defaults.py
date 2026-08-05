@@ -878,62 +878,63 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
 
-        if generate_pdf:
-            md_path = os.path.join(q_dir, "_校对报告.md")
-            try:
-                with open(md_path, "w", encoding="utf-8") as f:
-                    # 加注 API 对话记录路径，方便排查
-                    f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
-                    f.write(res)
-                    # 追加工具调用摘要，方便排查搜索质量
-                    if tool_calls:
-                        f.write(_format_tool_calls_summary(tool_calls))
-                    # "无问题" 时追加模型思考内容，方便后期核查
-                    if _is_no_issue(res) and reasoning:
-                        f.write("\n\n---\n")
-                        f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
-                        f.write(reasoning)
-                    # 追加 token 用量统计
-                    usage_text = _format_usage_summary(usage)
-                    if usage_text:
-                        f.write(usage_text)
-            except Exception:
-                import traceback
-                log(f"   ⚠️ 写入 reasoning/usage 到 _校对报告.md 失败:\n{traceback.format_exc()}")
-            save_proofread_json(res, q_dir, tool_calls)
+        # 单题报告落盘（校对核心产物，与 generate_pdf 勾选解耦：总是执行）
 
-            # 同步存档到 output/中间产物/{文档名}/{题目名}/
-            try:
-                q_dir_path = Path(q_dir)
-                doc_name = q_dir_path.parent.name   # 文档名（如 高中语文教研实习生笔试试卷）
-                q_name_clean = q_dir_path.name       # 题目名（如 第1题）
-                artifact_dir = Path("output") / "中间产物" / doc_name / q_name_clean
-                artifact_dir.mkdir(parents=True, exist_ok=True)
-                artifact_path = artifact_dir / "_校对报告.md"
-                with open(artifact_path, "w", encoding="utf-8") as f:
-                    f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
-                    f.write(res)
-                    if tool_calls:
-                        f.write(_format_tool_calls_summary(tool_calls))
-                    if _is_no_issue(res) and reasoning:
-                        f.write("\n\n---\n")
-                        f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
-                        f.write(reasoning)
-                    usage_text = _format_usage_summary(usage)
-                    if usage_text:
-                        f.write(usage_text)
-                # 同步存档结构化数据
-                import shutil
-                src_json = os.path.join(q_dir, "_校对数据.json")
-                if os.path.exists(src_json):
-                    shutil.copy2(src_json, artifact_dir / "_校对数据.json")
-                # 同步存档 API 对话记录
-                src_api_log = os.path.join(q_dir, "_API对话记录.md")
-                if os.path.exists(src_api_log):
-                    shutil.copy2(src_api_log, artifact_dir / "_API对话记录.md")
-            except Exception:
-                import traceback
-                log(f"   ⚠️ 中间产物存档失败 ({q_dir} → {artifact_dir}):\n{traceback.format_exc()}")
+        md_path = os.path.join(q_dir, "_校对报告.md")
+        try:
+            with open(md_path, "w", encoding="utf-8") as f:
+                # 加注 API 对话记录路径，方便排查
+                f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
+                f.write(res)
+                # 追加工具调用摘要，方便排查搜索质量
+                if tool_calls:
+                    f.write(_format_tool_calls_summary(tool_calls))
+                # "无问题" 时追加模型思考内容，方便后期核查
+                if _is_no_issue(res) and reasoning:
+                    f.write("\n\n---\n")
+                    f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
+                    f.write(reasoning)
+                # 追加 token 用量统计
+                usage_text = _format_usage_summary(usage)
+                if usage_text:
+                    f.write(usage_text)
+        except Exception:
+            import traceback
+            log(f"   ⚠️ 写入 reasoning/usage 到 _校对报告.md 失败:\n{traceback.format_exc()}")
+        save_proofread_json(res, q_dir, tool_calls)
+
+        # 同步存档到 output/中间产物/{文档名}/{题目名}/
+        try:
+            q_dir_path = Path(q_dir)
+            doc_name = q_dir_path.parent.name   # 文档名（如 高中语文教研实习生笔试试卷）
+            q_name_clean = q_dir_path.name       # 题目名（如 第1题）
+            artifact_dir = Path("output") / "中间产物" / doc_name / q_name_clean
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path = artifact_dir / "_校对报告.md"
+            with open(artifact_path, "w", encoding="utf-8") as f:
+                f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
+                f.write(res)
+                if tool_calls:
+                    f.write(_format_tool_calls_summary(tool_calls))
+                if _is_no_issue(res) and reasoning:
+                    f.write("\n\n---\n")
+                    f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
+                    f.write(reasoning)
+                usage_text = _format_usage_summary(usage)
+                if usage_text:
+                    f.write(usage_text)
+            # 同步存档结构化数据
+            import shutil
+            src_json = os.path.join(q_dir, "_校对数据.json")
+            if os.path.exists(src_json):
+                shutil.copy2(src_json, artifact_dir / "_校对数据.json")
+            # 同步存档 API 对话记录
+            src_api_log = os.path.join(q_dir, "_API对话记录.md")
+            if os.path.exists(src_api_log):
+                shutil.copy2(src_api_log, artifact_dir / "_API对话记录.md")
+        except Exception:
+            import traceback
+            log(f"   ⚠️ 中间产物存档失败 ({q_dir} → {artifact_dir}):\n{traceback.format_exc()}")
         return {"success": True, "result": res, "tool_calls": tool_calls, "error": None}
     else:
         # stop_reason == ERROR：提取完整错误信息（不截断，保留排查细节）
