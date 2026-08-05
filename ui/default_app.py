@@ -23,6 +23,7 @@ from core.logging_utils import log, set_log_func
 from core.pandoc_utils import check_pandoc, convert_with_pandoc
 from core.session_context import SessionContext
 from shared.latex_generator import generate_combined_pdf
+from core.docx_report import generate_combined_docx
 from shared.session import SessionManager
 from ui.pipeline import PipelineBar, setup_pipeline_styles
 from ui.widgets import ApiDialog, LogPanel
@@ -49,6 +50,7 @@ class DefaultApp:
         self.knowledge_enabled = tk.BooleanVar(value=True)
 
         self.generate_pdf = tk.BooleanVar(value=True)
+        self.generate_docx = tk.BooleanVar(value=True)
 
         self.parallel_enabled = tk.BooleanVar(value=True)
         self.parallel_count = tk.StringVar(value="10")
@@ -179,6 +181,8 @@ class DefaultApp:
         if features.get("show_pdf_option", True):
             ttk.Checkbutton(self.frame_typeset, text="生成 LaTeX PDF 校对报告",
                             variable=self.generate_pdf).pack(side=tk.LEFT, padx=4)
+            ttk.Checkbutton(self.frame_typeset, text="生成 Word 批注报告",
+                            variable=self.generate_docx).pack(side=tk.LEFT, padx=4)
 
         # ===== 文件区域 =====
         self.frame_file_area = ttk.Frame(self.root, padding=(10, 4))
@@ -712,9 +716,17 @@ class DefaultApp:
                         log(f"   ✅ PDF 已生成：{pdf_path}")
                         success += 1
                     else:
-                        log(f"   ⚠️ 生成失败：未找到可用的校对数据")
+                        log(f"   ⚠️ PDF 生成失败：未找到可用的校对数据")
                 except Exception as e:
-                    log(f"   ❌ 生成异常：{e}")
+                    log(f"   ❌ PDF 生成异常：{e}")
+                if self.pipeline.typeset_enabled and self.generate_docx.get():
+                    try:
+                        docx_dir = os.path.join(self.output_dir.get(), "校对Word")
+                        docx_path = generate_combined_docx(dir_path, docx_dir)
+                        if docx_path:
+                            log(f"   ✅ Word 批注报告已生成：{docx_path}")
+                    except Exception as e:
+                        log(f"   ❌ Word 生成异常：{e}")
             if not self.task_interrupt:
                 log(f"\n===== PDF 生成完成：{success}/{total} =====")
             self.task_running = False
@@ -1215,7 +1227,7 @@ class DefaultApp:
                 if not self.task_interrupt and paper_results:
                     self._export_paper_report(paper_name, paper_results, report_root)
 
-                if self.generate_pdf.get() and not self.task_interrupt and paper_results:
+                if self.pipeline.typeset_enabled and self.generate_pdf.get() and not self.task_interrupt and paper_results:
                     try:
                         pdf_dir = os.path.join(self.output_dir.get(), "校对PDF")
                         pdf_path = generate_combined_pdf(paper_path, pdf_dir)
@@ -1225,6 +1237,15 @@ class DefaultApp:
                             log(f"   ⚠️ 汇总 PDF 生成失败（无可用的校对数据）")
                     except Exception as e:
                         log(f"   ⚠️ 汇总 PDF 生成异常：{e}")
+
+                if self.pipeline.typeset_enabled and self.generate_docx.get() and not self.task_interrupt and paper_results:
+                    try:
+                        docx_dir = os.path.join(self.output_dir.get(), "校对Word")
+                        docx_path = generate_combined_docx(paper_path, docx_dir)
+                        if not docx_path:
+                            log(f"   ⚠️ 汇总 Word 生成失败（无可用的校对数据）")
+                    except Exception as e:
+                        log(f"   ⚠️ 汇总 Word 生成异常：{e}")
 
             if self.task_interrupt:
                 log("\n===== 任务已中断 =====")
