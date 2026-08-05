@@ -98,51 +98,58 @@ a = Analysis(
         (os.path.join(project_root, 'shared/templates'), 'templates'),
         (os.path.join(project_root, 'bundled_texlive'), 'texlive'),
     ],
-    hiddenimports=[
-        'core',
-        'core.paths',
-        'core.parsing',
-        'core.api_client',
-        'core.pandoc_utils',
-        'core.env_config',
-        'core.logging_utils',
-        'core.config_loader',
-        'core.defaults',
-        'core.manual_split',
-        'core.idml_extractor',
-        'shared',
-        'shared.sympy_tools',
-        'shared.sympy_tools.tools',
-        'shared.sympy_tools.templates',
-        'shared.sympy_tools.sandbox',
-        'shared.sympy_tools.safety',
-        'shared.web_tools',
-        'shared.latex_generator',
-        'shared.pdf_compiler',
-        'shared.free_proofread',
-        'shared.smart_split',
-        'shared.review_mode',
-        'shared.review_latex',
-        'shared.docx_comments',
-        'shared.docx_format_enhancer',
-        'shared.chinese_classics_tools',
-        'ui',
-        'ui.widgets',
-        'ui.default_app',
-        'sympy',
-        'sympy.parsing',
-        'sympy.parsing.sympy_parser',
-        'PIL',
-        'PIL.Image',
-        'docx',
-        'lxml',
-        'requests',
-        'pydantic',
-        'langchain_core',
-        'langchain_core.tools',
-        'langchain_core.messages',
-        'langchain_core.output_parsers',
-    ],
+	    hiddenimports=[
+	        'core',
+	        'core.parsing',
+	        'core.api_client',
+	        'core.pandoc_utils',
+	        'core.env_config',
+	        'core.logging_utils',
+	        'core.config_loader',
+	        'core.defaults',
+	        'core.manual_split',
+	        'core.session_context',
+	        'core.format_enforcement',
+	        'core.idml_extractor',
+	        'shared',
+	        'shared.sympy_tools',
+	        'shared.sympy_tools.tools',
+	        'shared.sympy_tools.templates',
+	        'shared.sympy_tools.sandbox',
+	        'shared.sympy_tools.safety',
+	        'shared.web_tools',
+	        'shared.latex_generator',
+	        'shared.pdf_compiler',
+	        'shared.free_proofread',
+	        'shared.smart_split',
+	        'shared.review_mode',
+	        'shared.review_latex',
+	        'shared.docx_comments',
+	        'shared.docx_format_enhancer',
+	        'shared.chinese_classics_tools',
+	        'shared.bash_tool',
+	        'shared.split_post_utils',
+	        'shared.text_nav_tools',
+	        'shared.decor_utils',
+	        'shared.image_utils',
+	        'ui',
+	        'ui.widgets',
+	        'ui.pipeline',
+	        'ui.default_app',
+	        'sympy',
+	        'sympy.parsing',
+	        'sympy.parsing.sympy_parser',
+	        'PIL',
+	        'PIL.Image',
+	        'docx',
+	        'lxml',
+	        'requests',
+	        'pydantic',
+	        'langchain_core',
+	        'langchain_core.tools',
+	        'langchain_core.messages',
+	        'langchain_core.output_parsers',
+	    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -235,7 +242,7 @@ def _get_subject_dir():
 
 使用便携版时，编译分两步：
 1. **xelatex -no-pdf** — 生成 XDV 中间文件
-2. **xdvipdfmx** — 将 XDV 转为 PDF（设置 `DVIPDFMXINPUTS` 指向 `dvipdfmx.cfg`）
+2. **xdvipdfmx** — 将 XDV 转为 PDF（设置 `DVIPDFMXINPUTS` 指向 `dvipdfmx.cfg`；macOS/Linux 上使用 `xdvipdfmx`，Windows 上使用 `xdvipdfmx.exe`）
 
 两步法而非一步法的原因：Windows 上 xelatex 内部调用 xdvipdfmx 时，子进程可能无法正确继承环境变量，导致 `系统找不到指定的路径` 错误（xdvipdfmx 找不到 `dvipdfmx.cfg`）。
 
@@ -313,7 +320,7 @@ Fandol Song 是宋体风格，视觉上与 SimSun 基本一致。如需完全一
 
 ## 打包常见问题与解决办法
 
-### 问题1：旧版学科（v1.x）与新版 UI（v2.x）接口不兼容
+### 问题1：旧版学科（v1.x）与新版 UI（v3.x）接口不兼容
 
 **现象**：
 - 启动报错，提示缺少参数或方法签名不匹配
@@ -321,19 +328,20 @@ Fandol Song 是宋体风格，视觉上与 SimSun 基本一致。如需完全一
 - 工具调用失败，提示词中缺少工具说明
 
 **原因**：
-`ui/default_app.py` 升级到 v2.0 接口后，旧版学科的 `subject.py` 方法签名与新版不匹配：
+`ui/default_app.py` 升级到 v3.0 接口后，旧版学科的 `subject.py` 方法签名与新版不匹配：
 
-| 方法 | v1.x 旧签名 | v2.x 新签名 |
+| 方法 | v1.x 旧签名 | v3.x 新签名 |
 |------|------------|------------|
 | `split_lecture` | `(md_content, output_dir, subject_config)` | `(md_file, output_root, base_name, options=None)` |
 | `split_exam` | `(md_content, output_dir, subject_config)` | `(md_file, output_root, base_name, options=None)` |
-| `generate_knowledge` | `(md_content, output_dir, subject_config)` | `(md_file, output_root, base_name)` |
-| `proofread_one` | `(api_cfg, q_dir, q_name, is_knowledge, generate_pdf)` | `(api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode="试卷")` |
+| `generate_knowledge` | `(md_content, output_dir, subject_config)` | 已废弃（ADR-0017），`()` 直接返回 False |
+| `proofread_one` | `(api_cfg, q_dir, q_name, is_knowledge, generate_pdf)` | `(ctx: SessionContext, q_dir, q_name, generate_pdf, source_mode="试卷")` |
 | `get_tool_instructions` | `(tools)` 需要传参 | `()` 无参，从 `self.tools` 生成 |
+| `get_knowledge_prompt` | `()` 返回知识点提示词 | 已删除（ADR-0017），知识提取概念已废弃 |
 | `get_ui_features` | 无此方法 | `()` 返回 UI 功能开关字典 |
 
 **解决办法**：
-升级学科的 `subject.py`，使其方法签名与 v2.0 兼容。可参考 `subjects/高中物理v3.0/subject.py` 或 `subjects/高中语文v3.0/subject.py` 的实现。
+升级学科的 `subject.py`，使其方法签名与 v3.0 兼容。可参考 `subjects/高中物理v3.0/subject.py` 或 `subjects/高中语文v3.0/subject.py` 的实现。
 
 ---
 
