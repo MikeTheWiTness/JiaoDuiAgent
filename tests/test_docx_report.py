@@ -4,8 +4,8 @@ import shutil
 import sys
 import tempfile
 import unittest
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -132,6 +132,66 @@ class TestGenerateCombinedDocx(unittest.TestCase):
     @staticmethod
     def _findall(text, needle):
         return [m for m in range(len(text)) if text.startswith(needle, m)]
+
+
+class TestConvertMultilineTables(unittest.TestCase):
+    """回归：_convert_multiline_tables 不得把普通 bullet 列表误判为表格。
+
+    修复前：判定条件 startswith("-") and len>=10 把任意 10 字以上列表项
+    当作 multiline table 边框，正文被按 2+ 空格切分成网格表格静默改写。
+    修复后：只有「整行全部由 - 组成」的长线才是表格边框。
+    """
+
+    def setUp(self):
+        from core.docx_report import _convert_multiline_tables
+        self._convert = _convert_multiline_tables
+
+    def test_bullet_list_not_treated_as_table(self):
+        """两条以上 bullet 列表项必须原样保留，不得转成网格表格"""
+        text = (
+            "### 标记原文\n\n"
+            "- 首先我们先看这道题目的已知条件是什么\n"
+            "- 其次要注意单位换算关系\n"
+            "- 最后检查计算过程是否合理"
+        )
+        out = self._convert(text)
+        self.assertNotIn("|", out)
+        self.assertIn("- 首先我们先看这道题目的已知条件是什么", out)
+        self.assertIn("- 其次要注意单位换算关系", out)
+        self.assertIn("- 最后检查计算过程是否合理", out)
+
+    def test_single_bullet_not_treated_as_table(self):
+        """单条 bullet（无配对边界）也不受影响"""
+        text = "- 这是一条超过十个字符的普通列表项内容"
+        out = self._convert(text)
+        self.assertEqual(out, text)
+
+    def test_real_multiline_table_still_converted(self):
+        """真实 multiline table（--- 边框）仍应转为 grid table"""
+        text = (
+            "前文\n\n"
+            "---------------\n"
+            "列一  列二  列三\n"
+            "甲    乙    丙\n"
+            "---------------\n\n"
+            "后文"
+        )
+        out = self._convert(text)
+        self.assertIn("| 列一", out)
+        self.assertIn("| 甲", out)
+        self.assertIn("前文", out)
+        self.assertIn("后文", out)
+
+    def test_short_separator_untouched(self):
+        """短 --- markdown 分隔线保持原样"""
+        text = "正文\n\n---\n\n后续"
+        out = self._convert(text)
+        self.assertEqual(out, text)
+
+    def test_empty_and_plain_text(self):
+        self.assertEqual(self._convert(""), "")
+        plain = "没有任何表格的普通段落。\n第二行。"
+        self.assertEqual(self._convert(plain), plain)
 
 
 if __name__ == "__main__":

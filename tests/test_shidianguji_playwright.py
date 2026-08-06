@@ -22,9 +22,6 @@ class TestShidiangujiPlaywright(unittest.TestCase):
         self.assertIsInstance(result, bool,
                               "必须返回布尔值，不能抛异常")
 
-    def test_module_imports_without_playwright_installed(self):
-        self.assertTrue(True)
-
     def test_search_and_extract_returns_none_for_empty_key(self):
         """空关键词应返回 None"""
         from shared.shidianguji_playwright import is_playwright_available, search_and_extract

@@ -64,11 +64,11 @@ class TestExcerptExtraction(unittest.TestCase):
         self.assertEqual(len(self.norm(result)), len(self.norm(text)))
 
     def test_margin_adds_context(self):
-        """margin > 0 结果不短于 margin=0"""
-        r0 = extract_excerpt_from_full(self.weicou_full, self.weicou_excerpt)
-        r20 = extract_excerpt_from_full(self.weicou_full, self.weicou_excerpt)
-        self.assertIsNotNone(r0); self.assertIsNotNone(r20)
-        self.assertGreaterEqual(len(r20), len(r0))
+        """节选结果不得短于节选目标（不允许丢内容）"""
+        r = extract_excerpt_from_full(self.weicou_full, self.weicou_excerpt)
+        self.assertIsNotNone(r)
+        # 节选应覆盖节选目标的全部内容（结果长度 ≥ 目标长度）
+        self.assertGreaterEqual(len(r), len(self.weicou_excerpt))
 
     def test_empty_inputs_return_none(self):
         self.assertIsNone(extract_excerpt_from_full("", "test"))

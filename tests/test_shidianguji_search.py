@@ -53,7 +53,7 @@ def step1_detect(text: str) -> str:
         clean = re.sub(r'\s+', '', text)
         if re.search(r'[一-鿿]{1,4}字[一-鿿]{1,4}', clean):
             if re.search(r'(刺史|司马|长史|司兵|法曹|参军事|太府|通事舍人|太守|县令|尚书|侍郎|御史|大理|少卿)', clean):
-                print(f"  (复查: 含传记人名+官职，强制 classical)")
+                print("  (复查: 含传记人名+官职，强制 classical)")
                 text_type = "classical"
     return text_type
 
@@ -87,7 +87,7 @@ def step2_search(text_type: str, text: str, use_local: bool = False):
         return None
 
     print(f"  OK: 找到原文 ({len(original)} 字)")
-    print(f"  开头 200 字:")
+    print("  开头 200 字:")
     print(indent(original[:200]))
     return original
 
@@ -102,7 +102,7 @@ def step3_excerpt(original, text: str):
     excerpt = extract_excerpt_from_full(original, text)
     if excerpt is not None:
         print(f"  OK: 节选成功 ({len(excerpt)} 字)")
-        print(f"  内容:")
+        print("  内容:")
         print(indent(excerpt[:500]))
         return excerpt
 
@@ -129,7 +129,7 @@ def step4_diff(excerpt, text: str):
 
     print(f"  差异数: {n_diffs}")
     if diff_result["identical"]:
-        print(f"  RESULT: 字面一致")
+        print("  RESULT: 字面一致")
     else:
         for i, d in enumerate(diff_result["differences"][:10], 1):
             print(f"  [{d['type']}] pos={d['position']}: '{d.get('original','')}' -> '{d.get('given','')}'")
@@ -147,21 +147,21 @@ def run_pipeline(name: str, text: str, use_local: bool = False):
 # ── 离线节选逻辑测试 ─────────────────────────────────────
 
 def test_excerpt_logic():
-    """不依赖网络 —— 已知原文，纯测节选截取算法。"""
-    print_heading("离线测试: 节选算法 (已知正确原文)")
-
+    """不依赖网络 —— 已知原文，纯测节选截取算法（真实断言）。"""
     cases = [
         (
             "韦凑传 - 完全匹配",
             ("韦凑字彦宗，京兆万年人。永淳初，解褐婺州参军事。"
              "徙资州司兵，观察使房昶才之，表于朝，迁扬州法曹。"),
             "韦凑字彦宗，京兆万年人。永淳初，解褐婺州参军事。",
+            True,
         ),
         (
             "戴胄传 - 完全匹配",
             ("戴胄忠清公直擢为大理少卿上以选人多诈冒资荫敕令"
              "自首不首者死未几有诈冒事觉者上欲杀之胄奏据法应流"),
             "戴胄忠清公直擢为大理少卿上以选人多诈冒资荫敕令",
+            True,
         ),
         (
             "韦凑传 - 节选带差异(卒年六十五)",
@@ -170,29 +170,31 @@ def test_excerpt_logic():
              "卒，年六十五，赠幽州都督，谥曰文。子见素。"),
             ("韦凑字彦宗，京兆万年人。永淳初，解褐婺州参军事。"
              "卒，年六十五。"),
+            True,
         ),
         (
             "不相关文本 - 应返回 None",
             "床前明月光，疑是地上霜。举头望明月，低头思故乡。",
             "韦凑字彦宗",
+            False,
         ),
     ]
 
-    for name, full, excerpt in cases:
-        print(f"\n  --- {name} ---")
-        print(f"  full ({len(full)}字): {full[:60]}...")
-        print(f"  excerpt ({len(excerpt)}字): {excerpt[:60]}...")
+    for name, full, excerpt, should_match in cases:
         result = extract_excerpt_from_full(full, excerpt)
-        if result is not None:
-            print(f"  OK: 节选 ({len(result)} 字)")
+        if should_match:
+            assert result is not None, f"{name}: 应能节选到结果，实际返回 None"
+            # 节选结果不得短于节选目标（不允许丢内容）
+            assert len(result) >= len(excerpt), \
+                f"{name}: 节选过短 ({len(result)} < {len(excerpt)}): {result!r}"
         else:
-            print(f"  RESULT: None (匹配失败)")
+            assert result is None, f"{name}: 不相关内容不应匹配，实际返回 {result!r}"
 
 
-# ── 本地文件集成测试 ─────────────────────────────────────
+# ── 本地文件集成测试（手动入口，非 pytest 收集） ──────────
 
-def test_with_local_files():
-    """用本地保存的搜索原文 + clean.md 做集成测试。"""
+def with_local_files():
+    """用本地保存的搜索原文 + clean.md 做集成测试（手动运行）。"""
     print_heading("集成测试: 本地搜索结果 + _clean.md")
 
     for name in ["weicou", "daizhou"]:
@@ -214,7 +216,7 @@ def test_with_local_files():
             print(f"  OK: 节选 {len(excerpt)} 字")
             print(f"  预览: {excerpt[:200]}...")
         else:
-            print(f"  FAIL: 节选失败")
+            print("  FAIL: 节选失败")
 
 
 # ── 主入口 ─────────────────────────────────────────────────
@@ -229,7 +231,7 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     if args.file:
-        test_with_local_files()
+        with_local_files()
     elif args.offline:
         pass  # just test_excerpt_logic below
     else:

@@ -38,6 +38,13 @@ class TestParseProblemTags(unittest.TestCase):
         result = parse_problem_tags(text)
         self.assertEqual(result, [])
 
+    def test_none_input_returns_empty(self):
+        """LLM 返回 None 时不得崩溃（回归：re.findall 收 None 抛 TypeError）"""
+        self.assertEqual(parse_problem_tags(None), [])
+
+    def test_empty_input_returns_empty(self):
+        self.assertEqual(parse_problem_tags(""), [])
+
     def test_multiline_problem(self):
         text = "<problem>第一行\n第二行\n第三行</problem>"
         result = parse_problem_tags(text)
@@ -99,6 +106,20 @@ class TestSmartSplitMain(unittest.TestCase):
         def mock_llm_call(md_text, prompt):
             call_count[0] += 1
             return "<problem></problem>"
+
+        result = smart_split_with_callable(original, mock_llm_call)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], original)
+        self.assertEqual(call_count[0], 2)
+
+    def test_llm_returns_none_falls_back_to_single(self):
+        """LLM 返回 None（空 content）必须降级为单单元，不得崩溃（回归）"""
+        original = "题目内容全文"
+        call_count = [0]
+
+        def mock_llm_call(md_text, prompt):
+            call_count[0] += 1
+            return None
 
         result = smart_split_with_callable(original, mock_llm_call)
         self.assertEqual(len(result), 1)

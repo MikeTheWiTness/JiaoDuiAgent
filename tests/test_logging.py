@@ -101,13 +101,13 @@ class TestStructuredLogging:
             handler.flush()
 
         log_files = list(log_dir.glob("*.log"))
-        if log_files:
-            content = log_files[0].read_text(encoding='utf-8')
-            assert "test_module" in content
+        assert log_files, f"未找到日志文件: {list(log_dir.iterdir())}"
+        content = log_files[0].read_text(encoding='utf-8')
+        assert "test_module" in content
 
     def test_timestamp_in_log(self, log_dir):
         """日志应包含时间戳。"""
-        setup_logging(log_dir=log_dir, level=logging.INFO)
+        setup_logging(log_dir=log_dir, level=logging.INFO, reset=True)
         logger = get_logger("test_time")
 
         logger.info("时间戳测试")
@@ -116,11 +116,11 @@ class TestStructuredLogging:
             handler.flush()
 
         log_files = list(log_dir.glob("*.log"))
-        if log_files:
-            content = log_files[0].read_text(encoding='utf-8')
-            # 应包含 ISO 日期格式
-            import re
-            assert re.search(r'\d{4}-\d{2}-\d{2}', content), f"无时间戳: {content[:100]}"
+        assert log_files, f"未找到日志文件: {list(log_dir.iterdir())}"
+        content = log_files[0].read_text(encoding='utf-8')
+        # 应包含 ISO 日期格式
+        import re
+        assert re.search(r'\d{4}-\d{2}-\d{2}', content), f"无时间戳: {content[:100]}"
 
     def test_log_rotation(self, log_dir):
         """日志文件应支持按大小滚动，不无限增长。"""
@@ -137,6 +137,7 @@ class TestStructuredLogging:
             handler.close()
             logging.getLogger().removeHandler(handler)
 
-        log_files = list(log_dir.glob("*.log*"))
-        # 应该有主文件 + 至少一个备份
-        assert len(log_files) >= 1, f"目录内容: {list(log_dir.iterdir())}"
+        # 必须真实发生滚动：主文件 + 至少一个 .log.1 备份
+        assert (log_dir / "app.log").exists(), f"主日志文件缺失: {list(log_dir.iterdir())}"
+        assert (log_dir / "app.log.1").exists(), \
+            f"滚动备份缺失（滚动未发生）: {list(log_dir.iterdir())}"

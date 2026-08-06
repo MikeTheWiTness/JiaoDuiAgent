@@ -276,9 +276,9 @@ class TestBalancePreValidation:
     def test_parenthesized_input_should_not_silently_fail(self):
         """含括号输入：修复前静默返回错误结果，修复后应返回正确结果"""
         r = self._balance("Ca(OH)2 + HCl -> CaCl2 + H2O")
-        # 如果返回错误，coefficients 不会存在；如果成功，应有正确的配平
-        if "coefficients" in r:
-            coeffs = r["coefficients"]
-            # 验证系数：Ca(OH)2:1, HCl:2, CaCl2:1, H2O:2
-            assert coeffs == [1, 2, 1, 2], \
-                f"配平系数应为 [1,2,1,2]，实际为 {coeffs}"
+        # 配平失败时绝不能静默通过——必须先断言成功再断言系数
+        assert "coefficients" in r, f"配平失败（静默错误）: {r}"
+        coeffs = r["coefficients"]
+        # 验证系数：Ca(OH)2:1, HCl:2, CaCl2:1, H2O:2
+        assert coeffs == [1, 2, 1, 2], \
+            f"配平系数应为 [1,2,1,2]，实际为 {coeffs}"
