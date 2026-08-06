@@ -255,16 +255,28 @@ class DefaultApp:
         if not selected:
             return
         # 从后往前删，避免索引偏移
-        indices = sorted(selected, reverse=True)
-        for idx in indices:
-            path = self.list_box.get(idx)
-            # 从内部列表中移除
-            for lst in [self.file_list, self.proofread_list, self.free_files]:
-                if path in lst:
-                    lst.remove(path)
-                    break
-        self.refresh_listbox()
-        log(f"🗑️ 已从清单中移除 {len(indices)} 项")
+        removed = 0
+        for idx in sorted(selected, reverse=True):
+            if idx >= len(self._listbox_items):
+                continue
+            entry = self._listbox_items[idx]
+            if entry is None:
+                continue
+            kind, ref = entry
+            if kind == "proofread":
+                self.proofread_list.pop(ref)
+            elif kind == "text":
+                self.free_text = ""
+            elif kind == "image":
+                self.free_images.pop(ref)
+            elif kind == "file":
+                self.free_files.pop(ref)
+            elif kind == "file_list":
+                self.file_list.remove(ref)
+            removed += 1
+        if removed:
+            self.refresh_listbox()
+            log(f"🗑️ 已从清单中移除 {removed} 项")
 
     # ===== 管线响应 =====
 
@@ -614,12 +626,14 @@ class DefaultApp:
 
     def refresh_listbox(self):
         self.list_box.delete(0, tk.END)
+        self._listbox_items = []  # 显示行 → 内部条目 (kind, ref)，供删除使用
         import_enabled = self.pipeline.import_enabled
         content = self.content_type.get()
 
         if not import_enabled:
             for i, (path, name) in enumerate(self.proofread_list, 1):
                 self.list_box.insert(tk.END, f"{i}. {name}")
+                self._listbox_items.append(("proofread", i - 1))
         elif content == "自由校对":
             idx = 1
             if self.free_text:
@@ -627,21 +641,26 @@ class DefaultApp:
                 if len(self.free_text) > 50:
                     preview += "..."
                 self.list_box.insert(tk.END, f"{idx}. 📝 文本: {preview}")
+                self._listbox_items.append(("text", None))
                 idx += 1
-            for img in self.free_images:
+            for i, img in enumerate(self.free_images):
                 self.list_box.insert(tk.END, f"{idx}. 🖼️  图片: {os.path.basename(img)}")
+                self._listbox_items.append(("image", i))
                 idx += 1
-            for f in self.free_files:
+            for i, f in enumerate(self.free_files):
                 ext = os.path.splitext(f)[1].lower()
                 icon = "📄" if ext in ('.md', '.txt') else "🖼️"
                 self.list_box.insert(tk.END, f"{idx}. {icon} 文件: {os.path.basename(f)}")
+                self._listbox_items.append(("file", i))
                 idx += 1
             if idx == 1:
                 self.list_box.insert(tk.END, "（未设置文本、图片或文件，请点击上方按钮添加）")
+                self._listbox_items.append(None)
         else:
             sorted_files = sorted(self.file_list, key=lambda p: self._natural_key(os.path.basename(p)))
             for idx, path in enumerate(sorted_files, 1):
                 self.list_box.insert(tk.END, f"{idx}. {os.path.basename(path)}")
+                self._listbox_items.append(("file_list", path))
 
     def select_single_paper(self):
         path = filedialog.askdirectory(title="选择单个试卷目录")

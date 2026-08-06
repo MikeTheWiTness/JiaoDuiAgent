@@ -233,6 +233,17 @@ class FileReadParams(BaseModel):
     path: str = Field(description="要读取的文件路径（绝对路径）")
 
 
+def _validate_file_path(path: str, allowed_dir: str | None) -> str | None:
+    """校验文件路径是否在 allowed_dir 内。返回错误消息，通过返回 None。"""
+    if not allowed_dir:
+        return None
+    allowed = os.path.abspath(allowed_dir)
+    target = os.path.abspath(path)
+    if target == allowed or target.startswith(allowed + os.sep):
+        return None
+    return f"错误：禁止访问 allowed_dir 外的路径: {path}"
+
+
 class FileReadTool(BaseTool):
     """读取文件内容。比 bash cat/python -c 更简单可靠。"""
 
@@ -240,7 +251,12 @@ class FileReadTool(BaseTool):
     description: str = "读取指定文件的全部内容。返回文件文本。优先用这个工具而不是 bash 来读取文件。"
     args_schema: type[BaseModel] = FileReadParams
 
+    allowed_dir: str | None = None
+
     def _run(self, path: str) -> str:
+        err = _validate_file_path(path, self.allowed_dir)
+        if err:
+            return err
         try:
             with open(path, encoding="utf-8") as f:
                 content = f.read()
@@ -269,7 +285,12 @@ class FileWriteTool(BaseTool):
     )
     args_schema: type[BaseModel] = FileWriteParams
 
+    allowed_dir: str | None = None
+
     def _run(self, path: str, content: str) -> str:
+        err = _validate_file_path(path, self.allowed_dir)
+        if err:
+            return err
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)

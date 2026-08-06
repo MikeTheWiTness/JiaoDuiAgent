@@ -124,8 +124,8 @@ def _bash_format_fix(file_path: str, issues_desc: str,
         "保留所有校对结论，只调整格式结构。"
     )
 
-    read_tool = FileReadTool()
-    write_tool = FileWriteTool()
+    read_tool = FileReadTool(allowed_dir=file_dir)
+    write_tool = FileWriteTool(allowed_dir=file_dir)
     bash_tool = BashTool(allowed_dir=file_dir)
 
     try:

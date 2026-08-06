@@ -79,13 +79,15 @@ def _strip_search_from_prompt(prompt: str) -> str:
     本阶段 LLM 不配备搜索工具，仅剥离「## 可用的联网搜索工具」说明段，
     不再追加任何关于搜索的约束说明（避免引用 LLM 没有的工具造成困惑）。
     """
-    # 移除 "## 可用的联网搜索工具" 整段（到下一个 ## 标题前）
-    cleaned = re.sub(
-        r'\n*## 可用的联网搜索工具\n.*?(?=\n## )',
-        '',
-        prompt,
-        flags=re.DOTALL,
-    )
+    # 移除搜索工具段整段（到下一个 ## 标题或文末，适配各学科标题）
+    cleaned = prompt
+    for heading in ("## 可用的联网搜索工具", "## 原文检索（仅供极端情况使用）"):
+        cleaned = re.sub(
+            rf'\n*{re.escape(heading)}\n.*?(?=\n## |\Z)',
+            '',
+            cleaned,
+            flags=re.DOTALL,
+        )
     # 清理多余空行
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.rstrip()
@@ -860,6 +862,11 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
             "error": f"校对流程异常（{type(e).__name__}）：{e}",
             "tool_calls": []
         }
+
+    if result.get("stop_reason") == StopReason.INTERRUPTED:
+        # 用户中断：不落盘、不做格式修正，直接以失败返回（与 ERROR 同语义）
+        log("   ⏹️ 校对已中断，跳过落盘与格式修正")
+        return {"success": False, "result": "", "error": "校对已中断", "tool_calls": []}
 
     if result.get("stop_reason") != StopReason.ERROR:
         # ---- 格式审查 + bash 直接编辑文件修正 ----

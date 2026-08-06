@@ -206,12 +206,13 @@ def _convert_multiline_tables(text: str) -> str:
     while i < n:
         line = lines[i]
         stripped = line.strip()
-        if stripped.startswith("-") and len(stripped) >= 10:
+        # 仅「整行全部由 - 组成」的长线才是 multiline table 边框；- 开头的列表项不算
+        if set(stripped) == {"-"} and len(stripped) >= 10:
             j = i + 1
             end = -1
             while j < n:
                 s = lines[j].strip()
-                if s.startswith("-") and len(s) >= 10:
+                if set(s) == {"-"} and len(s) >= 10:
                     end = j
                     break
                 j += 1

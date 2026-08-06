@@ -5,12 +5,11 @@
   - ProofreadService.run_proofread(req) → ProofreadResult
 """
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from core.logging_utils import log as _default_log
-
 
 # ---- 请求/结果数据类 ----
 
@@ -40,7 +39,7 @@ class ProofreadRequest:
     model: str
     paper_dir: str                  # 试卷根目录
     output_dir: str | None = None
-    subject_app = None              # SubjectApp 实例（提供 proofread_one 等方法）
+    subject_app: object | None = None  # SubjectApp 实例（提供 proofread_one 等方法）
     batch_size: int = 4
     generate_pdf: bool = False
     interrupt_event: threading.Event | None = None

@@ -34,6 +34,8 @@ SMART_SPLIT_MAX_TOKENS = 16384
 
 def parse_problem_tags(text):
     """旧的 <problem> 标签解析（向后兼容）。"""
+    if not text:
+        return []
     pattern = r"<problem>(.*?)</problem>"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:

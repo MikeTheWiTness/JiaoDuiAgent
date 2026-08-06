@@ -927,6 +927,7 @@ def _escape_math_chars_outside_math(text: str) -> str:
             elif text[i] == '_':
                 i = _consume_braced_superscript(
                     text, i, '_', r'\textunderscore{}', result)
+                continue
             else:
                 result.append(text[i])
         else:

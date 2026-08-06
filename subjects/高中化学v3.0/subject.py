@@ -89,7 +89,11 @@ class SubjectApp(BaseSubjectApp):
                 if tool_instructions:
                     return base_prompt + "\n\n" + tool_instructions
                 return base_prompt
-        return "\n".join(self.config.get("question_prompt_lines", []))
+        base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
+        tool_instructions = self.get_tool_instructions()
+        if tool_instructions:
+            return base_prompt + "\n\n" + tool_instructions
+        return base_prompt
 
     def get_review_prompt(self):
         """获取批注评审提示词。"""
