@@ -30,5 +30,4 @@ output/
 
 # Test artifacts
 .pytest_cache/
-tests/_search_results/
 _smart_split_raw*.md

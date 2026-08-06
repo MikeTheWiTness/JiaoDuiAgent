@@ -26,17 +26,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUNDLED_TEXLIVE = os.path.join(PROJECT_ROOT, "bundled_texlive")
-XELATEX = os.path.join(BUNDLED_TEXLIVE, "bin", "windows", "xelatex.exe")
-XDVIPDFMX = os.path.join(BUNDLED_TEXLIVE, "bin", "windows", "xdvipdfmx.exe")
+_BUNDLED_XELATEX = os.path.join(BUNDLED_TEXLIVE, "bin", "windows", "xelatex.exe")
+_BUNDLED_XDVIPDFMX = os.path.join(BUNDLED_TEXLIVE, "bin", "windows", "xdvipdfmx.exe")
 
-# 环境检查：TeX Live 不存在时跳过所有编译测试
-_HAS_TEXLIVE = os.path.isfile(XELATEX) and os.path.isfile(XDVIPDFMX)
-_skip_no_texlive = unittest.skipUnless(_HAS_TEXLIVE, "需要 bundled_texlive 目录（xelatex 编译器）")
+# 环境检查：bundled（模拟打包验证）或系统 xelatex（开发/CI）任一可用即运行编译测试
+_USE_BUNDLED = os.path.isfile(_BUNDLED_XELATEX) and os.path.isfile(_BUNDLED_XDVIPDFMX)
+_SYSTEM_XELATEX = shutil.which("xelatex")
+_SYSTEM_XDVIPDFMX = shutil.which("xdvipdfmx")
+_HAS_TEXLIVE = _USE_BUNDLED or (_SYSTEM_XELATEX and _SYSTEM_XDVIPDFMX)
+_skip_no_texlive = unittest.skipUnless(
+    _HAS_TEXLIVE,
+    "需要 bundled_texlive（打包验证）或系统 xelatex（开发/CI）")
+
+XELATEX = _BUNDLED_XELATEX if _USE_BUNDLED else _SYSTEM_XELATEX
+XDVIPDFMX = _BUNDLED_XDVIPDFMX if _USE_BUNDLED else _SYSTEM_XDVIPDFMX
 
 # ---- 辅助函数（精简自 pdf_compiler.py）----
 
 def _get_texmf_root():
-    """从内嵌 TeX Live 推导 TEXMF 根"""
+    """从内嵌 TeX Live 推导 TEXMF 根；系统模式返回 None（走系统配置）"""
+    if not _USE_BUNDLED:
+        return None
     texmf_cnf = os.path.join(BUNDLED_TEXLIVE, "texmf.cnf")
     if os.path.isfile(texmf_cnf):
         return BUNDLED_TEXLIVE
@@ -44,6 +54,9 @@ def _get_texmf_root():
 
 
 def _copy_fmt_to_tmpdir(tmpdir):
+    """复制 xelatex.fmt 到临时目录（仅 bundled 模式需要）"""
+    if not _USE_BUNDLED:
+        return False
     texmf_root = BUNDLED_TEXLIVE
     fmt_src = os.path.join(texmf_root, "texmf-var", "web2c", "xetex", "xelatex.fmt")
     if os.path.isfile(fmt_src):
@@ -57,6 +70,9 @@ def _copy_fmt_to_tmpdir(tmpdir):
 
 
 def _copy_mapfiles_to_tmpdir(tmpdir):
+    """复制字体 map/字体文件（仅 bundled 模式需要）"""
+    if not _USE_BUNDLED:
+        return None
     texmf_root = BUNDLED_TEXLIVE
     texmf_dist = os.path.join(texmf_root, "texmf-dist")
     fonts_src = os.path.join(texmf_dist, "fonts")
@@ -74,7 +90,14 @@ def _copy_mapfiles_to_tmpdir(tmpdir):
 
 
 def _build_env(tmpdir, fonts_tmp=None):
-    """构造 xelatex 环境变量"""
+    """构造 xelatex 环境变量。
+
+    bundled 模式：完整 TEXMF/FONTCONFIG 定制（模拟打包环境）；
+    系统模式：直接用系统配置（系统 TeX Live 自带字体与 kpathsea 配置）。
+    """
+    if not _USE_BUNDLED:
+        return os.environ.copy()
+
     texmf_root = BUNDLED_TEXLIVE
     texmf_dist = os.path.join(texmf_root, "texmf-dist")
     texmf_var = os.path.join(texmf_root, "texmf-var")
@@ -174,8 +197,9 @@ def _compile_tex(tex_source, tex_name="test"):
             'env': env,
         }
         env2 = env.copy()
-        texmf_dist = os.path.join(BUNDLED_TEXLIVE, "texmf-dist")
-        env2["DVIPDFMXINPUTS"] = ".;" + texmf_dist + "/dvipdfmx//"
+        if _USE_BUNDLED:
+            texmf_dist = os.path.join(BUNDLED_TEXLIVE, "texmf-dist")
+            env2["DVIPDFMXINPUTS"] = ".;" + texmf_dist + "/dvipdfmx//"
         compile_kwargs2['env'] = env2
         if os.name == 'nt':
             compile_kwargs2['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -351,7 +375,7 @@ class TestProofreadTemplate(unittest.TestCase):
         print(f"  ✅ PDF: {pdf} ({os.path.getsize(pdf)} bytes)")
 
     def test_corrmark_math(self):
-        """\corrmark 内嵌数学公式"""
+        r"""\corrmark 内嵌数学公式"""
         template_path = os.path.join(
             PROJECT_ROOT, "shared", "templates", "proofread_template.tex")
         with open(template_path, encoding="utf-8") as f:
@@ -469,27 +493,46 @@ def check_environment():
     print("  环境检查")
     print("=" * 60)
 
-    checks = {
-        "xelatex.exe": os.path.isfile(XELATEX),
-        "xdvipdfmx.exe": os.path.isfile(XDVIPDFMX),
-        "texmf.cnf": os.path.isfile(os.path.join(BUNDLED_TEXLIVE, "texmf.cnf")),
-        "xelatex.fmt": os.path.isfile(os.path.join(
-            BUNDLED_TEXLIVE, "texmf-var", "web2c", "xetex", "xelatex.fmt")),
-        "FandolSong": os.path.isfile(os.path.join(
-            BUNDLED_TEXLIVE, "texmf-dist", "fonts", "opentype", "public",
-            "fandol", "FandolSong-Regular.otf")),
-        "FandolHei": os.path.isfile(os.path.join(
-            BUNDLED_TEXLIVE, "texmf-dist", "fonts", "opentype", "public",
-            "fandol", "FandolHei-Regular.otf")),
-        "texgyretermes": os.path.isfile(os.path.join(
-            BUNDLED_TEXLIVE, "texmf-dist", "fonts", "opentype", "public",
-            "tex-gyre", "texgyretermes-regular.otf")),
-        "DejaVuSans": os.path.isfile(os.path.join(
-            BUNDLED_TEXLIVE, "texmf-dist", "fonts", "truetype", "public",
-            "dejavu", "DejaVuSans.ttf")),
-        "proofread_template.tex": os.path.isfile(os.path.join(
-            PROJECT_ROOT, "shared", "templates", "proofread_template.tex")),
-    }
+    if _USE_BUNDLED:
+        checks = {
+            "xelatex.exe (bundled)": os.path.isfile(XELATEX),
+            "xdvipdfmx.exe (bundled)": os.path.isfile(XDVIPDFMX),
+            "texmf.cnf": os.path.isfile(os.path.join(BUNDLED_TEXLIVE, "texmf.cnf")),
+            "xelatex.fmt": os.path.isfile(os.path.join(
+                BUNDLED_TEXLIVE, "texmf-var", "web2c", "xetex", "xelatex.fmt")),
+            "FandolSong": os.path.isfile(os.path.join(
+                BUNDLED_TEXLIVE, "texmf-dist", "fonts", "opentype", "public",
+                "fandol", "FandolSong-Regular.otf")),
+            "FandolHei": os.path.isfile(os.path.join(
+                BUNDLED_TEXLIVE, "texmf-dist", "fonts", "opentype", "public",
+                "fandol", "FandolHei-Regular.otf")),
+            "texgyretermes": os.path.isfile(os.path.join(
+                BUNDLED_TEXLIVE, "texmf-dist", "fonts", "opentype", "public",
+                "tex-gyre", "texgyretermes-regular.otf")),
+            "DejaVuSans": os.path.isfile(os.path.join(
+                BUNDLED_TEXLIVE, "texmf-dist", "fonts", "truetype", "public",
+                "dejavu", "DejaVuSans.ttf")),
+        }
+    else:
+        # 系统模式：走系统 TeX Live 的字体与格式
+        def _kpse(name):
+            try:
+                out = subprocess.run(
+                    ["kpsewhich", name], capture_output=True, text=True, timeout=10)
+                return bool(out.stdout.strip())
+            except Exception:
+                return False
+
+        checks = {
+            "xelatex (system)": bool(_SYSTEM_XELATEX),
+            "xdvipdfmx (system)": bool(_SYSTEM_XDVIPDFMX),
+            "FandolSong": _kpse("FandolSong-Regular.otf"),
+            "FandolHei": _kpse("FandolHei-Regular.otf"),
+            "texgyretermes": _kpse("texgyretermes-regular.otf"),
+        }
+
+    checks["proofread_template.tex"] = os.path.isfile(os.path.join(
+        PROJECT_ROOT, "shared", "templates", "proofread_template.tex"))
 
     all_ok = True
     for name, ok in checks.items():

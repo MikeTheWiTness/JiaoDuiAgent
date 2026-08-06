@@ -1,8 +1,9 @@
 """extract_body_segment 与前置 diff 噪音修复的回归测试。
 
-用 output/拆题结果/高中语文教研实习生笔试试卷 下的真实题目做 fixture：
-- 第1题（韦凑传，含批注）、第4题（戴胄传，含下划线/波浪线）→ 文言文，应切出正文段
-- 第3题（拉奥孔，现代文）→ 不应切出（返回 None）
+fixture 数据入库于 tests/_search_results/（git 追踪）：
+- 第1题.md（韦凑传，含批注）、第4题.md（戴胄传，含下划线/波浪线）→ 文言文，应切出正文段
+- 第3题.md（拉奥孔，现代文）→ 不应切出（返回 None）
+- weicou_full.txt / daizhou_full.txt → 古籍全文（diff 测试）
 
 并验证 preprocess_for_proofread 注入的「前置参考」差异条数从修复前的 111/51
 降到个位数～十几条（回归护栏），且韦凑题的真错误（雇→顾 等）确实出现在差异列表里。
@@ -20,28 +21,15 @@ from shared.chinese_classics_tools import (
     preprocess_for_proofread,
 )
 
-PAPER = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "output", "拆题结果", "高中语文教研实习生笔试试卷",
-)
-DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_search_results")
-
-# 数据目录不存在时跳过（该目录为本地拆题产物，CI 环境无此数据）
-_HAS_PAPER_DATA = os.path.isdir(PAPER) and os.path.isfile(os.path.join(PAPER, "第1题", "第1题.md"))
-_HAS_SEARCH_DATA = os.path.isdir(DATA) and os.path.isfile(os.path.join(DATA, "weicou_full.txt"))
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_search_results")
 
 
 def _read(q_num):
-    with open(os.path.join(PAPER, f"第{q_num}题", f"第{q_num}题.md"), encoding="utf-8") as f:
+    with open(os.path.join(FIXTURES, f"第{q_num}题.md"), encoding="utf-8") as f:
         return f.read()
 
 
-_skip_no_paper = unittest.skipUnless(_HAS_PAPER_DATA, "需要 output/拆题结果/ 目录中的拆题数据")
-_skip_no_search = unittest.skipUnless(_HAS_SEARCH_DATA, "需要 _search_results/ 中的全文搜索 fixture 数据")
-
-
 class TestExtractBodySegment(unittest.TestCase):
-    @_skip_no_paper
     def test_weicou_body_segment(self):
         body = extract_body_segment(_read(1))
         self.assertIsNotNone(body, "韦凑题应能切出正文段")
@@ -53,7 +41,6 @@ class TestExtractBodySegment(unittest.TestCase):
         # 不应混入断句选项的斜线（题干特有）
         self.assertNotIn("下列对文中", body)
 
-    @_skip_no_paper
     def test_daizhou_body_segment(self):
         body = extract_body_segment(_read(4))
         self.assertIsNotNone(body, "戴胄题应能切出正文段")
@@ -63,7 +50,6 @@ class TestExtractBodySegment(unittest.TestCase):
         self.assertNotIn("下列对文中", body)
         self.assertNotIn("节选自", body)
 
-    @_skip_no_paper
     def test_modern_returns_none(self):
         # 第3题是现代文（阅读下面的文字），引导语不含「文言文/古诗/…」→ 返回 None
         body = extract_body_segment(_read(3))
@@ -83,13 +69,13 @@ class TestPreprocessDiffNoise(unittest.TestCase):
 
     @staticmethod
     def _run(q_num, name):
-        with open(os.path.join(DATA, f"{name}_full.txt"), encoding="utf-8") as f:
+        with open(os.path.join(FIXTURES, f"{name}_full.txt"), encoding="utf-8") as f:
             saved = f.read()
         real = cc.search_original_text
         cc.search_original_text = lambda tt, sk: saved
         try:
             md = _read(q_num)
-            q_dir = os.path.join(PAPER, f"第{q_num}题")
+            q_dir = os.path.join(FIXTURES, f"第{q_num}题")
             return preprocess_for_proofread(md, q_dir=q_dir)
         finally:
             cc.search_original_text = real
@@ -99,7 +85,6 @@ class TestPreprocessDiffNoise(unittest.TestCase):
         import re
         return len(re.findall(r'^\d+\. 第\d+位', reference_md, flags=re.MULTILINE))
 
-    @_skip_no_paper
     def test_weicou_diff_noise_eliminated(self):
         md = self._run(1, "weicou")
         self.assertIn("## 前置参考", md, "韦凑题应注入前置参考")
@@ -110,7 +95,6 @@ class TestPreprocessDiffNoise(unittest.TestCase):
         self.assertIn("雇", md)  # 原文「雇」 vs 题目「顾」
         self.assertIn("陜", md)  # 原文「陜」 vs 题目「陕」（异体字）
 
-    @_skip_no_paper
     def test_daizhou_diff_noise_eliminated(self):
         md = self._run(4, "daizhou")
         self.assertIn("## 前置参考", md, "戴胄题应注入前置参考")
@@ -121,3 +105,4 @@ class TestPreprocessDiffNoise(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
