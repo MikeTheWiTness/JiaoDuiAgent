@@ -1,6 +1,11 @@
 """目录单元识别 —— 单一真源，供 UI 与 proofread 共用（ADR-0022 C2.3）。"""
 
+import re
 from pathlib import Path
+
+# 前缀锚定（非 fullmatch）：保留「第1题_备份」「第1题(文言文)」等合法变体，
+# 拒绝「试题」「错题本」等任意含「题」的误报
+_UNIT_DIR_RE = re.compile(r'^(第\d+题|板块\d+|单元\d+)')
 
 
 def is_unit_dir(name: str) -> bool:
@@ -13,7 +18,7 @@ def is_unit_dir(name: str) -> bool:
 
     注意：此函数接受纯目录名（不含路径），不判断是否为目录。
     """
-    return '题' in name or name.startswith('板块') or name.startswith('单元')
+    return bool(_UNIT_DIR_RE.match(name))
 
 
 def scan_question_dirs(root: Path) -> list[Path]:

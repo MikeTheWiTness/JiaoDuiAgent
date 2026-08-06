@@ -53,37 +53,6 @@ def find_pandoc():
     return PANDOC_PATH
 
 
-
-def _gen_clean_md(md_path):
-    """从 raw.md 生成 _clean.md（去除所有格式标记和批注，保留正文文字）"""
-    from shared.docx_format_enhancer import strip_format_markers
-
-    with open(md_path, encoding='utf-8') as f:
-        text = f.read()
-
-    # Step 1: 去掉【着重】【下划线】等格式标记对
-    text = strip_format_markers(text)
-
-    # Step 2: 去掉 <批注 id=N>...</批注> 标记
-    text = re.sub(r'<批注\s+id=\d+>.*?</批注>', '', text, flags=re.DOTALL)
-
-    # Step 3: bold/italic 保留文字，只去 ** 标记
-    import re
-    p_bold = re.compile('\\*\\*([^*]+)\\*\\*')
-    text = p_bold.sub('\\1', text)
-    p_ul = re.compile('__([^_]+)__')
-    text = p_ul.sub('\\1', text)
-
-    # 输出到 _clean.md
-    base, ext = os.path.splitext(md_path)
-    if base.endswith('_raw'):
-        clean_base = base[:-4]
-    else:
-        clean_base = base
-    clean_path = clean_base + '_clean' + ext
-    with open(clean_path, 'w', encoding='utf-8') as f:
-        f.write(text)
-
 def check_pandoc():
     pandoc = find_pandoc()
     try:

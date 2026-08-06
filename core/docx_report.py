@@ -334,6 +334,12 @@ def _build_comments_xml(comments: dict, kept_ids: set) -> str:
                 f'{escape(reason)}</w:t></w:r></w:p>')
         items.append(
             f'<w:comment w:id="{gid}" w:author="校对助手" '
-            f'w:date="2026-08-05T10:00:00Z">' + "".join(paras) + '</w:comment>')
+            f'w:date="{_comment_timestamp()}">' + "".join(paras) + '</w:comment>')
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             f'<w:comments {_NS}>' + "".join(items) + "</w:comments>")
+
+
+def _comment_timestamp() -> str:
+    """生成 OOXML ST_DateTime 格式的当前 UTC 时间戳（ISO 8601 Z 形式）。"""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')

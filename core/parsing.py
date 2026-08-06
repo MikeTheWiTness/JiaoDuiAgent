@@ -1,7 +1,9 @@
 import json
 import os
 import re
+import traceback
 
+from core.logging_utils import log
 from shared.comment_marker import INLINE_MARKER_DETECT_RE
 
 
@@ -219,4 +221,5 @@ def save_proofread_json(res: str, q_dir: str, tool_calls: list | None = None):
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
     except Exception:
+        log(f"   ⚠️ 保存 _校对数据.json 失败 ({json_path}):\n{traceback.format_exc()}")
         return False

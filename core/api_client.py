@@ -610,17 +610,21 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                 usage=total_usage,
             )
 
-        messages.append(choice["message"])
+        # 回传前剔除输出专用字段 reasoning_content（部分端点回传会 400/膨胀）
+        messages.append({k: v for k, v in choice["message"].items()
+                         if k != "reasoning_content"})
         # 记录 LLM 返回的工具调用请求
         assistant_text = choice["message"].get("content", "")
         if assistant_text:
             log(f"   🤖 LLM 思考: {assistant_text[:150].replace(chr(10), ' ')}")
 
         # 收集本轮工具名称，判断是否为纯搜索轮次（不占 loop，走独立配额）
-        turn_tool_names = {tc["function"]["name"] for tc in choice["message"]["tool_calls"]}
+        # 兼容 finish_reason="tool_calls" 但 message 无 tool_calls 键的端点
+        turn_tool_calls = choice["message"].get("tool_calls") or []
+        turn_tool_names = {tc["function"]["name"] for tc in turn_tool_calls}
         is_pure_search = turn_tool_names and turn_tool_names.issubset(_SEARCH_TOOLS)
 
-        for tc in choice["message"]["tool_calls"]:
+        for tc in turn_tool_calls:
             tool_name = tc["function"]["name"]
             try:
                 args = json.loads(tc["function"]["arguments"])
@@ -819,6 +823,10 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             # 退避等待
             backoff_base = getattr(proof_err, 'backoff_base', 2.0)
             delay = _backoff_delay(retry, base=backoff_base)
+            # 服务器 Retry-After 建议优先于指数退避（限流时避免加重服务端压力）
+            server_retry_after = getattr(proof_err, "retry_after", 0) or 0
+            if server_retry_after > 0:
+                delay = max(delay, server_retry_after)
             err_type = type(proof_err).__name__
             log(f"   ⚠️ {q_title} 第{retry + 1}次重试（{err_type}，退避 {delay:.0f}s）...")
             time.sleep(delay)
