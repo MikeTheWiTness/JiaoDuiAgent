@@ -416,7 +416,11 @@ class DefaultApp:
         pass
 
     def _log(self, msg):
-        self.log_panel.append(msg)
+        if threading.current_thread() is not threading.main_thread():
+            # 工作线程日志必须封送到主线程再操作 Tk 控件（Tkinter 非线程安全）
+            self.root.after(0, lambda m=msg: self.log_panel.append(m))
+        else:
+            self.log_panel.append(msg)
 
     def open_api_dialog(self):
         def on_save(url, key, model):
@@ -1189,7 +1193,8 @@ class DefaultApp:
                                 unit_ctx = dataclasses.replace(ctx, output_dir=q_dir)
                                 future = executor.submit(
                                     self.subject_app.proofread_one,
-                                    unit_ctx, q_dir, q_name, generate_pdf, content
+                                    unit_ctx, q_dir, q_name, generate_pdf, content,
+                                    archive_root=out_root,
                                 )
                                 future_map[future] = (q_dir, q_name)
 
@@ -1228,7 +1233,8 @@ class DefaultApp:
                         log(f"校对单元：{q_name}")
                         unit_ctx = dataclasses.replace(ctx, output_dir=q_dir)
                         data = self.subject_app.proofread_one(
-                            unit_ctx, q_dir, q_name, generate_pdf, content
+                            unit_ctx, q_dir, q_name, generate_pdf, content,
+                            archive_root=out_root,
                         )
                         if data is None:
                             log(f"   ❌ {q_name} 校对失败：proofread_one 返回了 None")

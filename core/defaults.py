@@ -781,7 +781,7 @@ def read_md_for_unit(q_dir: str, q_name: str) -> str | None:
     return None
 
 
-def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False):
+def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False, archive_root=None):
     md_content = read_md_for_unit(q_dir, q_name)
     if not md_content:
         return {"success": False, "result": "", "error": "未找到 md 文件"}
@@ -910,12 +910,13 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
             log(f"   ⚠️ 写入 reasoning/usage 到 _校对报告.md 失败:\n{traceback.format_exc()}")
         save_proofread_json(res, q_dir, tool_calls)
 
-        # 同步存档到 output/中间产物/{文档名}/{题目名}/
+        # 同步存档到 {archive_root}/中间产物/{文档名}/{题目名}/（默认 output/）
         try:
             q_dir_path = Path(q_dir)
             doc_name = q_dir_path.parent.name   # 文档名（如 高中语文教研实习生笔试试卷）
             q_name_clean = q_dir_path.name       # 题目名（如 第1题）
-            artifact_dir = Path("output") / "中间产物" / doc_name / q_name_clean
+            artifact_root = Path(archive_root) if archive_root else Path("output")
+            artifact_dir = artifact_root / "中间产物" / doc_name / q_name_clean
             artifact_dir.mkdir(parents=True, exist_ok=True)
             artifact_path = artifact_dir / "_校对报告.md"
             with open(artifact_path, "w", encoding="utf-8") as f:

@@ -47,8 +47,12 @@ def parse_problem_tags(text):
         return []
 
 
-def _dump_smart_split_raw(raw_text, md_file, label=""):
-    """将 LLM 返回的原始标注文本保存到 output/中间产物/{文档名}/ 目录。"""
+def _dump_smart_split_raw(raw_text, md_file, label="", output_root=None):
+    """将 LLM 返回的原始标注文本保存到 {output_root}/中间产物/{文档名}/ 目录。
+
+    多轮 attempt 写入同一 _smart_split_raw.md 文件内分节（AGENTS.md 命名约束），
+    不再生成 _smart_split_raw_attemptN.md 分散文件。
+    """
     try:
         # 从 md_file 中提取文档名（去掉 _raw 后缀 或 直接用 basename）
         if md_file:
@@ -58,19 +62,25 @@ def _dump_smart_split_raw(raw_text, md_file, label=""):
                 doc_name = doc_name[:-4]
         else:
             doc_name = "未命名文档"
-        base_dir = Path("output") / "中间产物" / doc_name
+        base_dir = Path(output_root) if output_root else Path("output")
+        base_dir = base_dir / "中间产物" / doc_name
         base_dir.mkdir(parents=True, exist_ok=True)
-        suffix = f"_{label}" if label else ""
-        dump_path = base_dir / f"_smart_split_raw{suffix}.md"
+        dump_path = base_dir / "_smart_split_raw.md"
     except Exception:
-        dump_path = Path("output") / "中间产物" / "_smart_split_raw.md"
-        Path("output").mkdir(parents=True, exist_ok=True)
+        base_dir = Path(output_root) if output_root else Path("output")
+        dump_path = base_dir / "中间产物" / "_smart_split_raw.md"
+        base_dir.mkdir(parents=True, exist_ok=True)
 
-    dump_path.write_text(raw_text or "(空)", encoding='utf-8')
+    section = f"### attempt {label}\n\n{raw_text or '(空)'}\n\n"
+    if dump_path.exists():
+        with open(dump_path, "a", encoding="utf-8") as f:
+            f.write(section)
+    else:
+        dump_path.write_text(section, encoding="utf-8")
     log(f"   📄 智能分割原始输出已保存: {dump_path}")
 
 
-def smart_split_with_callable(md_content, llm_callable, md_file=None):
+def smart_split_with_callable(md_content, llm_callable, md_file=None, output_root=None):
     for attempt in range(2):
         try:
             result_text = llm_callable(md_content, SMART_SPLIT_PROMPT)
@@ -78,7 +88,8 @@ def smart_split_with_callable(md_content, llm_callable, md_file=None):
             log(f"   ⚠️ 智能分割第 {attempt+1} 次调用失败: {e}")
             continue
 
-        _dump_smart_split_raw(result_text, md_file, label=f"attempt{attempt+1}")
+        _dump_smart_split_raw(result_text, md_file, label=f"attempt{attempt+1}",
+                              output_root=output_root)
 
         problems = parse_problem_tags(result_text)
         problems = [p for p in problems if p["content"].strip()]

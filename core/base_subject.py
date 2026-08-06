@@ -130,7 +130,7 @@ class BaseSubjectApp:
     # ---- proofread_one（模板方法，语文覆盖 _build_pre_hook） ----
 
     def proofread_one(self, ctx, q_dir, q_name,
-                      generate_pdf, source_mode="试卷"):
+                      generate_pdf, source_mode="试卷", archive_root=None):
         """校对入口 —— 所有学科共用骨架。高中语文覆盖 _build_pre_hook 注入文言文搜索。
 
         ADR-0017 决策6：移除 is_knowledge 参数。
@@ -149,6 +149,7 @@ class BaseSubjectApp:
             prompt, self.tools, generate_pdf,
             pre_hook=pre_hook,
             react_mode=self.react_mode,
+            archive_root=archive_root,
         )
 
     def _build_pre_hook(self, api_url, api_key, model, q_dir):

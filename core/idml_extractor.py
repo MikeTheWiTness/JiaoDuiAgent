@@ -297,13 +297,26 @@ def _classify_heading(text, style):
     return None
 
 
-def _is_useless(text, style):
-    """判断是否是无用内容。"""
+def _is_useless(text, style, prev_text=None, next_text=None):
+    """判断是否是无用内容。
+
+    纯数字短行（题号/分值如 "12" 或独立页码）需结合上下文：
+    仅当前段不是题干续行（前段以句末标点结尾）且后段不是编号列表项时
+    才当作独立页码过滤，避免误丢题号。
+    """
     stripped = text.strip()
     if not stripped:
         return True
 
     if len(stripped) <= 3 and re.match(r'^\d+$', stripped):
+        prev_s = (prev_text or "").strip()
+        next_s = (next_text or "").strip()
+        # 前段以句末标点结尾 → 数字可能是下一句的题号/分值，保留
+        if prev_s and re.search(r'[。．！？!?]$', prev_s):
+            return False
+        # 后段以编号开头 → 当前数字是编号列表项（如 "12．下列…" 被拆段），保留
+        if next_s and re.match(r'^\d+[.．、]', next_s):
+            return False
         return True
 
     if style == 'NormalParagraphStyle' and stripped in (
@@ -389,11 +402,23 @@ def extract_idml_to_markdown(idml_path, output_md_path=None):
         page = start_info['page_name']
         pages_with_content.add(page)
 
-        for para in paras:
+        for idx, para in enumerate(paras):
             text = para['text']
             style = para['style']
 
-            if _is_useless(text, style):
+            # 取前一个非空段与后一段文本，供 _is_useless 上下文判定（题号 vs 页码）
+            prev_text = ""
+            for p in reversed(paras[:idx]):
+                if p['text'].strip():
+                    prev_text = p['text']
+                    break
+            next_text = ""
+            for p in paras[idx + 1:]:
+                if p['text'].strip():
+                    next_text = p['text']
+                    break
+
+            if _is_useless(text, style, prev_text, next_text):
                 continue
 
             md_text = _format_paragraph(text, style)

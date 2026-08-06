@@ -1376,9 +1376,12 @@ def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -
         if os.path.isdir(img_dir):
             sec_img_prefix = f"./{section_title}/images/"
             para_content = para_content.replace("{./images/", "{" + sec_img_prefix)
-            all_images[section_title] = {}
+            # images_map 的 key 必须是未转义目录名：xelatex 会把 \includegraphics
+            # 路径中的 \_ 展开为 _，磁盘目录名带字面反斜杠则图片找不到
+            raw_title = os.path.basename(subdir.rstrip("/\\"))
+            all_images[raw_title] = {}
             for fname in os.listdir(img_dir):
-                all_images[section_title][fname] = os.path.join(img_dir, fname)
+                all_images[raw_title][fname] = os.path.join(img_dir, fname)
                 available_files.add(fname)
 
         # 把无法解析的图片引用（如 LLM 虚构的 ../_resources/xxx.png）

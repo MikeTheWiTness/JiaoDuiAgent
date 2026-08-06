@@ -388,26 +388,26 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
 
     # 创建临时目录用于编译（ASCII 路径，避免 xelatex 对中文路径的兼容问题）
     tmpdir = tempfile.mkdtemp(prefix="latex_compile_")
-    tex_dir = os.path.dirname(tex_path) or "."
-    tmp_tex = os.path.join(tmpdir, f"{base}.tex")
-
-    # 定位 xelatex 并推导 texmf 根目录
-    xelatex_path = _find_xelatex()
-    texmf_root = _get_texmf_root(xelatex_path)
-
-    # 内嵌便携版：将格式文件 + 字体映射复制到临时目录（ASCII 路径）
-    # 避免 CJK 路径导致 xdvipdfmx 失败
-    fonts_tmp = None
-    runtime_fonts_conf = None
-    if texmf_root:
-        _copy_fmt_to_tmpdir(texmf_root, tmpdir)
-        fonts_tmp = _copy_mapfiles_to_tmpdir(texmf_root, tmpdir)
-        runtime_fonts_conf = _generate_runtime_fonts_conf(fonts_tmp, tmpdir)
-
-    # 组装编译环境变量（texmf_root 为 None 时返回 None，主函数不传 env）
-    build_env = _build_compile_env(texmf_root, tmpdir, fonts_tmp)
-
     try:
+        tex_dir = os.path.dirname(tex_path) or "."
+        tmp_tex = os.path.join(tmpdir, f"{base}.tex")
+
+        # 定位 xelatex 并推导 texmf 根目录
+        xelatex_path = _find_xelatex()
+        texmf_root = _get_texmf_root(xelatex_path)
+
+        # 内嵌便携版：将格式文件 + 字体映射复制到临时目录（ASCII 路径）
+        # 避免 CJK 路径导致 xdvipdfmx 失败
+        fonts_tmp = None
+        runtime_fonts_conf = None
+        if texmf_root:
+            _copy_fmt_to_tmpdir(texmf_root, tmpdir)
+            fonts_tmp = _copy_mapfiles_to_tmpdir(texmf_root, tmpdir)
+            runtime_fonts_conf = _generate_runtime_fonts_conf(fonts_tmp, tmpdir)
+
+        # 组装编译环境变量（texmf_root 为 None 时返回 None，主函数不传 env）
+        build_env = _build_compile_env(texmf_root, tmpdir, fonts_tmp)
+
         # 复制 .tex 到临时目录
         shutil.copy2(tex_path, tmp_tex)
 
