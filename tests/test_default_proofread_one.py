@@ -148,7 +148,8 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
         with mock.patch.object(defaults, "call_api", return_value=fake_result), \
                 mock.patch.object(defaults, "_enforce_format", return_value=(True, [])):
             return defaults.default_proofread_one(
-                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=generate_pdf)
+                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=generate_pdf,
+                archive_root=self.tmpdir)
 
     def test_report_persists_when_generate_pdf_false(self):
         r = self._run_proofread(generate_pdf=False)
@@ -242,7 +243,8 @@ class TestInterruptedProofread(unittest.TestCase):
         with mock.patch.object(defaults, "call_api", return_value=fake_result), \
                 mock.patch.object(defaults, "_enforce_format", return_value=(True, [])):
             r = defaults.default_proofread_one(
-                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=False)
+                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=False,
+                archive_root=self.tmpdir)
         self.assertTrue(r["success"])
         self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对报告.md")))
 

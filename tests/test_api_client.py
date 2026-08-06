@@ -99,3 +99,97 @@ class TestIsEmptyOrDuplicate:
         """SymPy JSON 结果不参与空结果检测，但仍可检查真正空白/标记"""
         assert _is_empty_or_duplicate("", [])
         assert _is_empty_or_duplicate("[搜索结果为空]", [])
+
+
+class TestRunToolLoopRobustness:
+    """回归：_run_tool_loop 对异常 API 响应的健壮性。"""
+
+    def _make_ctx(self, tmp_path):
+        from core.session_context import SessionContext
+        return SessionContext(api_url="http://x", api_key="k", model="m",
+                              max_loops=1, output_dir=str(tmp_path))
+
+    def _run_loop(self, ctx, first_choice):
+        from unittest import mock
+        from core import api_client
+
+        messages = [{"role": "system", "content": "系统提示"}]
+        end_turn_choice = {"message": {"role": "assistant", "content": "最终结果"},
+                           "finish_reason": "stop"}
+        # 循环内第一次 _post_chat 即返回 end_turn（消耗顺序：仅此一个响应）
+        responses = iter([end_turn_choice])
+
+        with mock.patch.object(api_client, "_post_chat",
+                               side_effect=lambda *a, **k: (next(responses), {"total_tokens": 1})):
+            return api_client._run_tool_loop(
+                ctx,
+                first_choice,
+                messages,
+                tool_instances=[],
+                openai_tools=[],
+                tool_calls_log=[],
+                initial_header="",
+                payload={},
+                chat_url="http://x",
+                headers={},
+                reasoning_effort=None,
+                total_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            )
+
+    def test_missing_tool_calls_key_no_crash(self, tmp_path):
+        """回归：finish_reason=tool_calls 但 message 无 tool_calls 键 → 不抛 KeyError"""
+        from core.api_client import StopReason
+        ctx = self._make_ctx(tmp_path)
+        choice = {"message": {"content": None}, "finish_reason": "tool_calls"}
+        result = self._run_loop(ctx, choice)
+        # 无工具可执行 → 不崩溃，走配额/触顶路径正常收尾
+        assert result.stop_reason in (StopReason.MAX_TURNS, StopReason.END_TURN)
+        assert result.content is not None
+
+    def test_reasoning_content_stripped_from_loop_messages(self, tmp_path):
+        """回归：回传 messages 的 assistant 消息必须剔除 reasoning_content"""
+        choice = {
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": "内部思考过程不应回传",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "未知工具", "arguments": "{}"}}
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+        ctx = self._make_ctx(tmp_path)
+        result = self._run_loop(ctx, choice)
+        # 工具已执行（未知工具返回错误串），消息被回传
+        assert any("tool" in m["role"] for m in result.messages)
+        for m in result.messages:
+            assert "reasoning_content" not in m, f"messages 中残留 reasoning_content: {m}"
+
+    def test_429_retry_after_respected(self, tmp_path):
+        """回归：429 响应的 Retry-After 必须影响退避时长"""
+        import requests
+        from unittest import mock
+        from core import api_client
+        from core.session_context import SessionContext
+        from core.api_client import StopReason
+
+        ctx = SessionContext(api_url="http://x", api_key="k", model="m",
+                             max_loops=1, output_dir=str(tmp_path))
+        sleeps = []
+
+        def _fake_post(*a, **k):
+            # 走真实 _classify_error 路径：HTTP 429 + Retry-After: 12
+            resp = requests.Response()
+            resp.status_code = 429
+            resp.headers["Retry-After"] = "12"
+            raise requests.exceptions.HTTPError("429 Too Many Requests", response=resp)
+
+        with mock.patch.object(api_client.requests, "post", side_effect=_fake_post), \
+                mock.patch.object(api_client.time, "sleep", side_effect=lambda s: sleeps.append(s)):
+            result = api_client.call_api(
+                ctx, "文本", [], "测试题", "提示词", tools=None)
+        # 退避时长 >= 服务器建议的 12s（指数退避仅 5s）
+        assert sleeps, "应有退避等待"
+        assert sleeps[0] >= 12, f"退避 {sleeps[0]}s < Retry-After 12s"
+        assert result["stop_reason"] == StopReason.ERROR

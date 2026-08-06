@@ -113,6 +113,19 @@ class TestSaveProofreadJson(unittest.TestCase):
         data1 = self._load_json()
         self.assertEqual(data1["summary"], "严重错误")
 
+    def test_write_failure_logs_warning(self):
+        """回归：写盘失败必须记录日志（此前静默返回 False 无感知）"""
+        from unittest import mock
+        from core import parsing
+        md = self._make_inline_proofread_md()
+        with mock.patch.object(parsing, "log") as mock_log, \
+                mock.patch("builtins.open", side_effect=OSError("磁盘只读")):
+            result = save_proofread_json(md, self.q_dir)
+        self.assertFalse(result)
+        mock_log.assert_called()
+        # 日志消息应包含失败文件路径信息
+        self.assertIn("_校对数据.json", mock_log.call_args[0][0])
+
         md2 = self._make_inline_proofread_md(summary="一般问题")
         save_proofread_json(md2, self.q_dir)
         data2 = self._load_json()

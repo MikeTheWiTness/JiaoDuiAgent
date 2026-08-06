@@ -32,6 +32,24 @@ class TestIsUnitDir:
     def test_question_in_name_anywhere(self):
         assert is_unit_dir("第1题_备份")
 
+    def test_question_in_name_anywhere_with_parenthesis(self):
+        assert is_unit_dir("第1题(文言文)")
+
+    def test_shiti_not_unit(self):
+        """回归：任意含「题」的目录名不得误判（试题/错题本/话题）"""
+        assert not is_unit_dir("试题")
+        assert not is_unit_dir("试题素材")
+        assert not is_unit_dir("错题本")
+        assert not is_unit_dir("话题")
+        assert not is_unit_dir("题目库")
+        assert not is_unit_dir("命题思路")
+
+    def test_section_prefix_only(self):
+        """回归：前缀必须锚定 第N题/板块N/单元N 形式"""
+        assert not is_unit_dir("题1")
+        assert not is_unit_dir("板块")
+        assert not is_unit_dir("单元A")
+
 
 class TestScanQuestionDirs:
     def test_first_level_match(self):

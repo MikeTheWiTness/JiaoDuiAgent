@@ -55,6 +55,14 @@ class TestParseProblemTags(unittest.TestCase):
 
 
 class TestSmartSplitMain(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp(prefix="smart_split_t_")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
     def test_successful_first_call(self):
         original = "引言\n第一题内容\n过渡\n第二题内容\n结尾"
         mock_result = (
@@ -66,7 +74,7 @@ class TestSmartSplitMain(unittest.TestCase):
             call_count[0] += 1
             return mock_result
 
-        result = smart_split_with_callable(original, mock_llm_call)
+        result = smart_split_with_callable(original, mock_llm_call, output_root=self.tmpdir)
         self.assertEqual(len(result), 2)
         self.assertIn("第一题", result[0]["content"])
         self.assertIn("第二题", result[1]["content"])
@@ -82,7 +90,7 @@ class TestSmartSplitMain(unittest.TestCase):
                 return "没有任何标记的错误返回"
             return "<problem>题目内容</problem>"
 
-        result = smart_split_with_callable(original, mock_llm_call)
+        result = smart_split_with_callable(original, mock_llm_call, output_root=self.tmpdir)
         self.assertEqual(len(result), 1)
         self.assertEqual(call_count[0], 2)
 
@@ -94,7 +102,7 @@ class TestSmartSplitMain(unittest.TestCase):
             call_count[0] += 1
             return "完全没有标记的垃圾输出"
 
-        result = smart_split_with_callable(original, mock_llm_call)
+        result = smart_split_with_callable(original, mock_llm_call, output_root=self.tmpdir)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["content"], original)
         self.assertEqual(call_count[0], 2)
@@ -107,7 +115,7 @@ class TestSmartSplitMain(unittest.TestCase):
             call_count[0] += 1
             return "<problem></problem>"
 
-        result = smart_split_with_callable(original, mock_llm_call)
+        result = smart_split_with_callable(original, mock_llm_call, output_root=self.tmpdir)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["content"], original)
         self.assertEqual(call_count[0], 2)
@@ -121,13 +129,21 @@ class TestSmartSplitMain(unittest.TestCase):
             call_count[0] += 1
             return None
 
-        result = smart_split_with_callable(original, mock_llm_call)
+        result = smart_split_with_callable(original, mock_llm_call, output_root=self.tmpdir)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["content"], original)
         self.assertEqual(call_count[0], 2)
 
 
 class TestSmartSplitEdgeCases(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp(prefix="smart_split_e_")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
     def test_tags_with_newlines(self):
         text = "<problem>\n题目内容\n</problem>"
         result = parse_problem_tags(text)
@@ -159,7 +175,7 @@ class TestSmartSplitEdgeCases(unittest.TestCase):
                 raise RuntimeError("API 超时")
             return "<problem>题目内容</problem>"
 
-        result = smart_split_with_callable(original, mock_llm_call)
+        result = smart_split_with_callable(original, mock_llm_call, output_root=self.tmpdir)
         self.assertEqual(len(result), 1)
         self.assertEqual(call_count[0], 2)
 
@@ -171,7 +187,7 @@ class TestSmartSplitEdgeCases(unittest.TestCase):
             call_count[0] += 1
             raise RuntimeError("API 挂了")
 
-        result = smart_split_with_callable(original, mock_llm_call)
+        result = smart_split_with_callable(original, mock_llm_call, output_root=self.tmpdir)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["content"], original)
         self.assertEqual(call_count[0], 2)
@@ -182,6 +198,58 @@ class TestSmartSplitEdgeCases(unittest.TestCase):
         for item in result:
             self.assertIn("content", item)
             self.assertIsInstance(item["content"], str)
+
+
+class TestDumpSmartSplitRawFormat(unittest.TestCase):
+    """回归：多轮 attempt 写入单文件内分节（AGENTS.md 命名约束），且不落仓库 output/。"""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp(prefix="smart_split_raw_t_")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_two_attempts_single_file_with_sections(self):
+        """两轮 attempt 产出单文件 _smart_split_raw.md，含两个 ### attempt 节头"""
+        from shared.smart_split import smart_split_with_callable
+
+        def mock_llm_call(md_text, prompt):
+            return "没有任何标记的输出"
+
+        smart_split_with_callable("全文", mock_llm_call,
+                                  md_file="测试文档_raw.md", output_root=self.tmpdir)
+        raw_path = os.path.join(self.tmpdir, "中间产物", "测试文档", "_smart_split_raw.md")
+        self.assertTrue(os.path.isfile(raw_path), f"单文件应存在: {raw_path}")
+        with open(raw_path, encoding="utf-8") as f:
+            content = f.read()
+        # 两个 attempt 节头在同一文件内
+        self.assertEqual(content.count("### attempt"), 2, content)
+        self.assertIn("### attempt attempt1", content)
+        self.assertIn("### attempt attempt2", content)
+        # 不再生成 attempt 命名的分散文件
+        files = os.listdir(os.path.join(self.tmpdir, "中间产物", "测试文档"))
+        self.assertFalse(any("attempt" in f for f in files), files)
+
+    def test_no_repo_output_pollution(self):
+        """output_root 指定后仓库 output/ 目录不得被写入"""
+        from shared.smart_split import smart_split_with_callable
+
+        def mock_llm_call(md_text, prompt):
+            return "没有任何标记的输出"
+
+        repo_output = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+        target_dir = os.path.join(repo_output, "中间产物", "未命名文档")
+        # 清理可能存在的旧残留，确保本次运行前干净
+        import shutil
+        shutil.rmtree(target_dir, ignore_errors=True)
+
+        smart_split_with_callable("全文", mock_llm_call, output_root=self.tmpdir)
+        # 本次运行不得在仓库 output/ 下产生任何文件
+        self.assertFalse(os.path.exists(target_dir),
+                         f"仓库 output/ 被测试污染: {os.listdir(target_dir) if os.path.exists(target_dir) else ''}")
 
 
 if __name__ == "__main__":

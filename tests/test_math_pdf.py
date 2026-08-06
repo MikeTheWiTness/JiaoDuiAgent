@@ -471,6 +471,31 @@ $\frac{3}{4} \times 8 = 6$
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+class TestPdfCompilerCleanup(unittest.TestCase):
+    """回归：compile_to_pdf 在 xelatex 定位失败等预编译异常时必须清理临时目录。"""
+
+    def test_xelatex_missing_still_cleans_tmpdir(self):
+        from unittest import mock
+        from shared import pdf_compiler
+
+        tmpdir = tempfile.mkdtemp(prefix="cleanup_probe_")
+        tex_path = os.path.join(tmpdir, "test.tex")
+        with open(tex_path, "w", encoding="utf-8") as f:
+            f.write("\\documentclass{article}\n\\begin{document}x\\end{document}\n")
+
+        with mock.patch.object(pdf_compiler, "_find_xelatex",
+                               side_effect=FileNotFoundError("xelatex 不存在")), \
+                mock.patch.object(pdf_compiler, "tempfile") as mock_tf:
+            mock_tf.mkdtemp.return_value = "/tmp/latex_compile_fake_test"
+            with mock.patch.object(pdf_compiler.shutil, "rmtree") as mock_rm:
+                with self.assertRaises(FileNotFoundError):
+                    pdf_compiler.compile_to_pdf(tex_path, output_dir=tmpdir)
+                # 临时目录必须被清理（rmtree 被调用）
+                mock_rm.assert_called_once_with("/tmp/latex_compile_fake_test",
+                                                ignore_errors=True)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def _log_tail(log_text, n=20):
     """提取日志尾部和错误行"""
     if not log_text:
