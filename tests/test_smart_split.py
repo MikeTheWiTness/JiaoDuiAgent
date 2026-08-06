@@ -251,6 +251,33 @@ class TestDumpSmartSplitRawFormat(unittest.TestCase):
         self.assertFalse(os.path.exists(target_dir),
                          f"仓库 output/ 被测试污染: {os.listdir(target_dir) if os.path.exists(target_dir) else ''}")
 
+    def test_smart_split_wrapper_passes_output_root(self):
+        """回归：生产包装函数 smart_split() 必须透传 output_root（真实调用链走此函数）"""
+        from unittest import mock
+        from shared import smart_split as ss
+
+        repo_output = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+        target_dir = os.path.join(repo_output, "中间产物", "未命名文档")
+        import shutil
+        shutil.rmtree(target_dir, ignore_errors=True)
+
+        fake_api_result = {"content": "没有任何标记的输出"}
+        with mock.patch.object(ss, "call_api", return_value=fake_api_result):
+            problems = ss.smart_split("全文内容", "http://x", "k", "m",
+                                      md_file="测试文档_raw.md",
+                                      output_root=self.tmpdir)
+        # 降级为单单元
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0]["content"], "全文内容")
+        # 中间产物落盘到 output_root（包装函数透传生效）
+        raw_path = os.path.join(self.tmpdir, "中间产物", "测试文档", "_smart_split_raw.md")
+        self.assertTrue(os.path.isfile(raw_path),
+                        f"包装函数未透传 output_root，中间产物未落到指定目录: {raw_path}")
+        # 仓库 output/ 不得新增残留
+        self.assertFalse(os.path.exists(target_dir),
+                         f"仓库 output/ 被污染: {target_dir}")
+
 
 if __name__ == "__main__":
     unittest.main()

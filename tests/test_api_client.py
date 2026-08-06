@@ -165,6 +165,11 @@ class TestRunToolLoopRobustness:
         assert any("tool" in m["role"] for m in result.messages)
         for m in result.messages:
             assert "reasoning_content" not in m, f"messages 中残留 reasoning_content: {m}"
+        # tool_calls 必须保留（OpenAI 协议要求 assistant 消息回显 tool_calls）
+        assistant_msgs = [m for m in result.messages
+                          if m.get("role") == "assistant" and m.get("tool_calls")]
+        assert assistant_msgs, "assistant 消息丢失 tool_calls 字段（过度剔除）"
+        assert assistant_msgs[0]["tool_calls"][0]["id"] == "call_1"
 
     def test_429_retry_after_respected(self, tmp_path):
         """回归：429 响应的 Retry-After 必须影响退避时长"""

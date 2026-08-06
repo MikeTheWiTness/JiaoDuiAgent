@@ -83,7 +83,8 @@ class SubjectApp(BaseSubjectApp):
             api_key = options.get("api_key", "")
             model = options.get("model", "")
             from shared.smart_split import smart_split
-            problems = smart_split(md_content, api_url, api_key, model, md_file=md_file)
+            problems = smart_split(md_content, api_url, api_key, model,
+                               md_file=md_file, output_root=output_root)
         else:
             log(f"⚠️ 未知分割模式: {split_mode}，使用规则模式")
             return default_split_lecture(md_file, output_root, base_name, do_clean, self.config)
