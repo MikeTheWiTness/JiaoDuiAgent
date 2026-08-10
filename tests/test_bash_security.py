@@ -1,5 +1,6 @@
 """测试 BashTool 安全加固：命令白名单 + 危险模式拦截 + 路径限制。"""
 import os
+import shutil
 import tempfile
 
 from shared.bash_tool import (
@@ -8,6 +9,24 @@ from shared.bash_tool import (
     _validate_bash_command,
     _validate_file_path,
 )
+
+
+class _TempDir:
+    """with 语句管理临时目录，测试结束自动清理。
+
+    用 mkdtemp 生成平台无关的 allowed_dir，避免硬编码 POSIX 路径
+    （如 /tmp/work）在 Windows 上 abspath 语义不同导致误判。
+    """
+
+    def __init__(self):
+        self.path = tempfile.mkdtemp(prefix="bash_guard_")
+
+    def __enter__(self):
+        return self.path
+
+    def __exit__(self, *exc):
+        shutil.rmtree(self.path, ignore_errors=True)
+        return False
 
 
 class TestValidateBashCommand:
@@ -69,16 +88,20 @@ class TestValidateBashCommand:
     # ---- 路径越界 ----
 
     def test_block_absolute_path_outside(self):
-        err = _validate_bash_command("cat /etc/passwd", "/tmp/work")
-        assert err is not None
+        with _TempDir() as work:
+            err = _validate_bash_command("cat /etc/passwd", work)
+            assert err is not None
 
     def test_block_cd_command(self):
-        err = _validate_bash_command("cd / && ls", "/tmp/work")
-        assert err is not None
+        with _TempDir() as work:
+            err = _validate_bash_command("cd / && ls", work)
+            assert err is not None
 
     def test_allow_path_inside_allowed_dir(self):
-        err = _validate_bash_command("cat /tmp/work/file.txt", "/tmp/work")
-        assert err is None
+        with _TempDir() as work:
+            target = os.path.join(work, "file.txt")
+            err = _validate_bash_command(f"cat {target}", work)
+            assert err is None
 
     # ---- 未知命令 ----
 

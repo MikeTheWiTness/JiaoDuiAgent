@@ -40,7 +40,8 @@ jobs:
             texlive-fonts-recommended \
             texlive-latex-recommended \
             texlive-latex-extra \
-            texlive-pictures
+            texlive-pictures \
+            texlive-science
 
       - name: Install dependencies
         run: |

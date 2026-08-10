@@ -36,8 +36,12 @@ class TestProofreadOneFileSelection(unittest.TestCase):
 
     @staticmethod
     def _read_md_old(q_dir):
-        '''旧逻辑：遍历目录取第一个 .md（有 bug）'''
-        for f in os.listdir(q_dir):
+        '''旧逻辑：遍历目录取第一个 .md（有 bug）
+
+        显式 sorted 保证确定性：下划线（ASCII 0x5F）排在中文前，
+        避免 os.listdir 枚举顺序随文件系统（ext4/APFS/NTFS）漂移。
+        '''
+        for f in sorted(os.listdir(q_dir)):
             if f.endswith(".md"):
                 with open(os.path.join(q_dir, f), encoding='utf-8') as fm:
                     return fm.read()
