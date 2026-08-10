@@ -733,15 +733,16 @@ class DefaultApp:
                     log("\n===== 任务已中断 =====")
                     break
                 log(f"\n📄 [{i+1}/{total}] 正在生成 PDF：{paper_name}")
-                try:
-                    pdf_path = generate_combined_pdf(dir_path, pdf_dir)
-                    if pdf_path:
-                        log(f"   ✅ PDF 已生成：{pdf_path}")
-                        success += 1
-                    else:
-                        log(f"   ⚠️ PDF 生成失败：未找到可用的校对数据")
-                except Exception as e:
-                    log(f"   ❌ PDF 生成异常：{e}")
+                if self.generate_pdf.get():
+                    try:
+                        pdf_path = generate_combined_pdf(dir_path, pdf_dir)
+                        if pdf_path:
+                            log(f"   ✅ PDF 已生成：{pdf_path}")
+                            success += 1
+                        else:
+                            log(f"   ⚠️ PDF 生成失败：未找到可用的校对数据")
+                    except Exception as e:
+                        log(f"   ❌ PDF 生成异常：{e}")
                 if self.pipeline.typeset_enabled and self.generate_docx.get():
                     try:
                         docx_dir = os.path.join(self.output_dir.get(), "校对Word")

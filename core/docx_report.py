@@ -2,8 +2,9 @@
 
 将试卷/讲义目录下各题（单元N/第N题/板块N）的 `_校对报告.md` 合并为单个 docx：
 - `【N|原|改】` 标记 → Word 批注（改后文字 + 修改原因）
-- 图片合并（重命名防冲突）并嵌入
-- 每题一级标题 + 分页符
+- 图片合并（重命名防冲突）并嵌入；外链/缺失引用转为文字说明
+- 每题一级标题 + 分页符；「无问题」单元同样列入报告并标注
+- 含批注标记但缺分段的单元（批注可能丢失）跳过并警示
 
 依赖 pandoc（`-f markdown-implicit_figures` 防止图片题注污染）。
 """
@@ -20,7 +21,8 @@ from xml.sax.saxutils import escape
 from core.logging_utils import log
 from core.pandoc_utils import find_pandoc
 
-_PAT = re.compile(r"【(\d+)\|([^】]*)】", re.DOTALL)
+# \| 是 LaTeX 转义竖线（\left\|…\right\|），整体属于原文字段，不得当分隔符
+_PAT = re.compile(r"【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】", re.DOTALL)
 _PAGE_BREAK = '```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```'
 
 _NS = ('xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" '
@@ -59,6 +61,9 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
         return None
 
     out_root = Path(out_dir) if out_dir else paper_path.parent / "校对Word"
+    # 必须绝对化：pandoc 以临时目录为 cwd，相对 out_dir 会把 docx 写进临时目录，
+    # 后续 _inject_comments 按调用方 cwd 打开相对路径必然 FileNotFoundError
+    out_root = out_root.resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     safe_name = "".join(c for c in paper_path.name if c not in r'\/:*?"<>|')
     out_path = out_root / f"{safe_name}_校对批注版.docx"
@@ -72,12 +77,23 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
         gid_iter = itertools.count(1)
         used_ids = set()
         all_bodies = []
+        skipped_clean = 0
+        skipped_broken = 0
 
         for qid, part in questions:
             marker_idx = part.find("### 标记原文")
             reason_idx = part.find("### 修改原因")
             if marker_idx == -1 or reason_idx == -1 or reason_idx < marker_idx:
-                log(f"   ⚠️ Word 报告：{qid} 分段异常，跳过")
+                # 无分段不一定是异常：LLM 判定「无问题」时报告只有
+                # 「无问题 + 工具日志 + 思考过程」，无批注分段属正常形态。
+                # 含批注标记（【N|原|改】）却缺分段才可疑——批注可能丢失。
+                if _PAT.search(part):
+                    skipped_broken += 1
+                    log(f"   ⚠️ Word 报告：{qid} 含批注标记但缺少「标记原文/修改原因」分段，跳过（批注无法生成）")
+                else:
+                    skipped_clean += 1
+                    log(f"   ℹ️ Word 报告：{qid} 无批注，列入报告")
+                    all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
                 continue
             reasons = _parse_reasons(part[reason_idx:])
             body = part[marker_idx:reason_idx]
@@ -93,10 +109,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
 
             def _repl(m, _reasons=reasons):
                 cid = int(m.group(1))
-                rest = m.group(2)
-                if "|" not in rest:
-                    return m.group(0)
-                orig, new = rest.split("|", 1)
+                orig = m.group(2)
+                new = m.group(3)
                 gid = next(gid_iter)
                 if gid in used_ids:
                     gid = max(used_ids) + 1
@@ -112,8 +126,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
             unit_body = _PAT.sub(_repl, body)
             all_bodies.append(f"# {qid}\n\n{unit_body}\n\n{_PAGE_BREAK}")
 
-        if not comments:
-            log(f"⚠️ Word 报告：{paper_dir} 无任何可处理的批注标记")
+        if not all_bodies:
+            log(f"⚠️ Word 报告：{paper_dir} 无任何可处理的单元")
             return None
 
         full_md = "\n\n".join(all_bodies)
@@ -133,7 +147,12 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
                 log(f"   ⚠️ Word 报告：{len(fetch_warns)} 张图片未找到（将显示替换文字）")
 
         _inject_comments(out_path, comments)
-        log(f"✅ Word 批注报告已生成：{out_path}（{len(comments)} 条批注）")
+        summary = f"（{len(comments)} 条批注"
+        if skipped_clean:
+            summary += f"，{skipped_clean} 个单元无批注"
+        if skipped_broken:
+            summary += f"，{skipped_broken} 个单元含标记但缺分段跳过"
+        log(f"✅ Word 批注报告已生成：{out_path}{summary}）")
         return str(out_path)
     except Exception as e:
         import traceback
@@ -173,11 +192,18 @@ def _parse_reasons(part: str) -> dict:
 
 
 def _rewrite_images(body: str, q_dir: Path, img_root: Path) -> str:
-    """图片引用重写：./images/xxx → ./images/{题名}_xxx，复制到合并目录防编号冲突。"""
+    """图片引用重写：./images/xxx → ./images/{题名}_xxx，复制到合并目录防编号冲突。
+
+    外链 https:// 引用是 LLM 幻觉（搜索结果拷贝），转为文字说明，
+    避免 pandoc 尝试下载失败产生 fetch 警告。
+    """
     q_img_dir = q_dir / "images"
 
     def _repl(m):
-        name = Path(m.group(2)).name
+        ref = m.group(2)
+        if ref.startswith(("http://", "https://")):
+            return "（配图缺失：外链图片无法嵌入）"
+        name = Path(ref).name
         new_name = f"{q_dir.name}_{name}"
         src_img = q_img_dir / name
         if src_img.exists():

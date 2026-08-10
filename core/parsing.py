@@ -92,7 +92,8 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
             })
         return ""
 
-    _clean_marked = re.sub(r'【(\d+)\|([^|]*?)\|([^】]*?)】', _extract, marked_section)
+    # \| 是 LaTeX 转义竖线（如 \left\|…\right\|），整体属于字段内容，不得当分隔符
+    _clean_marked = re.sub(r'【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】', _extract, marked_section)
     corrections.sort(key=lambda x: x.get("num", 0))
 
     if not summary and not corrections:
