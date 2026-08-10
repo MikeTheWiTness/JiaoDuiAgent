@@ -170,6 +170,49 @@ class TestRunToolLoopRobustness:
                           if m.get("role") == "assistant" and m.get("tool_calls")]
         assert assistant_msgs, "assistant 消息丢失 tool_calls 字段（过度剔除）"
         assert assistant_msgs[0]["tool_calls"][0]["id"] == "call_1"
+        # 思考内容不能随消息丢弃：必须按轮次收集，供 _save_conversation_log 落盘
+        assert result.reasonings.get(1) == "内部思考过程不应回传"
+
+    def test_conversation_log_contains_reasoning(self, tmp_path):
+        """回归：reasoning_content 必须逐轮写入 _API对话记录.md
+
+        修复前：reasoning_content 在回传消息前被剔除，对话记录只遍历 messages，
+        思考内容既不在对话记录、也不在消息中——唯一去处是 _校对报告.md。
+        """
+        from unittest import mock
+        from core import api_client
+        ctx = self._make_ctx(tmp_path)
+        tool_choice = {
+            "message": {
+                "role": "assistant",
+                "content": "我需要搜索确认",
+                "reasoning_content": "第一轮推理：先查资料",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "未知工具", "arguments": "{}"}}
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+        end_choice = {
+            "message": {"role": "assistant", "content": "无问题",
+                        "reasoning_content": "第二轮推理：确认无错误"},
+            "finish_reason": "stop",
+        }
+        responses = iter([tool_choice, end_choice])
+        with mock.patch.object(
+                api_client, "_post_chat",
+                side_effect=lambda *a, **k: (next(responses), {"total_tokens": 1})):
+            result = api_client.call_api(
+                ctx, "题目内容", [], "第1题", "系统提示", tools=[])
+        assert result["stop_reason"] == "end_turn"
+        log_path = tmp_path / "_API对话记录.md"
+        assert log_path.exists()
+        text = log_path.read_text(encoding="utf-8")
+        assert "### 第1轮 — LLM 请求工具调用" in text
+        assert "第一轮推理：先查资料" in text
+        assert "### 第2轮 — LLM 最终回复" in text
+        assert "第二轮推理：确认无错误" in text
+        assert "推理内容（reasoning_content）" in text
 
     def test_429_retry_after_respected(self, tmp_path):
         """回归：429 响应的 Retry-After 必须影响退避时长"""

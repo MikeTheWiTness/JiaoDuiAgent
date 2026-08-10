@@ -133,7 +133,7 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def _run_proofread(self, generate_pdf):
+    def _run_proofread(self, generate_pdf, content=None, reasoning="思考"):
         from unittest import mock
 
         from core import defaults
@@ -142,10 +142,12 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
 
         ctx = SessionContext(api_url="http://x", api_key="k", model="m",
                              max_loops=1, output_dir=self.tmpdir)
+        if content is None:
+            content = "轻微问题\n\n### 标记原文\n编号：第1题\n内容：\n1．题目【1|错误|正确】\n\n### 修改原因\n1. 修正错误。"
         fake_result = {
-            "content": "轻微问题\n\n### 标记原文\n编号：第1题\n内容：\n1．题目【1|错误|正确】\n\n### 修改原因\n1. 修正错误。",
+            "content": content,
             "tool_calls_log": [],
-            "reasoning": "思考",
+            "reasoning": reasoning,
             "usage": {"total_tokens": 100},
             "stop_reason": StopReason.END_TURN,
         }
@@ -154,6 +156,25 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
             return defaults.default_proofread_one(
                 ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=generate_pdf,
                 archive_root=self.tmpdir)
+
+    def test_no_issue_report_excludes_reasoning(self):
+        """回归：思考内容不得写入 _校对报告.md（含存档副本）
+
+        修复前：「无问题」时 reasoning 被追加为「模型思考过程」段；
+        修复后：思考内容归属 _API对话记录.md，报告只保留校对相关内容。
+        """
+        r = self._run_proofread(generate_pdf=False, content="无问题",
+                                reasoning="这是模型思考内容XYZ")
+        self.assertTrue(r["success"])
+        archive = os.path.join(self.tmpdir, "中间产物",
+                               os.path.basename(self.tmpdir.rstrip("/\\")), "第1题")
+        for rep in (os.path.join(self.q_dir, "_校对报告.md"),
+                    os.path.join(archive, "_校对报告.md")):
+            self.assertTrue(os.path.exists(rep), f"缺少 {rep}")
+            text = open(rep, encoding="utf-8").read()
+            self.assertNotIn("模型思考过程", text)
+            self.assertNotIn("这是模型思考内容XYZ", text)
+            self.assertIn("完整 API 对话记录请见", text)
 
     def test_report_persists_when_generate_pdf_false(self):
         r = self._run_proofread(generate_pdf=False)

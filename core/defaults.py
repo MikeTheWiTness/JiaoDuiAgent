@@ -896,11 +896,6 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
                 # 追加工具调用摘要，方便排查搜索质量
                 if tool_calls:
                     f.write(_format_tool_calls_summary(tool_calls))
-                # "无问题" 时追加模型思考内容，方便后期核查
-                if _is_no_issue(res) and reasoning:
-                    f.write("\n\n---\n")
-                    f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
-                    f.write(reasoning)
                 # 追加 token 用量统计
                 usage_text = _format_usage_summary(usage)
                 if usage_text:
@@ -924,10 +919,6 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
                 f.write(res)
                 if tool_calls:
                     f.write(_format_tool_calls_summary(tool_calls))
-                if _is_no_issue(res) and reasoning:
-                    f.write("\n\n---\n")
-                    f.write("## 📋 模型思考过程（仅核查用，不出现在 PDF 中）\n\n")
-                    f.write(reasoning)
                 usage_text = _format_usage_summary(usage)
                 if usage_text:
                     f.write(usage_text)

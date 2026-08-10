@@ -191,6 +191,7 @@ class LoopResult:
     stop_reason: str = ""
     tool_calls_log: list = field(default_factory=list)
     usage: dict = field(default_factory=dict)
+    reasonings: dict = field(default_factory=dict)  # {assistant 轮次: reasoning_content}，落盘对话记录用
 
     def as_dict(self) -> dict:
         """转为与 call_api 对外返回一致的 6 key dict，key 集合及顺序逐字不变。"""
@@ -352,11 +353,14 @@ def _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools)
 
 # ---- C3: 合并后的统一保存函数 ----
 
-def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix=""):
+def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix="",
+                           reasonings=None):
     """将完整对话记录保存到文件。
 
     Args:
         suffix: 文件名后缀。"" → _API对话记录.md，"_full" → _API对话记录_full.md。
+        reasonings: {assistant 轮次序号: reasoning_content}，逐轮渲染到对话记录。
+            reasoning_content 因回传协议不能在 messages 中保留，须并行传入。
     """
     if not output_dir:
         return
@@ -382,6 +386,7 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix
                     lines.append(f"### 用户输入\n\n```\n{str(content)[:5000]}\n```\n\n")
             elif role == "assistant":
                 turn += 1
+                reasoning = (reasonings or {}).get(turn)
                 tool_calls = msg.get("tool_calls", [])
                 if tool_calls:
                     lines.append(f"### 第{turn}轮 — LLM 请求工具调用\n\n")
@@ -399,6 +404,9 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix
                 else:
                     lines.append(f"### 第{turn}轮 — LLM 最终回复\n\n")
                     lines.append(f"```\n{content[:10000]}{'...[截断]' if len(str(content)) > 10000 else ''}\n```\n\n")
+                if reasoning:
+                    lines.append(f"**推理内容（reasoning_content）:**\n\n"
+                                 f"```\n{reasoning[:10000]}{'...[截断]' if len(reasoning) > 10000 else ''}\n```\n\n")
             elif role == "tool":
                 lines.append(f"### 工具返回\n\n```\n{str(content)[:5000]}\n```\n\n")
         with open(log_path, "w", encoding="utf-8") as f:
@@ -567,6 +575,15 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
     recent_results = []
     empty_streak = 0
     search_count = 0
+    reasonings = {}   # {assistant 轮次: reasoning_content}，随对话记录落盘
+    assistant_turn = 0
+
+    def _record_reasoning(msg_dict):
+        nonlocal assistant_turn
+        assistant_turn += 1
+        reasoning = msg_dict.get("reasoning_content", "")
+        if reasoning:
+            reasonings[assistant_turn] = reasoning
 
     while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
         # 检查中断信号
@@ -577,6 +594,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                 messages=messages,
                 tool_calls_log=tool_calls_log,
                 usage=total_usage,
+                reasonings=reasonings,
             )
 
         if loop >= ctx.max_loops:
@@ -584,7 +602,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
             # 保存压缩前的完整日志（含工具调用）
             _save_conversation_log(
                 messages, ctx.output_dir, q_title="", initial_header=initial_header,
-                suffix="_full",
+                suffix="_full", reasonings=reasonings,
             )
             messages = _compress_history(messages, len(tool_calls_log))
             openai_tools = None  # 关闭工具调用
@@ -599,8 +617,12 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
             _accumulate_usage(total_usage, usage)
             reasoning = choice.get("message", {}).get("reasoning_content", "")
             content = choice["message"]["content"]
+            _record_reasoning(choice["message"])
             messages.append({"role": "assistant", "content": content})
-            _save_conversation_log(messages, ctx.output_dir, q_title="", initial_header=initial_header)
+            _save_conversation_log(
+                messages, ctx.output_dir, q_title="", initial_header=initial_header,
+                reasonings=reasonings,
+            )
             return LoopResult(
                 content=content,
                 reasoning=reasoning,
@@ -608,9 +630,11 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                 stop_reason=StopReason.MAX_TURNS,
                 tool_calls_log=tool_calls_log,
                 usage=total_usage,
+                reasonings=reasonings,
             )
 
         # 回传前剔除输出专用字段 reasoning_content（部分端点回传会 400/膨胀）
+        _record_reasoning(choice["message"])
         messages.append({k: v for k, v in choice["message"].items()
                          if k != "reasoning_content"})
         # 记录 LLM 返回的工具调用请求
@@ -659,7 +683,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                 # 保存压缩前的完整日志（含工具调用），_full 后缀避免被后续覆盖
                 _save_conversation_log(
                     messages, ctx.output_dir, q_title="", initial_header=initial_header,
-                    suffix="_full",
+                    suffix="_full", reasonings=reasonings,
                 )
                 messages = _compress_history(messages, len(tool_calls_log), disable_all=False)
                 # 只移除搜索/抓取工具，保留其他工具（read_file、write_file 等）
@@ -670,6 +694,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                 _accumulate_usage(total_usage, usage)
                 reasoning = choice.get("message", {}).get("reasoning_content", "")
                 content = choice["message"]["content"]
+                _record_reasoning(choice["message"])
                 messages.append({"role": "assistant", "content": content})
                 # 注意：TOOL_LOOP 路径不调用 _save_conversation_log，与原行为一致
                 return LoopResult(
@@ -679,6 +704,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                     stop_reason=StopReason.TOOL_LOOP,
                     tool_calls_log=tool_calls_log,
                     usage=total_usage,
+                    reasonings=reasonings,
                 )
 
         # 搜索独立配额：纯搜索轮次不占 loop，单独计数
@@ -699,6 +725,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
     # while 循环自然结束 → END_TURN
     reasoning = choice.get("message", {}).get("reasoning_content", "")
     content = choice["message"]["content"]
+    _record_reasoning(choice.get("message", {}))
     if content:
         messages.append({"role": "assistant", "content": content})
     return LoopResult(
@@ -708,6 +735,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
         stop_reason=StopReason.END_TURN,
         tool_calls_log=tool_calls_log,
         usage=total_usage,
+        reasonings=reasonings,
     )
 
 
@@ -790,6 +818,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             if result.stop_reason == StopReason.END_TURN:
                 _save_conversation_log(
                     result.messages, ctx.output_dir, q_title, initial_header,
+                    reasonings=result.reasonings,
                 )
 
             return result.as_dict()
