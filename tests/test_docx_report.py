@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -211,7 +212,7 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
             docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out"))
         self.assertIsNotNone(docx_path)
         messages = [c.args[0] for c in mlog.call_args_list]
-        self.assertTrue(any("单元7 无批注，列入报告" in m for m in messages))
+        self.assertTrue(any("单元7 无批注" in m for m in messages))
         self.assertFalse(any("分段异常" in m or "含批注标记" in m for m in messages))
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -220,6 +221,33 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
         self.assertEqual(len(self._findall(doc, 'w:val="Heading1"')), 2)
         self.assertIn("无问题", doc)
         self.assertEqual(cmt.count("<w:comment w:id="), 2)
+
+    def test_no_issue_unit_with_md_inserts_original_and_comment(self):
+        """无问题单元存在单元 md 时：插入原文正文，并在正文开头生成「无问题」批注"""
+        paper = self._make_paper({
+            "第1题": REPORT_WITH_MARKS,
+            "单元7": self.NO_ISSUE_REPORT,
+        })
+        with open(os.path.join(paper, "单元7", "单元7.md"), "w", encoding="utf-8") as f:
+            f.write("**教师版**（2022·模拟）（多选）\n如图所示，金属棒从$h$高处释放。\n")
+        docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out2"))
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        doc = z.read("word/document.xml").decode("utf-8")
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        # 单元原文正文已插入（粗体「教师版」被锚点拆为两个 run，分别断言）
+        self.assertIn("教", doc)
+        self.assertIn("师版", doc)
+        self.assertIn("2022·模拟", doc)
+        self.assertIn("<m:oMath>", doc)
+        # 生成「无问题」批注（锚点在 Heading1 标题段内，非正文）
+        self.assertEqual(cmt.count("<w:comment w:id="), 3)
+        self.assertIn("无问题", cmt)
+        self.assertEqual(cmt.count("无问题"), 1)
+        heading_pat = re.compile(
+            r'<w:p>\s*<w:pPr>\s*<w:pStyle w:val="Heading1"[^>]*/>\s*</w:pPr>'
+            r'\s*<w:commentRangeStart w:id="3"/>', re.DOTALL)
+        self.assertIsNotNone(heading_pat.search(doc))
 
     def test_all_no_issue_units_still_generate_report(self):
         """整份试卷全部无问题也必须生成报告（标注无问题），不得返回 None"""
@@ -317,8 +345,9 @@ class TestEscapedPipeInMarkers(unittest.TestCase):
         self.assertIn('</m:oMath><w:commentRangeEnd w:id="1"/>', doc)
         # 双竖线符号 ∥（pandoc 将 \left\| 转为 OMML 的 begChr/endChr）保留在锚点内
         self.assertIn("∥", doc)
-        # 改后（单竖线公式）写入批注内容
-        self.assertIn(r"\left|{E}_{1}-{E}_{2}\right|", cmt)
+        # 改后（单竖线公式）写入批注内容：渲染为公式图片，不再以 LaTeX 文本出现
+        self.assertIn("<w:drawing>", cmt)
+        self.assertNotIn(r"\left|{E}_{1}-{E}_{2}\right|", cmt)
 
 
 class TestConvertMultilineTables(unittest.TestCase):
@@ -379,6 +408,276 @@ class TestConvertMultilineTables(unittest.TestCase):
         self.assertEqual(self._convert(""), "")
         plain = "没有任何表格的普通段落。\n第二行。"
         self.assertEqual(self._convert(plain), plain)
+
+
+REPORT_WITH_FORMULA_MARKS = """# 第1题 校对报告
+
+轻微问题
+
+### 标记原文
+编号：第1题
+内容：
+【1|$v_{1}=1m/s$|$v_{1}=1\\,\\mathrm{m/s}$】
+
+【2|$x$|$s$】
+
+【3|$Q_{电热}$|$Q_2$】
+
+【4|$E=BLv$|$E_1=BLv_1$】
+
+【5|$A$|$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$】
+
+### 修改原因
+1. 公式 $E=BLv$ 符号不统一。
+2. 矩阵公式 $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$ 应降级为文本。
+"""
+
+
+class TestCommentFormulaImages(unittest.TestCase):
+    """批注内 `$...$` 公式渲染为 PNG 图片注入。"""
+
+    @classmethod
+    def setUpClass(cls):
+        if not find_pandoc():
+            raise unittest.SkipTest("pandoc 不可用，跳过 docx 报告测试")
+        try:
+            import matplotlib  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("matplotlib 不可用，跳过公式图片测试")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="_docx_formula_test_")
+        self.paper = os.path.join(self.tmp, "测试试卷")
+        os.makedirs(os.path.join(self.paper, "第1题"))
+        with open(os.path.join(self.paper, "第1题", "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(REPORT_WITH_FORMULA_MARKS)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _generate(self):
+        out_dir = os.path.join(self.tmp, "out")
+        docx_path = generate_combined_docx(self.paper, out_dir)
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        return z, {
+            n: z.read(n).decode("utf-8")
+            for n in z.namelist()
+            if n in ("word/comments.xml", "word/_rels/comments.xml.rels", "[Content_Types].xml")
+        }
+
+    def test_formula_rendered_as_image(self):
+        z, parts = self._generate()
+        cmt = parts["word/comments.xml"]
+        ET.fromstring(cmt)
+        # 可渲染公式 → drawing 图片
+        drawings = len(self._findall(cmt, "<w:drawing>"))
+        self.assertGreaterEqual(drawings, 3)
+        # 批注图片 part 写入
+        media_files = [n for n in z.namelist() if "comment_pic" in n]
+        self.assertEqual(len(media_files), drawings)
+        # rels 注册齐全
+        rels = parts["word/_rels/comments.xml.rels"]
+        ET.fromstring(rels)
+        self.assertEqual(len(self._findall(rels, "<Relationship ")), drawings)
+        for mf in media_files:
+            self.assertIn(mf.replace("word/media/", "media/"), rels)
+        # png Content-Type 声明
+        self.assertIn('Extension="png"', parts["[Content_Types].xml"])
+
+    def test_unsupported_formula_degrades_to_text(self):
+        _, parts = self._generate()
+        cmt = parts["word/comments.xml"]
+        # 矩阵公式渲染失败 → 保留原 LaTeX 文本（\\ 还原为单反斜杠、& 转义）
+        self.assertIn("$\\begin{pmatrix} a &amp; b \\ c &amp; d \\end{pmatrix}$", cmt)
+        # 可渲染的公式不应以 $...$ 文本残留
+        self.assertNotIn("$E=BLv$", cmt)
+        self.assertNotIn("$E_1=BLv_1$", cmt)
+        self.assertNotIn("$v_{1}=1\\,\\mathrm{m/s}$", cmt)
+        self.assertNotIn("$s$", cmt)
+        self.assertNotIn("$Q_2$", cmt)
+
+    def _findall(self, text, sub):
+        return [m for m in re.finditer(re.escape(sub), text)]
+
+
+class TestAnchorInsideFormula(unittest.TestCase):
+    """锚点位于公式内部的标记：跳过批注、还原标记原文，防止撕裂公式。"""
+
+    @classmethod
+    def setUpClass(cls):
+        if not find_pandoc():
+            raise unittest.SkipTest("pandoc 不可用，跳过 docx 报告测试")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="_docx_formula_anchor_")
+        self.paper = os.path.join(self.tmp, "测试试卷")
+        q = os.path.join(self.paper, "第1题")
+        os.makedirs(q)
+        report = (
+            "# 第1题 校对报告\n\n一般问题\n\n"
+            "### 标记原文\n编号：第1题\n内容：\n"
+            "安培力做功大小为$\\frac{{B}^{2}{L}^{2}【1|$v$|$v_0$】x}{R+r}$\n\n"
+            "正常标记【2|导体棒|金属棒】后续文本\n\n"
+            "### 修改原因\n1. 公式内锚点。\n2. 正常标记。\n"
+        )
+        with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(report)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_formula_anchor_skipped_and_text_restored(self):
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        doc = z.read("word/document.xml").decode("utf-8")
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        # 公式内标记被跳过：只生成公式外那条批注
+        self.assertEqual(cmt.count("<w:comment w:id="), 1)
+        # 公式不转微软公式（保留为 LaTeX 文本），oMath 不包含被跳过公式
+        self.assertNotIn("<m:oMath>", doc)
+        # 公式以文本形式显示，并被黄色高亮（mark ==...== → w:highlight）
+        self.assertIn("frac", doc)
+        self.assertIn('<w:highlight w:val="yellow" />', doc)
+        # 占位符已还原，无残留
+        self.assertNotIn("SKIPANCH", doc)
+        # 正常标记的批注仍生成
+        self.assertIn("金属棒", cmt)
+
+
+class TestSkipAnchorRobustness(unittest.TestCase):
+    """稳健性：多个相同公式/文本时，占位符必须精确定位目标公式。"""
+
+    @classmethod
+    def setUpClass(cls):
+        if not find_pandoc():
+            raise unittest.SkipTest("pandoc 不可用，跳过 docx 报告测试")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="_docx_skip_robust_")
+        self.paper = os.path.join(self.tmp, "测试试卷")
+        q = os.path.join(self.paper, "第1题")
+        os.makedirs(q)
+        report = (
+            "# 第1题 校对报告\n\n一般问题\n\n"
+            "### 标记原文\n编号：第1题\n内容：\n"
+            "甲式：$\\frac{{B}^{2}{L}^{2}【1|$v$|$v_0$】x}{R+r}$\n\n"
+            "乙式：$\\frac{{B}^{2}{L}^{2}vx}{R+r}$（与甲式完全相同）\n\n"
+            "丙式：$\\frac{{B}^{2}{L}^{2}vx}{R+r}$\n\n"
+            "### 修改原因\n1. 符号统一。\n"
+        )
+        with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(report)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_identical_formulas_only_target_highlighted(self):
+        """三个相同公式：仅含标记的甲式被文本化高亮，乙丙两式保持 oMath。"""
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        doc = z.read("word/document.xml").decode("utf-8")
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        # 仅甲式被跳过（无批注），乙丙两式无标记不受影响
+        self.assertEqual(cmt.count("<w:comment w:id="), 0)
+        # 乙丙两式保持微软公式（2 个 oMath），甲式文本化不高亮误伤
+        self.assertEqual(doc.count("<m:oMath>"), 2)
+        self.assertIn('<w:highlight w:val="yellow" />', doc)
+        # 高亮内容含甲式的 LaTeX 文本（frac），且不含 SKIPANCH 残留
+        self.assertIn("frac", doc)
+        self.assertNotIn("SKIPANCH", doc)
+
+    def test_identical_text_marker_untouched(self):
+        """相同文本多次出现但标记在公式外时，正常批注不受影响。"""
+        q = os.path.join(self.paper, "第2题")
+        os.makedirs(q)
+        report = (
+            "# 第2题 校对报告\n\n一般问题\n\n"
+            "### 标记原文\n编号：第2题\n内容：\n"
+            "导体棒运动，导体棒【1|导体棒|金属棒】运动，导体棒停止。\n\n"
+            "### 修改原因\n1. 术语统一。\n"
+        )
+        with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(report)
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out2"))
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        doc = z.read("word/document.xml").decode("utf-8")
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        # 三个「导体棒」中仅第二个被锚定批注，批注内容正确
+        self.assertEqual(cmt.count("<w:comment w:id="), 1)
+        self.assertIn("金属棒", cmt)
+        self.assertIn("导体棒", doc)
+        self.assertNotIn("SKIPANCH", doc)
+
+
+class TestExtremeFormulaAnchors(unittest.TestCase):
+    """极端情况：标记字段内含 $、多标记同公式、空原文、公式外标记含 $。"""
+
+    @classmethod
+    def setUpClass(cls):
+        if not find_pandoc():
+            raise unittest.SkipTest("pandoc 不可用，跳过 docx 报告测试")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="_docx_extreme_")
+        self.paper = os.path.join(self.tmp, "测试试卷")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make(self, qname, content):
+        q = os.path.join(self.paper, qname)
+        os.makedirs(q)
+        report = (
+            f"# {qname} 校对报告\n\n一般问题\n\n"
+            "### 标记原文\n编号：第1题\n内容：\n"
+            f"{content}\n\n### 修改原因\n1. 修正。\n"
+        )
+        with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(report)
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        return z.read("word/document.xml").decode("utf-8"), \
+            z.read("word/comments.xml").decode("utf-8")
+
+    def test_marker_field_with_dollar_inside_formula(self):
+        """标记字段内含 $（【1|aaa$|bbb$】）位于公式内：识别为公式内并文本化。"""
+        doc, cmt = self._make("第1题", "安培力做功大小为$\\frac{【1|aaa$|bbb$】x}{R+r}$")
+        # 无批注（跳过）、公式文本化 + 高亮 + 修改意见（$ 剥离后）
+        self.assertEqual(cmt.count("<w:comment w:id="), 0)
+        self.assertIn('<w:highlight w:val="yellow" />', doc)
+        self.assertIn("修改意见：aaa→bbb", doc)
+        self.assertNotIn("SKIPANCH", doc)
+        self.assertNotIn("superscript", doc)
+
+    def test_multiple_anchors_same_formula(self):
+        """同一公式内多个标记：全部还原并展示各自修改意见。"""
+        doc, cmt = self._make(
+            "第1题", "总功为$\\frac{【1|a|b】c【2|d|e】}{R}$")
+        self.assertEqual(cmt.count("<w:comment w:id="), 0)
+        self.assertIn("修改意见：a→b", doc)
+        self.assertIn("修改意见：d→e", doc)
+        self.assertNotIn("SKIPANCH", doc)
+
+    def test_marker_with_dollar_outside_formula_normal_comment(self):
+        """标记在公式外但字段内含 $：不误判公式内，正常生成批注。"""
+        doc, cmt = self._make("第1题", "电阻【1|aaa$|bbb$】阻值，由$E=BLv$得")
+        self.assertEqual(cmt.count("<w:comment w:id="), 1)
+        self.assertIn("bbb", cmt)
+        self.assertIn("<m:oMath>", doc)  # $E=BLv$ 正常转公式
+        self.assertNotIn("修改意见", doc)
+
+    def test_empty_orig_inside_formula(self):
+        """原文为空的标记位于公式内：文本化且意见只显示改后。"""
+        doc, cmt = self._make("第1题", "结果为$\\frac{【1||bbb】x}{R}$")
+        self.assertEqual(cmt.count("<w:comment w:id="), 0)
+        self.assertIn('<w:highlight w:val="yellow" />', doc)
+        self.assertIn("修改意见：→bbb", doc)
+        self.assertNotIn("SKIPANCH", doc)
 
 
 if __name__ == "__main__":

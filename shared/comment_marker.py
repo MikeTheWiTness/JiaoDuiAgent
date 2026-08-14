@@ -29,3 +29,33 @@ INLINE_MARKER_CAPTURE_RE = re.compile(r'【([\d①-⑳]+)\|([^|]*?)\|([^】]*?)�
 
 注意：编号支持阿拉伯数字 1-99 和带圈数字 ①-⑳，原文和改为字段为非贪婪匹配。
 """
+
+
+_MARKER_MASK_RE = re.compile(r"【\d+\|[^】]*】")
+"""屏蔽用：匹配整个内联标记 【N|原文|改为】，扫描公式时替换为等长无 $ 占位。"""
+
+
+def scan_math_spans(text: str) -> list[tuple[int, int]]:
+    """扫描行内公式 `$...$` 的 [start, end) 区间列表（每行内成对配对）。
+
+    返回全文偏移（累计行偏移），与 re.Match.start() 对齐。
+    `\\$`（转义美元）不参与配对；标记字段内部的 `$`（如 `【1|a$|b$】`）
+    先屏蔽为等长占位，避免干扰公式配对。
+    用于检测批注锚点/内联标记是否落在公式内部。
+    """
+    masked = _MARKER_MASK_RE.sub(
+        lambda m: "【" + "X" * (len(m.group(0)) - 2) + "】", text)
+    spans = []
+    offset = 0
+    for line in masked.split("\n"):
+        start = None
+        for i, ch in enumerate(line):
+            if ch != "$" or (i > 0 and line[i - 1] == "\\"):
+                continue
+            if start is None:
+                start = offset + i
+            else:
+                spans.append((start, offset + i + 1))
+                start = None
+        offset += len(line) + 1
+    return spans

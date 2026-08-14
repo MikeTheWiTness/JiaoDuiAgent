@@ -20,6 +20,8 @@ from xml.sax.saxutils import escape
 
 from core.logging_utils import log
 from core.pandoc_utils import find_pandoc
+from shared.comment_marker import scan_math_spans as _scan_math_spans
+from shared.formula_render import latex_to_png
 
 # \| 是 LaTeX 转义竖线（\left\|…\right\|），整体属于原文字段，不得当分隔符
 _PAT = re.compile(r"【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】", re.DOTALL)
@@ -33,6 +35,8 @@ _NS = ('xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingC
        'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
        'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+       'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+       'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" '
        'mc:Ignorable="w14"')
 
 
@@ -76,6 +80,9 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
         comments = {}
         gid_iter = itertools.count(1)
         used_ids = set()
+        skipped_anchors = {}
+        skip_anchor_iter = itertools.count(1)
+        heading_anchors = {}
         all_bodies = []
         skipped_clean = 0
         skipped_broken = 0
@@ -92,8 +99,22 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
                     log(f"   ⚠️ Word 报告：{qid} 含批注标记但缺少「标记原文/修改原因」分段，跳过（批注无法生成）")
                 else:
                     skipped_clean += 1
-                    log(f"   ℹ️ Word 报告：{qid} 无批注，列入报告")
-                    all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
+                    log(f"   ℹ️ Word 报告：{qid} 无批注，插入单元原文 + 「无问题」批注（锚定标题）")
+                    unit_md = paper_path / qid / f"{qid}.md"
+                    if unit_md.exists():
+                        content = unit_md.read_text(encoding="utf-8").strip()
+                        content = _rewrite_images(content, paper_path / qid, img_root)
+                        content = _preprocess_latex(content)
+                        gid = next(gid_iter)
+                        if gid in used_ids:
+                            gid = max(used_ids) + 1
+                        used_ids.add(gid)
+                        comments[gid] = ("无问题", None)
+                        # 锚点后处理落在标题「qid」文本上（Heading1 段落内）
+                        heading_anchors[gid] = qid
+                        all_bodies.append(f"# {qid}\n\n{content}\n\n{_PAGE_BREAK}")
+                    else:
+                        all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
                 continue
             reasons = _parse_reasons(part[reason_idx:])
             body = part[marker_idx:reason_idx]
@@ -107,16 +128,32 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
             body = _convert_multiline_tables(body)
             body = _preprocess_latex(body)
 
+            # 行内公式区间（$...$ 配对），锚点落在公式内部的标记跳过——
+            # 上游数据把公式内部文本当锚点时，插入 openxml 会撕裂公式导致乱码
+            math_spans = _scan_math_spans(body)
+
             def _repl(m, _reasons=reasons):
                 cid = int(m.group(1))
                 orig = m.group(2)
                 new = m.group(3)
+                if any(s <= m.start() < e for s, e in math_spans):
+                    # 唯一占位符代替还原文本：pandoc 转换后据此精确定位公式高亮，
+                    # 避免还原文本（如常见变量 v）误匹配其他公式。
+                    # 记录 (原文, 修改意见)，高亮处一并显示修改建议。
+                    log(f"   ⚠️ Word 报告：{qid} 批注锚点位于公式内部，跳过该条（标记原文被还原）")
+                    n = next(skip_anchor_iter)
+                    skipped_anchors[n] = (orig.strip("$"), new.strip("$"))
+                    return f"SKIPANCH{n}Z"
                 gid = next(gid_iter)
                 if gid in used_ids:
                     gid = max(used_ids) + 1
                 used_ids.add(gid)
                 if orig.endswith("\\") and not orig.endswith("\\\\"):
                     orig = orig + "\\"
+                # 锚点文本内 $ 不成对（奇数个）时转义：防与正文其他公式的 $
+                # 配对，吞掉 openxml raw。成对的完整公式（$...$）保持原样转公式。
+                if orig.count("$") % 2 == 1:
+                    orig = orig.replace("$", "\\$")
                 comments[gid] = (new, _reasons.get(cid))
                 start = f'`<w:commentRangeStart w:id="{gid}"/>`{{=openxml}}'
                 end = (f'`<w:commentRangeEnd w:id="{gid}"/>'
@@ -124,6 +161,7 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
                 return start + orig + end
 
             unit_body = _PAT.sub(_repl, body)
+            unit_body = _textify_skipped_formulas(unit_body, skipped_anchors)
             all_bodies.append(f"# {qid}\n\n{unit_body}\n\n{_PAGE_BREAK}")
 
         if not all_bodies:
@@ -135,7 +173,7 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
         md_tmp.write_text(full_md, encoding="utf-8")
 
         r = subprocess.run(
-            [find_pandoc(), "-f", "markdown-implicit_figures",
+            [find_pandoc(), "-f", "markdown-implicit_figures+hard_line_breaks+mark",
              str(md_tmp), "-o", str(out_path)],
             capture_output=True, text=True, cwd=str(work))
         if r.returncode != 0:
@@ -146,7 +184,7 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
             if fetch_warns:
                 log(f"   ⚠️ Word 报告：{len(fetch_warns)} 张图片未找到（将显示替换文字）")
 
-        _inject_comments(out_path, comments)
+        _inject_comments(out_path, comments, heading_anchors)
         summary = f"（{len(comments)} 条批注"
         if skipped_clean:
             summary += f"，{skipped_clean} 个单元无批注"
@@ -310,16 +348,28 @@ def _normalize_math_dollars(text: str) -> str:
     return "\n".join(lines)
 
 
-def _inject_comments(docx_path: Path, comments: dict):
-    """填充 comments.xml、清理无锚点引用、替换图片替换文字。"""
+def _inject_comments(docx_path: Path, comments: dict, heading_anchors: dict | None = None):
+    """填充 comments.xml、清理无锚点引用、替换图片替换文字。
+
+    批注内 `$...$` 公式渲染为 PNG 图片注入（shared/formula_render），
+    渲染失败（含中文/矩阵等）的公式段降级为原 LaTeX 文本。
+    heading_anchors：{gid: 标题文本}，批注锚点后处理落在 Heading1 段落
+    的标题文本 run 上（pandoc 会忽略标题内的 raw 标记，只能转换后注入）。
+    """
     # 先读 document.xml 计算保留的批注 id（zipfile 部件顺序不保证 document.xml 在前）
     kept_ids = set()
     with zipfile.ZipFile(docx_path, "r") as zin:
         doc_xml = zin.read("word/document.xml").decode("utf-8")
     doc_xml = re.sub(r'descr="@@@[^"]*"', 'descr="配图"', doc_xml)
+    if heading_anchors:
+        doc_xml = _anchor_heading_comments(doc_xml, heading_anchors)
     doc_xml, kept_ids = _strip_unanchored_comments(doc_xml)
 
-    comments_xml = _build_comments_xml(comments, kept_ids)
+    work_dir = Path(tempfile.mkdtemp(prefix="_cmt_img_", dir=str(docx_path.parent)))
+    try:
+        comments_xml, images = _build_comments_xml(comments, kept_ids, work_dir)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
     tmp_path = docx_path.with_name("_tmp.docx")
     with zipfile.ZipFile(docx_path, "r") as zin, \
             zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
@@ -329,8 +379,97 @@ def _inject_comments(docx_path: Path, comments: dict):
                 data = doc_xml.encode("utf-8")
             elif item.filename == "word/comments.xml":
                 data = comments_xml.encode("utf-8")
+            elif item.filename == "[Content_Types].xml" and images:
+                data = _ensure_png_content_type(data)
             zout.writestr(item, data)
+        if images:
+            # 批注公式图片 part + 关系（新建 comments.xml.rels）
+            for media_name, png_bytes, r_id in images:
+                zout.writestr(f"word/media/{media_name}", png_bytes)
+            rels_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                        + "".join(
+                            f'<Relationship Id="{r_id}" '
+                            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+                            f'Target="media/{media_name}"/>'
+                            for media_name, _, r_id in images)
+                        + "</Relationships>")
+            zout.writestr("word/_rels/comments.xml.rels", rels_xml.encode("utf-8"))
     tmp_path.replace(docx_path)
+
+
+def _ensure_png_content_type(ct_xml: bytes) -> bytes:
+    """确保 [Content_Types].xml 含 png Default 声明（批注公式图片需要）。"""
+    text = ct_xml.decode("utf-8")
+    if 'Extension="png"' in text:
+        return ct_xml
+    return text.replace(
+        '<Default Extension="rels"',
+        '<Default Extension="png" ContentType="image/png" />\n<Default Extension="rels"',
+    ).encode("utf-8")
+
+
+_SKIP_ANCHOR_RE = re.compile(r"SKIPANCH(\d+)Z")
+
+
+def _textify_skipped_formulas(text: str, skipped_anchors: dict) -> str:
+    """把含被跳过标记的公式改为转义文本并用 ==...== 高亮，不转微软公式。
+
+    公式内标记被跳过（批注无法生成）时，正文对应公式以 LaTeX 文本原样显示
+    并黄色高亮，提示读者该处有问题。`\\`、`$` 与 `^` 转义避免 pandoc 数学
+    解析、markdown 转义吞字符与 `^...^` 上标误判；SKIPANCH{n}Z 占位符还原
+    为标记原文，并在高亮内附修改意见（原文→改后）。
+    """
+    if not skipped_anchors:
+        return text
+    spans = _scan_math_spans(text)
+    out = text
+    for s, e in reversed(spans):
+        seg = out[s:e]
+        if "SKIPANCH" not in seg:
+            continue
+        seg = seg.replace("\\", "\\\\").replace("$", "\\$").replace("^", "\\^")
+
+        def _esc(t):
+            return t.replace("\\", "\\\\").replace("$", "\\$").replace("^", "\\^")
+
+        # 先收集修改意见（转义不影响占位符），再还原原文，意见追加在公式文本之后
+        notes = "".join(
+            f"（修改意见：{_esc(orig)}→{_esc(new)}）" if new else ""
+            for m in _SKIP_ANCHOR_RE.finditer(seg)
+            for orig, new in [skipped_anchors[int(m.group(1))]])
+        seg = _SKIP_ANCHOR_RE.sub(
+            lambda m: _esc(skipped_anchors[int(m.group(1))][0]), seg)
+        out = out[:s] + "==" + seg + notes + "==" + out[e:]
+    return out
+
+
+def _anchor_heading_comments(doc_xml: str, heading_anchors: dict) -> str:
+    """在 Heading1 段落的标题文本 run 上插入批注锚点。
+
+    pandoc 忽略标题（ATX heading）内的 raw 标记，无问题单元的「无问题」
+    批注锚点只能在此转换后处理：匹配 pStyle=Heading1 段落中 w:t 文本等于
+    标题文本的 run，在 run 前后插入 commentRangeStart/End + commentReference。
+    """
+    for gid, title in heading_anchors.items():
+        # rangeStart 在 run 前、rangeEnd+reference 在 run 后（与 pandoc 正常锚点同构）。
+        # rPr 用「自闭合元素序列」匹配（pandoc rPr 子元素均为自闭合），
+        # 避免 .*? 回溯跨段匹配到远处标题段。
+        pat = re.compile(
+            r'(<w:p>\s*<w:pPr>\s*<w:pStyle w:val="Heading1"[^>]*/>\s*</w:pPr>\s*)'
+            r'(<w:r>\s*<w:rPr>\s*(?:<w:[^>]*/>\s*)*</w:rPr>\s*<w:t[^>]*>)('
+            + re.escape(title) + r')(</w:t>\s*</w:r>)(\s*</w:p>)', re.DOTALL)
+
+        def _repl(m, _gid=gid):
+            return (m.group(1)
+                    + f'<w:commentRangeStart w:id="{_gid}"/>'
+                    + m.group(2) + m.group(3) + m.group(4)
+                    + f'<w:commentRangeEnd w:id="{_gid}"/>'
+                    + f'<w:r><w:commentReference w:id="{_gid}"/></w:r>'
+                    + m.group(5))
+
+        doc_xml = pat.sub(_repl, doc_xml)
+    return doc_xml
 
 
 def _strip_unanchored_comments(doc_xml: str):
@@ -347,22 +486,87 @@ def _strip_unanchored_comments(doc_xml: str):
     return doc_xml, starts
 
 
-def _build_comments_xml(comments: dict, kept_ids: set) -> str:
+def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path) -> tuple[str, list]:
+    """构建 comments.xml，批注内 `$...$` 公式渲染为 PNG 图片。
+
+    Args:
+        comments: gid → (改后文字, 修改原因)
+        kept_ids: 保留的批注 id
+        work_dir: 公式 PNG 渲染临时目录
+
+    Returns:
+        (comments_xml, images)：images 为 [(media文件名, png字节, rId), ...]
+    """
     items = []
+    images = []
+    pic_id = itertools.count(1)
+
+    def _escape_run(text: str) -> str:
+        return f'<w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r>'
+
+    def _para_with_formulas(text: str) -> str:
+        """文本按 $...$ 切分：公式段渲染图片（失败降级为文本），其余保留文本。"""
+        parts = re.split(r'(\$[^$]+\$)', text)
+        runs = []
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith("$") and part.endswith("$") and len(part) > 2:
+                body = part[1:-1]
+                num = next(pic_id)
+                media_name = f"comment_pic{num}.png"
+                if latex_to_png(body, work_dir / media_name):
+                    png_bytes = (work_dir / media_name).read_bytes()
+                    r_id = f"rIdPic{len(images) + 1}"
+                    images.append((media_name, png_bytes, r_id))
+                    runs.append(_inline_image_xml(num, media_name, r_id, png_bytes))
+                    continue
+            runs.append(_escape_run(part))
+        return "".join(runs)
+
     for gid in sorted(comments):
         if str(gid) not in kept_ids:
             continue
         new, reason = comments[gid]
-        paras = [f'<w:p><w:r><w:t xml:space="preserve">{escape(new)}</w:t></w:r></w:p>']
+        center = '<w:pPr><w:jc w:val="center"/></w:pPr>'
+        paras = [f"<w:p>{center}{_para_with_formulas(new)}</w:p>"]
         if reason:
-            paras.append(
-                f'<w:p><w:r><w:t xml:space="preserve">修改原因：'
-                f'{escape(reason)}</w:t></w:r></w:p>')
+            paras.append(f"<w:p>{center}{_escape_run('修改原因：')}{_para_with_formulas(reason)}</w:p>")
         items.append(
             f'<w:comment w:id="{gid}" w:author="校对助手" '
             f'w:date="{_comment_timestamp()}">' + "".join(paras) + '</w:comment>')
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            f'<w:comments {_NS}>' + "".join(items) + "</w:comments>")
+            f'<w:comments {_NS}>' + "".join(items) + "</w:comments>"), images
+
+
+def _inline_image_xml(num: int, media_name: str, r_id: str, png_bytes: bytes) -> str:
+    """构造批注内联图片 run 的 XML（EMU 尺寸按 200dpi 渲染物理尺寸换算）。
+
+    图片垂直位置保持 Word 默认（底边对齐基线），不做 w:position 偏移。
+    """
+    from PIL import Image
+    import io
+    with Image.open(io.BytesIO(png_bytes)) as im:
+        w_px, h_px = im.size
+    emu_w = round(w_px * 914400 / 200)
+    emu_h = round(h_px * 914400 / 200)
+    return (
+        '<w:r><w:drawing>'
+        '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+        f'<wp:extent cx="{emu_w}" cy="{emu_h}"/>'
+        f'<wp:docPr id="{num}" name="{escape(media_name)}" descr="公式"/>'
+        '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        '<pic:pic>'
+        f'<pic:nvPicPr><pic:cNvPr id="{num}" name="{escape(media_name)}"/><pic:cNvPicPr/></pic:nvPicPr>'
+        '<pic:blipFill>'
+        f'<a:blip r:embed="{r_id}"/><a:stretch><a:fillRect/></a:stretch>'
+        '</pic:blipFill>'
+        '<pic:spPr><a:xfrm><a:off x="0" y="0"/>'
+        f'<a:ext cx="{emu_w}" cy="{emu_h}"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+        '</pic:pic></a:graphicData></a:graphic>'
+        '</wp:inline></w:drawing></w:r>'
+    )
 
 
 def _comment_timestamp() -> str:

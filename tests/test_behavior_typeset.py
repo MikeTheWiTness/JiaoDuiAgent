@@ -192,7 +192,7 @@ class TestTypesetOnlyModeBehavior(unittest.TestCase):
 
         docx_path = os.path.join(self.out_root, "校对Word", "测试试卷_校对批注版.docx")
         self.assertTrue(os.path.exists(docx_path), f"Word 报告未生成：{docx_path}")
-        self._assert_docx_sound(docx_path, n_comments=2)
+        self._assert_docx_sound(docx_path, n_comments=3)
 
     @unittest.skipIf(shutil.which("xelatex") is None, "xelatex 不可用")
     def test_uncheck_word_generates_pdf_only(self):
@@ -220,7 +220,7 @@ class TestTypesetOnlyModeBehavior(unittest.TestCase):
 
         rel_docx = os.path.join("输出", "校对Word", "测试试卷_校对批注版.docx")
         self.assertTrue(os.path.exists(rel_docx), f"docx 未落在 CWD 相对目录：{rel_docx}")
-        self._assert_docx_sound(rel_docx, n_comments=2)
+        self._assert_docx_sound(rel_docx, n_comments=3)
 
     def _assert_docx_sound(self, path, n_comments):
         """校验 docx 结构健全（批注计数一致、XML 可解析，Word 可打开的前提）。"""

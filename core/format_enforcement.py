@@ -10,7 +10,7 @@ import os
 import re
 
 from core.logging_utils import log
-from shared.comment_marker import INLINE_MARKER_DETECT_RE
+from shared.comment_marker import INLINE_MARKER_DETECT_RE, scan_math_spans
 
 
 def _is_no_issue(res: str) -> bool:
@@ -62,6 +62,21 @@ def _enforce_format(res: str):
         malformed = re.findall(r'【\d+(?![|\d])', marker_text)
         if malformed:
             issues.append(f"发现 {len(malformed)} 个格式异常的标记（编号后缺少 |）")
+        # 标记落在 $...$ 公式内部：提示词已禁止（标记应包裹整个公式），
+        # 插入位置错误会导致公式被撕裂（Word 报告乱码），程序校验兜底
+        math_spans = scan_math_spans(marker_text)
+        inside = [m.group(0)[:30] for m in re.finditer(r'【\d+\|', marker_text)
+                  if any(s <= m.start() < e for s, e in math_spans)]
+        if inside:
+            issues.append(f"发现 {len(inside)} 个标记位于 $...$ 公式内部"
+                          f"（如 {inside[0]}…，应将标记移到公式外或包裹整个公式）")
+        # $ 配对失败检查：行内美元符号数为奇数（排除 \$ 转义）即配对不完整，
+        # 会在转换层被吞/错配，导致公式或标记乱码
+        odd_lines = [ln.strip()[:40] for ln in marker_text.split("\n")
+                     if len(re.findall(r'(?<!\\)\$', ln)) % 2 == 1]
+        if odd_lines:
+            issues.append(f"发现 {len(odd_lines)} 行美元符号未配对"
+                          f"（如 {odd_lines[0]}…，$ 数量为奇数）")
     if issues:
         return False, "; ".join(issues)
     return True, ""
@@ -113,6 +128,7 @@ def _bash_format_fix(file_path: str, issues_desc: str,
 - 标题必须是 `### 标记原文` 和 `### 修改原因`（不是 `### 标记原文 段落`）
 - 如果原文有总结行（如"一般问题"），保留它，在其后加入 `### 标记原文` 段落
 - 如果没有 `### 标记原文` 标题，在正文内容前加上它
+- **标记不得插入 `$...$` 公式内部**；若标记位于公式内部，将标记移到公式外，或让标记包裹整个公式
 - **完成后直接停止，不要继续调用工具！** 只需：read → 修改 → write → read 验证 → 停止。总共不超过 3 轮工具调用。
 """
 

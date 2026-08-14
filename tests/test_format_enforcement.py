@@ -166,5 +166,96 @@ class TestEnforceAndFix(unittest.TestCase):
         self.assertFalse(was_fixed)
 
 
+class TestMarkerInsideFormula(unittest.TestCase):
+    """标记位于 $...$ 公式内部的格式检查（提示词已禁止，程序校验兜底）。"""
+
+    def test_marker_inside_formula_detected(self):
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "安培力做功大小为$\\frac{{B}^{2}{L}^{2}【1|$v$|$v_0$】x}{R+r}$\n\n"
+            "### 修改原因\n1. 符号统一。\n"
+        )
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("公式内部", issues)
+
+    def test_marker_wrapping_formula_passes(self):
+        """标记包裹整个公式 → 合规，不报公式内部问题"""
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "总电动势为【1|$E=BLv$|$E_1=BLv_1$】，方向不变\n\n"
+            "### 修改原因\n1. 符号统一。\n"
+        )
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok, f"包裹公式的标记应合规: {issues}")
+        self.assertNotIn("公式内部", issues)
+
+    def test_normal_markers_with_math_pass(self):
+        """正文含公式但标记在公式外 → 合规"""
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "由$E=BLv$得【1|导体棒|金属棒】运动速度\n\n"
+            "### 修改原因\n1. 术语统一。\n"
+        )
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok, f"公式外标记应合规: {issues}")
+
+    def test_marker_field_with_dollar_inside_formula_detected(self):
+        """标记字段内含 $（【1|aaa$|bbb$】）位于公式内：仍应识别为公式内部"""
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "安培力做功大小为$\\frac{【1|aaa$|bbb$】x}{R+r}$\n\n"
+            "### 修改原因\n1. 修正。\n"
+        )
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("公式内部", issues)
+
+    def test_marker_with_dollar_outside_formula_passes(self):
+        """标记在公式外但字段内含 $：不得误报为公式内部"""
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "电阻【1|aaa$|bbb$】阻值，由$E=BLv$得\n\n"
+            "### 修改原因\n1. 修正。\n"
+        )
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok, f"公式外标记不应报公式内部: {issues}")
+        self.assertNotIn("公式内部", issues)
+
+    def test_unpaired_dollar_detected(self):
+        """行内 $ 数量为奇数（配对失败）→ 报格式问题"""
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "由$E=BLv得【1|导体棒|金属棒】速度\n\n"
+            "### 修改原因\n1. 术语统一。\n"
+        )
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("美元符号未配对", issues)
+
+    def test_escaped_dollar_not_counted_as_unpaired(self):
+        """\\$ 转义美元不参与配对计数"""
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "价格\\$5【1|a|b】，由$E=BLv$得\n\n"
+            "### 修改原因\n1. 修正。\n"
+        )
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok, f"转义美元不应误报未配对: {issues}")
+        self.assertNotIn("美元符号未配对", issues)
+
+    def test_even_dollars_across_marker_passes(self):
+        """标记字段内嵌完整公式（$...$ 成对）→ $ 配对正常，不误报"""
+        report = (
+            "一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+            "电动势【1|$E=BLv$|$E_1=BLv_1$】，方向不变\n\n"
+            "### 修改原因\n1. 符号统一。\n"
+        )
+        ok, issues = _enforce_format(report)
+        # $ 偶数不报未配对；标记在公式外（字段内公式屏蔽后）也不报公式内部
+        self.assertNotIn("美元符号未配对", issues)
+        self.assertNotIn("公式内部", issues)
+
+
 if __name__ == "__main__":
     unittest.main()
