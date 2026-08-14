@@ -1,5 +1,5 @@
 # Auto-generated lock file — install with: pip install -r requirements.lock
-# Generated 2026-07-24
+# Generated 2026-08-14
 
 requests==2.34.2
 pydantic==2.13.4
@@ -10,4 +10,5 @@ ddgs==9.14.4
 python-docx==1.2.0
 pillow==12.3.0
 lxml==6.1.1
+matplotlib==3.11.1
 playwright==1.61.0
