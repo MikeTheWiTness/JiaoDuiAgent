@@ -43,6 +43,10 @@ jobs:
             texlive-pictures \
             texlive-science
 
+      - name: Check lock is in sync with requirements.txt
+        run: |
+          python -c "import re; reqs={re.split(r'[<>=!~]', l.strip())[0].lower() for l in open('requirements.txt') if l.strip() and not l.startswith('#')}; locked={re.split(r'[<>=!~]', l.strip())[0].lower() for l in open('requirements.lock') if l.strip() and not l.startswith('#')}; missing=reqs-locked; raise SystemExit(f'requirements.lock 缺包: {sorted(missing)}') if missing else print('lock 同步 OK')"
+
       - name: Install dependencies
         run: |
           pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pytest pytest-cov

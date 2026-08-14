@@ -1,8 +1,4 @@
 """初中英语 GUI —— 继承默认模板。"""
-import sys
-
-sys.path.insert(0, sys.path[0].replace(r'subjects\\初中英语', ''))
-
 from ui.default_app import DefaultApp
 
 

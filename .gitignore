@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 *.egg
 *.spec
+!specs/*.spec
 .env
 .env.*
 !.env.example

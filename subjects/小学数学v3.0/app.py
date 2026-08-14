@@ -1,9 +1,4 @@
 """小学数学 GUI —— 继承默认模板。"""
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from ui.default_app import DefaultApp
 
 

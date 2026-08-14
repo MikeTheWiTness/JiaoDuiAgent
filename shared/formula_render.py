@@ -13,11 +13,17 @@
 import os
 import re
 
-import matplotlib
+try:
+    import matplotlib
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib import font_manager
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager
+    _MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    plt = None
+    font_manager = None
+    _MATPLOTLIB_AVAILABLE = False
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -52,6 +58,8 @@ _CJK_RC = {
 
 
 def _find_cjk_font() -> str | None:
+    if font_manager is None:
+        return None
     names = {f.name for f in font_manager.fontManager.ttflist}
     for cand in _CJK_CANDIDATES:
         if cand in names:
@@ -88,8 +96,10 @@ def latex_to_png(latex_body: str, out_path, fontsize: float = 14, dpi: int = 200
     """渲染 LaTeX 公式体（不含 $ 包裹）为透明 PNG，成功返回 True。
 
     无系统 CJK 字体且公式含中文字符时返回 False；渲染抛异常时返回 False
-    并清理可能残留的输出文件。
+    并清理可能残留的输出文件。matplotlib 不可用时返回 False（调用方降级为文本）。
     """
+    if not _MATPLOTLIB_AVAILABLE:
+        return False
     if not latex_body:
         return False
     has_cjk = bool(_CJK_RE.search(latex_body))
