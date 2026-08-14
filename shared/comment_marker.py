@@ -21,14 +21,16 @@ XML_ANNOTATION_RE = re.compile(
 
 # ---- 3. 内联校对标记 ----
 
-INLINE_MARKER_DETECT_RE = re.compile(r'【\d+\|.*\|[^】]*】')
-"""检测是否存在内联校对标记 【N|原文|改为】。用于 parsing.py / format_enforcement.py。"""
+INLINE_MARKER_CAPTURE_RE = re.compile(
+    r'【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】', re.DOTALL)
+"""提取内联校对标记的三个字段（编号、原文、改为）。
 
-INLINE_MARKER_CAPTURE_RE = re.compile(r'【([\d①-⑳]+)\|([^|]*?)\|([^】]*?)】')
-"""提取内联校对标记的三个字段（编号、原文、改为）。用于 latex_generator.py。
-
-注意：编号支持阿拉伯数字 1-99 和带圈数字 ①-⑳，原文和改为字段为非贪婪匹配。
+parsing.py / docx_report.py / latex_generator.py 共用单一源。
+编号为阿拉伯数字；原文字段支持 LaTeX 转义竖线；re.DOTALL 支持跨行标记。
 """
+
+INLINE_MARKER_DETECT_RE = INLINE_MARKER_CAPTURE_RE
+"""检测是否存在内联校对标记（与 CAPTURE 同源，带 DOTALL 支持跨行）。用于 parsing.py / format_enforcement.py。"""
 
 
 _MARKER_MASK_RE = re.compile(r"【\d+\|[^】]*】")

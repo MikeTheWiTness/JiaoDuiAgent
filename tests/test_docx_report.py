@@ -680,5 +680,40 @@ class TestExtremeFormulaAnchors(unittest.TestCase):
         self.assertNotIn("SKIPANCH", doc)
 
 
+class TestAnchorHeadingComments(unittest.TestCase):
+    """B2：Heading1 标题锚点注入的 XML 转义与告警。"""
+
+    @staticmethod
+    def _heading_xml(w_t_text):
+        return (
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+            f'<w:r><w:rPr><w:b/></w:rPr><w:t>{w_t_text}</w:t></w:r></w:p>'
+        )
+
+    def test_title_with_amp_anchored(self):
+        """标题含 & 时用 XML 转义后匹配 w:t 内的 &amp;。"""
+        from core.docx_report import _anchor_heading_comments
+        doc_xml = self._heading_xml("A&amp;B")
+        result = _anchor_heading_comments(doc_xml, {1: "A&B"})
+        self.assertIn('commentRangeStart w:id="1"', result)
+        self.assertIn('commentReference w:id="1"', result)
+
+    def test_title_with_lt_anchored(self):
+        """标题含 < 时用 XML 转义后匹配 w:t 内的 &lt;。"""
+        from core.docx_report import _anchor_heading_comments
+        doc_xml = self._heading_xml("A&lt;B")
+        result = _anchor_heading_comments(doc_xml, {1: "A<B"})
+        self.assertIn('commentRangeStart w:id="1"', result)
+
+    def test_unmatched_title_logs_warning(self):
+        """标题匹配不到时记录告警（不再静默清掉批注）。"""
+        from core import docx_report
+        from core.docx_report import _anchor_heading_comments
+        doc_xml = self._heading_xml("第1题")
+        with mock.patch.object(docx_report, "log") as mlog:
+            _anchor_heading_comments(doc_xml, {1: "不存在"})
+        self.assertTrue(any("未在 Heading1 段落匹配" in c.args[0] for c in mlog.call_args_list))
+
+
 if __name__ == "__main__":
     unittest.main()

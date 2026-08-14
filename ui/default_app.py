@@ -22,6 +22,7 @@ from core.env_config import load_env_config, save_env_config
 from core.logging_utils import log, set_log_func
 from core.pandoc_utils import check_pandoc, convert_with_pandoc
 from core.session_context import SessionContext
+from core.unit_detect import is_unit_dir
 from shared.latex_generator import generate_combined_pdf
 from core.docx_report import generate_combined_docx
 from shared.session import SessionManager
@@ -707,7 +708,7 @@ class DefaultApp:
         path = paths
         name = os.path.basename(path)
         subdirs = [e for e in os.listdir(path) if os.path.isdir(os.path.join(path, e))]
-        has_questions = any(re.match(r'第\d+题|板块\d+|单元\d+', e) for e in subdirs)
+        has_questions = any(is_unit_dir(e) for e in subdirs)
         if not has_questions:
             messagebox.showwarning("提示", f"「{name}」下没有识别到题目目录（单元N/第N题/板块N），请确认选择正确")
             return
@@ -726,10 +727,15 @@ class DefaultApp:
         self.btn_action.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
         self.proofread_result = {}
+        # 主线程快照 Tk 变量，工作线程不再读 Tk
+        output_dir = self.output_dir.get()
+        generate_pdf = self.generate_pdf.get()
+        generate_docx = self.generate_docx.get()
+        typeset_enabled = self.pipeline.typeset_enabled
 
         def _run():
             try:
-                pdf_dir = os.path.join(self.output_dir.get(), "校对PDF")
+                pdf_dir = os.path.join(output_dir, "校对PDF")
                 total = len(self.proofread_list)
                 success = 0
                 for i, (dir_path, paper_name) in enumerate(self.proofread_list):
@@ -737,7 +743,7 @@ class DefaultApp:
                         log("\n===== 任务已中断 =====")
                         break
                     log(f"\n📄 [{i+1}/{total}] 正在生成 PDF：{paper_name}")
-                    if self.generate_pdf.get():
+                    if generate_pdf:
                         try:
                             pdf_path = generate_combined_pdf(dir_path, pdf_dir)
                             if pdf_path:
@@ -747,9 +753,9 @@ class DefaultApp:
                                 log(f"   ⚠️ PDF 生成失败：未找到可用的校对数据")
                         except Exception as e:
                             log(f"   ❌ PDF 生成异常：{e}")
-                    if self.pipeline.typeset_enabled and self.generate_docx.get():
+                    if typeset_enabled and generate_docx:
                         try:
-                            docx_dir = os.path.join(self.output_dir.get(), "校对Word")
+                            docx_dir = os.path.join(output_dir, "校对Word")
                             docx_path = generate_combined_docx(dir_path, docx_dir)
                             if docx_path:
                                 log(f"   ✅ Word 批注报告已生成：{docx_path}")
@@ -812,20 +818,25 @@ class DefaultApp:
         self.btn_action.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
         self.on_start_conversion()
-        t = threading.Thread(target=self._conversion_thread, args=(out_dir,), daemon=True)
-        t.start()
-
-    def _conversion_thread(self, out_root):
-        try:
-            self._conversion_thread_run(out_root)
-        finally:
-            self._reset_task_state()
-
-    def _conversion_thread_run(self, out_root):
-        source = self.content_type.get()
+        # 主线程快照 Tk 变量，工作线程不再读 Tk
         do_split = self.pipeline.split_enabled
         do_proof = self.pipeline.proof_enabled
         split_mode = self._split_mode_key()
+        clean_enabled = self.clean_enabled.get()
+        intent_clean_enabled = self.intent_clean_enabled.get()
+        t = threading.Thread(
+            target=self._conversion_thread,
+            args=(out_dir, content, do_split, do_proof, split_mode, clean_enabled, intent_clean_enabled),
+            daemon=True)
+        t.start()
+
+    def _conversion_thread(self, out_root, source, do_split, do_proof, split_mode, clean_enabled, intent_clean_enabled):
+        try:
+            self._conversion_thread_run(out_root, source, do_split, do_proof, split_mode, clean_enabled, intent_clean_enabled)
+        finally:
+            self._reset_task_state()
+
+    def _conversion_thread_run(self, out_root, source, do_split, do_proof, split_mode, clean_enabled, intent_clean_enabled):
         is_free_mode = (source == "自由校对")
         is_review_mode = (source == "批注评审")
 
@@ -986,12 +997,12 @@ class DefaultApp:
                 if needs_post:
                     if source == "讲义":
                         fix_latex_escapes(raw_md)
-                        if self.clean_enabled.get():
+                        if clean_enabled:
                             if clean_md_file(raw_md):
                                 log("   ✅ 表格清理完成")
                             else:
                                 log("   ⚠️ 表格清理失败")
-                        if self.intent_clean_enabled.get():
+                        if intent_clean_enabled:
                             from core.defaults import get_intent_problem_markers
                             markers = get_intent_problem_markers(self.subject_app.config)
                             if clean_intent_md_file(raw_md, problem_markers=markers):
@@ -1030,7 +1041,7 @@ class DefaultApp:
                           "api_key": self.api_config.get("api_key", ""),
                           "model": self.api_config.get("model_name", "")}
                 if source == "讲义":
-                    options["do_clean"] = self.clean_enabled.get()
+                    options["do_clean"] = clean_enabled
                 try:
                     if source == "讲义":
                         split_ok = self.subject_app.split_lecture(raw_md, split_root, basename, options)
@@ -1093,7 +1104,18 @@ class DefaultApp:
         self.btn_action.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
         self.on_start_proofread()
-        t = threading.Thread(target=self._proofread_thread, daemon=True)
+        # 主线程快照 Tk 变量，工作线程不再读 Tk
+        content = self.content_type.get()
+        out_root = self.output_dir.get().strip()
+        generate_pdf = self.generate_pdf.get()
+        use_parallel = self.parallel_enabled.get()
+        parallel_count = self.parallel_count.get()
+        typeset_enabled = self.pipeline.typeset_enabled
+        generate_docx = self.generate_docx.get()
+        t = threading.Thread(
+            target=self._proofread_thread,
+            args=(content, out_root, generate_pdf, use_parallel, parallel_count, typeset_enabled, generate_docx),
+            daemon=True)
         t.start()
 
     def interrupt_task(self):
@@ -1109,12 +1131,10 @@ class DefaultApp:
         self.root.after(0, lambda: self.btn_action.config(state=tk.NORMAL))
         self.root.after(0, lambda: self.btn_stop.config(state=tk.DISABLED))
 
-    def _proofread_thread(self):
+    def _proofread_thread(self, content, out_root, generate_pdf, use_parallel, parallel_count, typeset_enabled, generate_docx):
         api_url = self.api_config.get("api_url", "")
         api_key = self.api_config.get("api_key", "")
         model = self.api_config.get("model_name", "")
-        content = self.content_type.get()
-        out_root = self.output_dir.get().strip()
         if not out_root:
             out_root = DEFAULT_OUTPUT
         # 重置中断信号
@@ -1140,11 +1160,7 @@ class DefaultApp:
                     full = os.path.join(paper_path, item)
                     if not os.path.isdir(full):
                         continue
-                    if item.startswith("单元"):
-                        # ADR-0017: 统一命名为 单元N
-                        question_dirs.append(full)
-                    elif "题" in item or item.startswith("板块"):
-                        # 向后兼容旧命名
+                    if is_unit_dir(item):
                         question_dirs.append(full)
                     elif item == "知识":
                         # 向后兼容旧知识目录
@@ -1191,10 +1207,8 @@ class DefaultApp:
                     f"{self.subject_app.name} - {paper_name}", q_list)
                 log(f"   📝 Session: {session_id}")
 
-                generate_pdf = self.generate_pdf.get()
-                use_parallel = self.parallel_enabled.get()
                 try:
-                    batch_size = int(self.parallel_count.get())
+                    batch_size = int(parallel_count)
                     if batch_size < 1:
                         batch_size = 1
                 except ValueError:
@@ -1276,9 +1290,9 @@ class DefaultApp:
                 if not self.task_interrupt and paper_results:
                     self._export_paper_report(paper_name, paper_results, report_root)
 
-                if self.pipeline.typeset_enabled and self.generate_pdf.get() and not self.task_interrupt and paper_results:
+                if typeset_enabled and generate_pdf and not self.task_interrupt and paper_results:
                     try:
-                        pdf_dir = os.path.join(self.output_dir.get(), "校对PDF")
+                        pdf_dir = os.path.join(out_root, "校对PDF")
                         pdf_path = generate_combined_pdf(paper_path, pdf_dir)
                         if pdf_path:
                             log(f"   📄 汇总 PDF：{pdf_path}")
@@ -1287,9 +1301,9 @@ class DefaultApp:
                     except Exception as e:
                         log(f"   ⚠️ 汇总 PDF 生成异常：{e}")
 
-                if self.pipeline.typeset_enabled and self.generate_docx.get() and not self.task_interrupt and paper_results:
+                if typeset_enabled and generate_docx and not self.task_interrupt and paper_results:
                     try:
-                        docx_dir = os.path.join(self.output_dir.get(), "校对Word")
+                        docx_dir = os.path.join(out_root, "校对Word")
                         docx_path = generate_combined_docx(paper_path, docx_dir)
                         if not docx_path:
                             log(f"   ⚠️ 汇总 Word 生成失败（无可用的校对数据）")

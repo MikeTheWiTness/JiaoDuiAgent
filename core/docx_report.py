@@ -20,11 +20,11 @@ from xml.sax.saxutils import escape
 
 from core.logging_utils import log
 from core.pandoc_utils import find_pandoc
-from shared.comment_marker import scan_math_spans as _scan_math_spans
+from shared.comment_marker import INLINE_MARKER_CAPTURE_RE, scan_math_spans as _scan_math_spans
 from shared.formula_render import latex_to_png
 
 # \| 是 LaTeX 转义竖线（\left\|…\right\|），整体属于原文字段，不得当分隔符
-_PAT = re.compile(r"【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】", re.DOTALL)
+_PAT = INLINE_MARKER_CAPTURE_RE
 _PAGE_BREAK = '```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```'
 
 _NS = ('xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" '
@@ -458,7 +458,7 @@ def _anchor_heading_comments(doc_xml: str, heading_anchors: dict) -> str:
         pat = re.compile(
             r'(<w:p>\s*<w:pPr>\s*<w:pStyle w:val="Heading1"[^>]*/>\s*</w:pPr>\s*)'
             r'(<w:r>\s*<w:rPr>\s*(?:<w:[^>]*/>\s*)*</w:rPr>\s*<w:t[^>]*>)('
-            + re.escape(title) + r')(</w:t>\s*</w:r>)(\s*</w:p>)', re.DOTALL)
+            + re.escape(escape(title)) + r')(</w:t>\s*</w:r>)(\s*</w:p>)', re.DOTALL)
 
         def _repl(m, _gid=gid):
             return (m.group(1)
@@ -468,7 +468,11 @@ def _anchor_heading_comments(doc_xml: str, heading_anchors: dict) -> str:
                     + f'<w:r><w:commentReference w:id="{_gid}"/></w:r>'
                     + m.group(5))
 
-        doc_xml = pat.sub(_repl, doc_xml)
+        doc_xml, count = pat.subn(_repl, doc_xml)
+        if count == 0:
+            log(f"   ⚠️ Word 报告：标题「{title}」未在 Heading1 段落匹配，无问题批注锚点丢失")
+        elif count > 1:
+            log(f"   ⚠️ Word 报告：标题「{title}」匹配到 {count} 处，存在同名标题重复注入")
     return doc_xml
 
 

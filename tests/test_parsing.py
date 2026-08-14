@@ -159,6 +159,36 @@ class TestSaveProofreadJson(unittest.TestCase):
         data = self._load_json()
         self.assertEqual(data["summary"], "无问题")
 
+    def test_multiline_marker_extracted(self):
+        """跨行标记（标记原文/改为字段含换行）能被提取（B1）。"""
+        md = (
+            "严重错误\n\n"
+            "### 标记原文\n"
+            "内容：【1|第一行\n第二行|改为\n跨行】\n\n"
+            "### 修改原因\n"
+            "1. 跨行标记原因。"
+        )
+        save_proofread_json(md, self.q_dir)
+        data = self._load_json()
+        self.assertEqual(len(data["corrections"]), 1)
+        self.assertEqual(data["corrections"][0]["original"], "第一行\n第二行")
+        self.assertEqual(data["corrections"][0]["correction"], "改为\n跨行")
+
+    def test_descending_circled_range_reasons(self):
+        """带圈数字降序区间（⑮-⑫）不丢原因（B1）。"""
+        md = (
+            "严重错误\n\n"
+            "### 标记原文\n"
+            "内容：【12|错|对】【13|错|对】【14|错|对】【15|错|对】\n\n"
+            "### 修改原因\n"
+            "⑮-⑫ 这是一段覆盖 12-15 的原因。"
+        )
+        save_proofread_json(md, self.q_dir)
+        data = self._load_json()
+        self.assertEqual(len(data["corrections"]), 4)
+        for c in data["corrections"]:
+            self.assertEqual(c["reason"], "这是一段覆盖 12-15 的原因。")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,7 @@ import re
 import traceback
 
 from core.logging_utils import log
-from shared.comment_marker import INLINE_MARKER_DETECT_RE
+from shared.comment_marker import INLINE_MARKER_CAPTURE_RE, INLINE_MARKER_DETECT_RE
 
 
 def _circle_to_int(ch: str) -> int | None:
@@ -61,7 +61,8 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
             sn = _circle_to_int(rm.group(1)[0])
             en = _circle_to_int(rm.group(2)) if rm.group(2) else sn
             rt = rm.group(3).strip()
-            for n in range(sn, (en or sn) + 1):
+            lo, hi = sorted((sn, en))
+            for n in range(lo, hi + 1):
                 reasons[n] = rt
     else:
         pattern_ascii = r'(\d+)(?:\s*[-–]\s*(\d+))?\s*[\.\)\s]\s*(.+?)(?=\n\d+[\.\)\s]|\n\n|\Z)'
@@ -71,7 +72,8 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
             rt = rm.group(3).strip()
             if not rt:
                 continue
-            for n in range(sn, en + 1):
+            lo, hi = sorted((sn, en))
+            for n in range(lo, hi + 1):
                 reasons[n] = rt
 
     corrections = []
@@ -93,7 +95,7 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
         return ""
 
     # \| 是 LaTeX 转义竖线（如 \left\|…\right\|），整体属于字段内容，不得当分隔符
-    _clean_marked = re.sub(r'【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】', _extract, marked_section)
+    _clean_marked = INLINE_MARKER_CAPTURE_RE.sub(_extract, marked_section)
     corrections.sort(key=lambda x: x.get("num", 0))
 
     if not summary and not corrections:
