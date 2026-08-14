@@ -3,7 +3,6 @@
 锁定装饰图片清除的尺寸阈值（0.4in）与 alt 匹配规则，
 回归案例来自实测数据（2026-08-11 物理讲义第 1 讲 + 电路改）。
 """
-import pytest
 
 from shared.decor_utils import (
     DECOR_MAX_H,

@@ -145,14 +145,14 @@ def _bash_format_fix(file_path: str, issues_desc: str,
     bash_tool = BashTool(allowed_dir=file_dir)
 
     try:
-        log(f"   🔧 [bash修正] 启动 LLM 直接编辑文件...")
+        log("   🔧 [bash修正] 启动 LLM 直接编辑文件...")
         ctx = SessionContext.from_credentials(
             api_url, api_key, model,
             output_dir=file_dir,
             max_loops=3,
             max_tokens=16384,
         )
-        result = call_api(
+        call_api(
             ctx,
             md_text=user_message,
             images=[],

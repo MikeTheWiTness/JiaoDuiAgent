@@ -34,7 +34,7 @@ class TestBasicMathProtection:
         assert comprehensive_clean("$$\na + b = c\n$$") == "$$\na + b = c\n$$"
 
     def test_math_with_special_chars(self):
-        """公式中的特殊字符（^、_、{、}、\）应保留"""
+        r"""公式中的特殊字符（^、_、{、}、\）应保留"""
         assert comprehensive_clean(r"$x^{2} + y_{1} = z$") == r"$x^{2} + y_{1} = z$"
 
     def test_multiple_inline_math(self):
@@ -70,7 +70,7 @@ class TestFragmentedMathRegression:
         # 绝不能包含 MATH 占位符残留
         assert 'MATH' not in result, f"残留 MATH 占位符: {result}"
         # 也不能包含 \x00 空字节
-        assert '\x00' not in result, f"残留空字节"
+        assert '\x00' not in result, "残留空字节"
         # 所有原始 $ 符号应存在（10 对 = 20 个 $）
         assert result.count('$') == input_text.count('$'), \
             f"$ 数量不匹配: 期望 {input_text.count('$')}, 实际 {result.count('$')}"

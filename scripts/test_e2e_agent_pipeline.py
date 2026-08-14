@@ -102,7 +102,7 @@ def main():
     q_dir = os.path.join(base, f"第{q_num}题")
     q_name = f"第{q_num}题"
 
-    print(f"=== 端到端 Agent 测试 ===")
+    print("=== 端到端 Agent 测试 ===")
     print(f"题目: {q_dir}")
     print(f"模型: {model}")
     print()

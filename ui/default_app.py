@@ -18,13 +18,13 @@ from core.defaults import (
     normalize_option_spacing,
     post_process_md_zw,
 )
+from core.docx_report import generate_combined_docx
 from core.env_config import load_env_config, save_env_config
 from core.logging_utils import log, set_log_func
 from core.pandoc_utils import check_pandoc, convert_with_pandoc
 from core.session_context import SessionContext
 from core.unit_detect import is_unit_dir
 from shared.latex_generator import generate_combined_pdf
-from core.docx_report import generate_combined_docx
 from shared.session import SessionManager
 from ui.pipeline import PipelineBar, setup_pipeline_styles
 from ui.widgets import ApiDialog, LogPanel
@@ -96,7 +96,6 @@ class DefaultApp:
         """获取学科自定义的 UI 功能开关。"""
         default_features = {
             "show_clean_table_option": True,
-            "show_intent_clean_option": True,
             "show_knowledge_option": False,  # 统一模型下 LLM 自判类型，无需物理分离
             "show_pdf_option": True,
             "show_parallel_option": True,
@@ -387,11 +386,13 @@ class DefaultApp:
 
         # 校验规则
         errors = []
+        if spl and not imp:
+            errors.append("「拆分」需要「导入」——拆分器按导入的原始文档工作。请同时勾选「导入」。")
         if imp and prf and not spl:
             errors.append("「校对」需要先「拆分」——校对器按拆分后的题目目录工作，不能直接校对原始文档。请同时勾选「拆分」。")
-        if imp and typ and not prf:
-            errors.append("「排版」需要校对结果——PDF 报告由校对报告生成。请同时勾选「校对」，或关闭「导入」后选择已有校对目录。")
-        if not imp and not prf and not typ:
+        if typ and not prf and not (not imp and not spl):
+            errors.append("「排版」需要校对结果——PDF 报告由校对报告生成。请同时勾选「校对」，或关闭「导入」「拆分」后选择已有校对目录。")
+        if not imp and not spl and not prf and not typ:
             errors.append("至少需要勾选一个阶段。")
 
         if errors:
@@ -750,7 +751,7 @@ class DefaultApp:
                                 log(f"   ✅ PDF 已生成：{pdf_path}")
                                 success += 1
                             else:
-                                log(f"   ⚠️ PDF 生成失败：未找到可用的校对数据")
+                                log("   ⚠️ PDF 生成失败：未找到可用的校对数据")
                         except Exception as e:
                             log(f"   ❌ PDF 生成异常：{e}")
                     if typeset_enabled and generate_docx:
@@ -848,7 +849,7 @@ class DefaultApp:
         converted_dirs = []
 
         if is_free_mode:
-            log(f"开始转换，模式=自由校对")
+            log("开始转换，模式=自由校对")
             import datetime
 
             from shared.free_proofread import create_free_proofread_md
@@ -890,7 +891,7 @@ class DefaultApp:
 
             if not do_split:
                 converted_dirs.append(os.path.dirname(raw_md))
-                log(f"   ✅ 自由校对转换完成")
+                log("   ✅ 自由校对转换完成")
             else:
                 log("   ✂️ 开始拆分...")
                 options = {"split_mode": split_mode,
@@ -909,9 +910,9 @@ class DefaultApp:
                 if split_ok:
                     converted_dir = os.path.join(split_root, basename)
                     converted_dirs.append(converted_dir)
-                    log(f"   ✅ 自由校对处理完成")
+                    log("   ✅ 自由校对处理完成")
                 else:
-                    log(f"   ⚠️ 自由校对拆分未完成，跳过")
+                    log("   ⚠️ 自由校对拆分未完成，跳过")
         else:
             total = len(self.file_list)
             log(f"开始转换，模式={source}，共 {total} 个文件")
@@ -986,7 +987,7 @@ class DefaultApp:
                     temp_docx_path = None
 
                 if not ok:
-                    log(f"   ❌ 转换失败")
+                    log("   ❌ 转换失败")
                     continue
 
                 # Word 格式增强：提取着重号、下划线、波浪线、删除线等特殊格式
@@ -1297,7 +1298,7 @@ class DefaultApp:
                         if pdf_path:
                             log(f"   📄 汇总 PDF：{pdf_path}")
                         else:
-                            log(f"   ⚠️ 汇总 PDF 生成失败（无可用的校对数据）")
+                            log("   ⚠️ 汇总 PDF 生成失败（无可用的校对数据）")
                     except Exception as e:
                         log(f"   ⚠️ 汇总 PDF 生成异常：{e}")
 
@@ -1306,7 +1307,7 @@ class DefaultApp:
                         docx_dir = os.path.join(out_root, "校对Word")
                         docx_path = generate_combined_docx(paper_path, docx_dir)
                         if not docx_path:
-                            log(f"   ⚠️ 汇总 Word 生成失败（无可用的校对数据）")
+                            log("   ⚠️ 汇总 Word 生成失败（无可用的校对数据）")
                     except Exception as e:
                         log(f"   ⚠️ 汇总 Word 生成异常：{e}")
 

@@ -351,7 +351,7 @@ def diff_characters(original, given):
                     pos = idx + 1
 
     # 步骤2: 用较短 n-gram (3~6字) 覆盖剩余未匹配位置
-    MIN_N2, MAX_N2, STEP2 = 3, 6, 2
+    MIN_N2, MAX_N2, _STEP2 = 3, 6, 2
     for n in range(MAX_N2, MIN_N2 - 1, -1):
         for i in range(0, len(given) - n + 1):
             # 只处理包含未匹配位置的窗口
@@ -634,7 +634,7 @@ def _find_best_excerpt_range(n_full: str, n_sentences: list):
             start = idx + 1
 
     if not positions:
-        log(f"   ⚠️ 所有 n-gram 在全文无命中")
+        log("   ⚠️ 所有 n-gram 在全文无命中")
         return None
 
     positions.sort()
@@ -830,12 +830,12 @@ def search_original_text(text_type, sample_text):
                 )
                 # 只在 Playwright 可用时才尝试识典
                 if is_playwright_available():
-                    log(f"   📚 尝试识典古籍搜索...")
+                    log("   📚 尝试识典古籍搜索...")
                     sdg_result = search_and_extract(sample)
                     if sdg_result and len(sdg_result) > 50:
                         log(f"   ✅ 识典古籍找到原文 ({len(sdg_result)} 字)")
                         return sdg_result
-                    log(f"   ⚠️ 识典古籍未找到或结果过短")
+                    log("   ⚠️ 识典古籍未找到或结果过短")
             except Exception as e:
                 log(f"   ⚠️ 识典古籍搜索异常: {e}")
 
@@ -844,9 +844,9 @@ def search_original_text(text_type, sample_text):
             url = f"https://sou-yun.cn/QueryPoem.aspx?q={urllib.parse.quote(sample)}"
             result = fetcher._run(url)
             if result and not result.startswith("[") and "搜索结果为空" not in result:
-                log(f"   ✅ 搜韵网找到结果")
+                log("   ✅ 搜韵网找到结果")
                 return _extract_first_poem(result)
-            log(f"   ⚠️ 搜韵网未找到，尝试百度搜索...")
+            log("   ⚠️ 搜韵网未找到，尝试百度搜索...")
 
         # 第3优先：DuckDuckGo/Baidu 搜索 + 抓取
         search_query = f"{sample} 原文"
@@ -890,7 +890,7 @@ def search_original_text(text_type, sample_text):
             except (json.JSONDecodeError, Exception) as e:
                 log(f"   ⚠️ 搜索结果解析失败: {e}")
 
-        log(f"   ⚠️ 搜索未找到可用原文")
+        log("   ⚠️ 搜索未找到可用原文")
 
     except Exception as e:
         log(f"   ⚠️ 前置搜索异常: {e}")
@@ -982,7 +982,7 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None, q_
     if body_segment is not None:
         log(f"   ✂️ 已切出正文段 ({len(body_segment)} 字)，用于节选与 diff")
     else:
-        log(f"   ⚠️ 未能切出正文段，回退整道题匹配（可能引入 diff 噪音）")
+        log("   ⚠️ 未能切出正文段，回退整道题匹配（可能引入 diff 噪音）")
 
     # 步骤0：确定用于匹配的干净文本
     # 优先用正文段清洗版（不含题干/选项/批注答案）；切分失败时回退 _clean.md / 现场清洗
@@ -1028,7 +1028,7 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None, q_
     original = search_original_text(text_type, search_key)
 
     if original is None:
-        log(f"   ⚠️ 未找到权威原文，跳过前置 diff")
+        log("   ⚠️ 未找到权威原文，跳过前置 diff")
         return md_text
 
     # 步骤3：从全文截取节选范围（使用清理后的 match_text，而非原始 md_text）
@@ -1039,7 +1039,7 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None, q_
     else:
         # 节选匹配失败：搜索到的文本与待校稿可能不相关（如搜到了错误的书），
         # 不应继续用全文做 diff，否则会产生大量无意义差异条目干扰 LLM 判断
-        log(f"   ⚠️ 节选匹配失败，搜索到的文本与待校稿无法对齐，跳过前置 diff")
+        log("   ⚠️ 节选匹配失败，搜索到的文本与待校稿无法对齐，跳过前置 diff")
         return md_text
 
     # 步骤4：字面 diff。正文段切分成功时两侧统一用 _clean_for_matching（只留纯汉字，
@@ -1064,7 +1064,7 @@ def preprocess_for_proofread(md_text, api_url=None, api_key=None, model=None, q_
     reference = build_reference_section(text_type, original, diff_result["differences"])
 
     if diff_result["identical"]:
-        log(f"   ✅ 前置校验完成：原文一致，无需 LLM 额外搜索")
+        log("   ✅ 前置校验完成：原文一致，无需 LLM 额外搜索")
     else:
         log(f"   ⚡ 发现 {len(diff_result['differences'])} 处字面差异，已注入 prompt 供 LLM 判断")
 

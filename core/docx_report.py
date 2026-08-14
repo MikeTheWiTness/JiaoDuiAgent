@@ -9,18 +9,19 @@
 依赖 pandoc（`-f markdown-implicit_figures` 防止图片题注污染）。
 """
 import itertools
-import os
 import re
 import shutil
 import subprocess
 import tempfile
 import zipfile
+from datetime import UTC
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 from core.logging_utils import log
 from core.pandoc_utils import find_pandoc
-from shared.comment_marker import INLINE_MARKER_CAPTURE_RE, scan_math_spans as _scan_math_spans
+from shared.comment_marker import INLINE_MARKER_CAPTURE_RE
+from shared.comment_marker import scan_math_spans as _scan_math_spans
 from shared.formula_render import latex_to_png
 
 # \| 是 LaTeX 转义竖线（\left\|…\right\|），整体属于原文字段，不得当分隔符
@@ -145,8 +146,6 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
                     skipped_anchors[n] = (orig.strip("$"), new.strip("$"))
                     return f"SKIPANCH{n}Z"
                 gid = next(gid_iter)
-                if gid in used_ids:
-                    gid = max(used_ids) + 1
                 used_ids.add(gid)
                 if orig.endswith("\\") and not orig.endswith("\\\\"):
                     orig = orig + "\\"
@@ -485,8 +484,8 @@ def _strip_unanchored_comments(doc_xml: str):
     starts = set(re.findall(r'<w:commentRangeStart w:id="(\d+)"', doc_xml))
     for cid in re.findall(r'<w:commentReference w:id="(\d+)"', doc_xml):
         if cid not in starts:
-            doc_xml = re.sub(r'<w:commentRangeEnd w:id="%s"\s*/>' % cid, '', doc_xml)
-            doc_xml = re.sub(r'<w:r><w:commentReference w:id="%s"\s*/></w:r>' % cid, '', doc_xml)
+            doc_xml = re.sub(rf'<w:commentRangeEnd w:id="{cid}"\s*/>', '', doc_xml)
+            doc_xml = re.sub(rf'<w:r><w:commentReference w:id="{cid}"\s*/></w:r>', '', doc_xml)
     return doc_xml, starts
 
 
@@ -548,8 +547,9 @@ def _inline_image_xml(num: int, media_name: str, r_id: str, png_bytes: bytes) ->
 
     图片垂直位置保持 Word 默认（底边对齐基线），不做 w:position 偏移。
     """
-    from PIL import Image
     import io
+
+    from PIL import Image
     with Image.open(io.BytesIO(png_bytes)) as im:
         w_px, h_px = im.size
     emu_w = round(w_px * 914400 / 200)
@@ -575,5 +575,5 @@ def _inline_image_xml(num: int, media_name: str, r_id: str, png_bytes: bytes) ->
 
 def _comment_timestamp() -> str:
     """生成 OOXML ST_DateTime 格式的当前 UTC 时间戳（ISO 8601 Z 形式）。"""
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    from datetime import datetime
+    return datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')

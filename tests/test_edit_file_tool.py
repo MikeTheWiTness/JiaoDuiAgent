@@ -78,7 +78,7 @@ class TestEditFileTool:
         file_path = temp_dir / "test.md"
         file_path.write_text("第一行\n第二行\n第三行\n", encoding="utf-8")
         tool = EditFileTool()
-        result = tool._run(path=str(file_path), old_string="第二行", new_string="替换行")
+        tool._run(path=str(file_path), old_string="第二行", new_string="替换行")
         content = file_path.read_text(encoding="utf-8")
         assert "替换行" in content
         assert "第二行" not in content

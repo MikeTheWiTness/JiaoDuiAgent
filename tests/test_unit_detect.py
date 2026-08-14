@@ -2,8 +2,6 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from core.unit_detect import is_unit_dir, scan_question_dirs
 
 

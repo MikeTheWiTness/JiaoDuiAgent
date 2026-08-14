@@ -85,15 +85,13 @@ class ConversionService(_PipelineService):
             if self.interrupted:
                 return ConversionResult(success=False, error="转换被中断")
 
-            self._on_log(f"📂 开始转换: {req.md_file}")
-            # TODO: 完整搬迁 _conversion_thread 业务逻辑
-            # 1. 文件后处理（fix_latex_escapes / clean_md_file / normalize_option_spacing）
-            # 2. 批注占位注入与回写
-            # 3. split_lecture / split_exam 调度
-            # 4. 自由校对组装
+            if not Path(req.md_file).exists():
+                return ConversionResult(success=False, error=f"文件不存在: {req.md_file}")
 
-            self._on_log("✅ 转换完成")
-            return ConversionResult(success=True)
+            # 骨架阶段未搬迁业务逻辑（ADR-0022 C2.1 待搬迁），显式报错防误接线。
+            return ConversionResult(
+                success=False,
+                error="转换业务逻辑未搬迁（骨架阶段），请使用 ui/default_app._conversion_thread")
         except Exception as e:
             self._on_log(f"❌ 转换失败: {e}")
             return ConversionResult(success=False, error=str(e))
@@ -127,16 +125,11 @@ class ProofreadService(_PipelineService):
                 return ProofreadResult(success=False, error="未找到校对单元目录")
 
             total = len(q_dirs)
-            self._on_log(f"   找到 {total} 个校对单元")
 
-            # TODO: 完整搬迁 _proofread_thread 业务逻辑
-            # 1. 缓存命中判断
-            # 2. SessionManager 初始化
-            # 3. ThreadPoolExecutor 并发调度
-            # 4. 结果聚合 + PDF 汇总
-
-            self._on_log(f"✅ 校对完成 ({total} 题)")
-            return ProofreadResult(success=True, total_questions=total, completed=total)
+            # 骨架阶段未搬迁业务逻辑（ADR-0022 C2.2 待搬迁），显式报错防假完成。
+            return ProofreadResult(
+                success=False, total_questions=total, completed=0,
+                error="校对业务逻辑未搬迁（骨架阶段），请使用 ui/default_app._proofread_thread")
         except Exception as e:
             self._on_log(f"❌ 校对失败: {e}")
             return ProofreadResult(success=False, error=str(e))

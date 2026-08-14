@@ -13,12 +13,12 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
-ignore = []
+ignore = ["E402", "E501", "E701", "E702", "E741"]
 
 [tool.ruff.format]
 quote-style = "double"

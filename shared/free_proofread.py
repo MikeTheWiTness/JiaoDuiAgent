@@ -47,15 +47,3 @@ def create_free_proofread_md(text, images=None, output_dir=None):
 
     log(f"✅ 自由校对临时文件已生成: {md_path}")
     return md_path
-
-
-def get_free_proofread_output_dir(base_dir):
-    ts = _timestamp()
-    dir_name = f"自由校对_{ts}"
-    output_dir = os.path.join(base_dir, dir_name)
-    os.makedirs(output_dir, exist_ok=True)
-    return output_dir
-
-
-def is_free_proofread_mode(source_mode):
-    return source_mode == "自由校对"

@@ -4,7 +4,6 @@
 get_max_tool_loops / prompt 方法 / split 方法 / proofread_one），
 零差异方法自动继承。
 """
-import re
 from pathlib import Path
 
 from core.config_loader import load_config
@@ -66,9 +65,6 @@ class BaseSubjectApp:
         raise NotImplementedError
 
     def split_lecture(self, md_file, output_root, base_name, options):
-        raise NotImplementedError
-
-    def split_exam(self, md_file, output_root, base_name, options=None):
         raise NotImplementedError
 
     # ---- 零差异方法（7 科完全一致） ----

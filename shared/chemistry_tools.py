@@ -10,7 +10,6 @@ ChemistryIndependentSolveTool：
 """
 import json
 import os
-import threading
 from typing import Any
 
 import requests
@@ -56,7 +55,6 @@ def parse_chemical_formula(formula: str) -> dict[str, int]:
     内联了同逻辑的 `_parse_formula`（由于模板在隔离 exec 环境中运行，无法 import），
     两端须保持同步。
     """
-    counts: dict[str, int] = {}
     i = 0
     n = len(formula)
 

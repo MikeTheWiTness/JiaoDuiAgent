@@ -476,6 +476,7 @@ class TestPdfCompilerCleanup(unittest.TestCase):
 
     def test_xelatex_missing_still_cleans_tmpdir(self):
         from unittest import mock
+
         from shared import pdf_compiler
 
         tmpdir = tempfile.mkdtemp(prefix="cleanup_probe_")

@@ -418,11 +418,10 @@ def compile_to_pdf(tex_path: str, output_dir: str | None = None,
         # 内嵌便携版：将格式文件 + 字体映射复制到临时目录（ASCII 路径）
         # 避免 CJK 路径导致 xdvipdfmx 失败
         fonts_tmp = None
-        runtime_fonts_conf = None
         if texmf_root:
             _copy_fmt_to_tmpdir(texmf_root, tmpdir)
             fonts_tmp = _copy_mapfiles_to_tmpdir(texmf_root, tmpdir)
-            runtime_fonts_conf = _generate_runtime_fonts_conf(fonts_tmp, tmpdir)
+            _generate_runtime_fonts_conf(fonts_tmp, tmpdir)
 
         # 组装编译环境变量（texmf_root 为 None 时返回 None，主函数不传 env）
         build_env = _build_compile_env(texmf_root, tmpdir, fonts_tmp)

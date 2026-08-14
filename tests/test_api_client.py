@@ -111,6 +111,7 @@ class TestRunToolLoopRobustness:
 
     def _run_loop(self, ctx, first_choice):
         from unittest import mock
+
         from core import api_client
 
         messages = [{"role": "system", "content": "系统提示"}]
@@ -180,6 +181,7 @@ class TestRunToolLoopRobustness:
         思考内容既不在对话记录、也不在消息中——唯一去处是 _校对报告.md。
         """
         from unittest import mock
+
         from core import api_client
         ctx = self._make_ctx(tmp_path)
         tool_choice = {
@@ -216,11 +218,13 @@ class TestRunToolLoopRobustness:
 
     def test_429_retry_after_respected(self, tmp_path):
         """回归：429 响应的 Retry-After 必须影响退避时长"""
-        import requests
         from unittest import mock
+
+        import requests
+
         from core import api_client
-        from core.session_context import SessionContext
         from core.api_client import StopReason
+        from core.session_context import SessionContext
 
         ctx = SessionContext(api_url="http://x", api_key="k", model="m",
                              max_loops=1, output_dir=str(tmp_path))

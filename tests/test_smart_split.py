@@ -254,6 +254,7 @@ class TestDumpSmartSplitRawFormat(unittest.TestCase):
     def test_smart_split_wrapper_passes_output_root(self):
         """回归：生产包装函数 smart_split() 必须透传 output_root（真实调用链走此函数）"""
         from unittest import mock
+
         from shared import smart_split as ss
 
         repo_output = os.path.join(

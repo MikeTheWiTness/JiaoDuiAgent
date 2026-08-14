@@ -245,7 +245,7 @@ def fix_floating_images(md_file):
         if option_text:
             lines[i] = f"A.                                  {option_text}"
         else:
-            lines[i] = f"A.                                  "
+            lines[i] = "A.                                  "
         lines.insert(i, img_line)
         i += 2
         fixed = True
@@ -381,7 +381,7 @@ def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     src_media = md_dir / f"{base_name}_images" / "media"
     log(f"   🔍 图片源目录: {src_media}")
     if not src_media.exists():
-        log(f"   ❌ 图片源目录不存在")
+        log("   ❌ 图片源目录不存在")
 
     target_root = Path(output_root) / base_name
     target_root.mkdir(parents=True, exist_ok=True)
@@ -760,8 +760,8 @@ def _format_usage_summary(usage: dict) -> str:
     if total == 0:
         return ""
     lines = ["\n\n---\n", "## 📊 Token 用量统计\n\n"]
-    lines.append(f"| 类型 | Token 数 |\n")
-    lines.append(f"|------|----------|\n")
+    lines.append("| 类型 | Token 数 |\n")
+    lines.append("|------|----------|\n")
     lines.append(f"| 提示词 (prompt) | {prompt:,} |\n")
     lines.append(f"| 生成 (completion) | {completion:,} |\n")
     lines.append(f"| **总计** | **{total:,}** |\n")
@@ -891,7 +891,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
         try:
             with open(md_path, "w", encoding="utf-8") as f:
                 # 加注 API 对话记录路径，方便排查
-                f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
+                f.write("> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
                 f.write(res)
                 # 追加工具调用摘要，方便排查搜索质量
                 if tool_calls:
@@ -915,7 +915,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
             artifact_dir.mkdir(parents=True, exist_ok=True)
             artifact_path = artifact_dir / "_校对报告.md"
             with open(artifact_path, "w", encoding="utf-8") as f:
-                f.write(f"> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
+                f.write("> 完整 API 对话记录请见 `_API对话记录.md`\n\n---\n\n")
                 f.write(res)
                 if tool_calls:
                     f.write(_format_tool_calls_summary(tool_calls))

@@ -116,6 +116,7 @@ class TestSaveProofreadJson(unittest.TestCase):
     def test_write_failure_logs_warning(self):
         """回归：写盘失败必须记录日志（此前静默返回 False 无感知）"""
         from unittest import mock
+
         from core import parsing
         md = self._make_inline_proofread_md()
         with mock.patch.object(parsing, "log") as mock_log, \

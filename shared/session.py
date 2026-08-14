@@ -13,13 +13,17 @@
 """
 import json
 import os
+import threading
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
+# 跨实例串行化写入（多 session 并发写不交错损坏）
+_SAVE_LOCK = threading.Lock()
 
-class QuestionStatus(str, Enum):
+
+class QuestionStatus(StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -49,7 +53,7 @@ class SessionManager:
             session_id
         """
         self.session_id = uuid.uuid4().hex[:12]
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         self._data = {
             "session_id": self.session_id,
@@ -91,7 +95,7 @@ class SessionManager:
                 if error is not None:
                     q["error"] = error
                 break
-        self._data["last_update"] = datetime.now(timezone.utc).isoformat()
+        self._data["last_update"] = datetime.now(UTC).isoformat()
         self._save()
 
     # ---- 查询 ----
@@ -119,13 +123,15 @@ class SessionManager:
     # ---- 持久化 ----
 
     def _save(self):
-        """原子写入——先写临时文件再 rename。"""
+        """原子写入——先写唯一临时文件再 rename，加锁串行化。"""
         if not self.session_file or not self._data:
             return
-        tmp_path = self.session_file.with_suffix(".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, self.session_file)  # 原子操作
+        tmp_path = self.session_file.with_name(
+            f"{self.session_file.name}.{uuid.uuid4().hex[:8]}.tmp")
+        with _SAVE_LOCK:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.session_file)  # 原子操作
 
     def load_session(self, session_id: str) -> bool:
         """从文件加载已有 session。"""

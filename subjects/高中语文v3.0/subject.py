@@ -51,7 +51,7 @@ class SubjectApp(BaseSubjectApp):
     ]
 
     def get_tool_instructions(self):
-        web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
+        [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
 
         lines = []
         # 构建可靠来源列表（始终输出工具指令，无论工具是否已实例化）

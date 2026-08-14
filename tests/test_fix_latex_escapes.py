@@ -2,7 +2,7 @@
 
 重点验证：
 1. Phase 1: 全局反斜杠规约（pandoc 的 \\\\ → \\）
-2. Phase 2+3: 数学公式内 LaTeX 命令不被破坏（\! \, \~ 等）
+2. Phase 2+3: 数学公式内 LaTeX 命令不被破坏（\\! \\, \\~ 等）
 3. Phase 2+3: 非数学文本中的转义正常还原
 4. Phase 4: 数学内部的"安全替换"生效（_、^、{、}）
 5. 嵌套/边界情况
@@ -34,39 +34,39 @@ def _run_fix(input_text):
 # ============================================================
 
 class TestBangInMathPreserved:
-    """\! 在数学公式内保留，在文本外替换"""
+    r"""\! 在数学公式内保留，在文本外替换"""
 
     def test_bang_in_inline_math_preserved(self):
-        """$x\!=\!y$ → \! 保留"""
+        r"""$x\!=\!y$ → \! 保留"""
         result = _run_fix(r'$x\!=\!y$')
         assert r'\!=\!' in result
         assert '=!=' not in result.replace(r'\!=\!', '')  # 没有裸 !
 
     def test_bang_in_display_math_preserved(self):
-        """$$x\!=\!y$$ → \! 保留"""
+        r"""$$x\!=\!y$$ → \! 保留"""
         result = _run_fix(r'$$x\!=\!y$$')
         assert r'\!=\!' in result
 
     def test_bang_outside_math_replaced(self):
-        """文本中的 \! → !"""
+        r"""文本中的 \! → !"""
         result = _run_fix(r'Hello\! World')
         assert 'Hello! World' in result
         assert r'\!' not in result
 
     def test_bang_outside_math_triple(self):
-        """文本中的 \!\!\! → !!!"""
+        r"""文本中的 \!\!\! → !!!"""
         result = _run_fix(r'Wait\!\!\!')
         assert 'Wait!!!' in result
 
     def test_chemistry_equation_long_equals(self):
-        """化学方程式长等号 $=\!=\!=x$ → \! 全部保留"""
+        r"""化学方程式长等号 $=\!=\!=x$ → \! 全部保留"""
         result = _run_fix(r'${\mathrm{S}}^{2-}+{\mathrm{I}}_{2}=\!=\!=x$')
         assert r'=\!=\!=' in result
         assert 'MATH' not in result
         assert '\x01' not in result
 
     def test_chemistry_fragmented_equation(self):
-        """碎片化化学方程式 $\mathrm{S}$$$=\!$$=\!$$=x$ → \! 保留"""
+        r"""碎片化化学方程式 $\mathrm{S}$$$=\!$$=\!$$=x$ → \! 保留"""
         result = _run_fix(
             r'$\mathrm{S}{\mathrm{O}}_{3}^{2-}$'
             r'$$=\!$$=\!$$=\mathrm{S}{\mathrm{O}}_{4}^{2-}$'
@@ -86,28 +86,28 @@ class TestSafeReplacementsInMath:
     """数学内部：_ ^ { } 必须还原，其余命令保留"""
 
     def test_underscore_in_math_replaced(self):
-        """$\_1$ → $_1$（下标必须工作）"""
+        r"""$\_1$ → $_1$（下标必须工作）"""
         result = _run_fix(r'$x\_1$')
         assert '$x_1$' in result
 
     def test_caret_in_math_replaced(self):
-        """$\^2$ → $^2$（上标必须工作）"""
+        r"""$\^2$ → $^2$（上标必须工作）"""
         result = _run_fix(r'$x\^2$')
         assert '$x^2$' in result
 
     def test_braces_in_math_replaced(self):
-        """$\{x\}$ → ${x}$（分组必须工作）"""
+        r"""$\{x\}$ → ${x}$（分组必须工作）"""
         result = _run_fix(r'$\{x\}$')
         assert '${x}$' in result
 
     def test_mathrm_with_braces(self):
-        """$\\{\\mathrm{SO}\\}$ → ${\mathrm{SO}}$"""
+        """$\\{\\mathrm{SO}\\}$ → ${\\mathrm{SO}}$"""
         # 模拟 pandoc 输出: \\{  → \{ (line 33-35) → { (Phase 4)
         result = _run_fix(r'$\\{\\mathrm{SO}\\}$')
         assert r'${\mathrm{SO}}$' in result
 
     def test_subscript_and_superscript_together(self):
-        """$x\_1\^2$ → $x_1^2$"""
+        r"""$x\_1\^2$ → $x_1^2$"""
         result = _run_fix(r'$x\_1\^2$')
         assert '$x_1^2$' in result
 
@@ -188,47 +188,47 @@ class TestEscapesOutsideMath:
     """文本中的 pandoc 转义正常还原"""
 
     def test_dollar_outside_math(self):
-        """文本中 \$ → $"""
+        r"""文本中 \$ → $"""
         result = _run_fix(r'价格 \$5')
         assert '价格 $5' in result
 
     def test_underscore_outside_math(self):
-        """文本中 \_ → _"""
+        r"""文本中 \_ → _"""
         result = _run_fix(r'file\_name')
         assert 'file_name' in result
 
     def test_hash_outside_math(self):
-        """文本中 \# → #"""
+        r"""文本中 \# → #"""
         result = _run_fix(r'\#tag')
         assert '#tag' in result
 
     def test_ampersand_outside_math(self):
-        """文本中 \& → &"""
+        r"""文本中 \& → &"""
         result = _run_fix(r'A \& B')
         assert 'A & B' in result
 
     def test_percent_outside_math(self):
-        """文本中 \% → %"""
+        r"""文本中 \% → %"""
         result = _run_fix(r'50\%')
         assert '50%' in result
 
     def test_brace_outside_math(self):
-        """文本中 \{ → {"""
+        r"""文本中 \{ → {"""
         result = _run_fix(r'\{note\}')
         assert '{note}' in result
 
     def test_tilde_outside_math(self):
-        """文本中 \~ → ~"""
+        r"""文本中 \~ → ~"""
         result = _run_fix(r'foo\~bar')
         assert 'foo~bar' in result
 
     def test_left_right_parentheses(self):
-        """\left\( 和 \right\) 修复"""
+        """\\left\\( 和 \right\\) 修复"""
         result = _run_fix(r'\left\( x \right\)')
         assert r'\left( x \right)' in result
 
     def test_left_right_brackets(self):
-        """\left\[ 和 \right\] 修复"""
+        """\\left\\[ 和 \right\\] 修复"""
         result = _run_fix(r'\left\[ x \right\]')
         assert r'\left[ x \right]' in result
 
@@ -246,13 +246,13 @@ class TestMixedMathAndText:
     """数学公式和文本交替出现"""
 
     def test_bang_in_math_not_in_text(self):
-        """$x\!=\!y$ 文本中的 \! 正常替换"""
+        r"""$x\!=\!y$ 文本中的 \! 正常替换"""
         result = _run_fix(r'公式 $x\!=\!y$ 和文字 Hello\!')
         assert r'\!=\!' in result   # 数学内保留
         assert 'Hello!' in result   # 文本中替换
 
     def test_underscore_in_both(self):
-        """$\_1$ + 文本 \_ → 各自正确处理"""
+        r"""$\_1$ + 文本 \_ → 各自正确处理"""
         result = _run_fix(r'变量 $x\_1$ 和文件 file\_name')
         assert '$x_1$' in result    # 数学内还原
         assert 'file_name' in result # 文本中还原
@@ -286,13 +286,13 @@ class TestNestedMath:
         assert '\x01' not in result
 
     def test_display_with_bang_inside(self):
-        """$$x\!=\!$a+b$ + y$$"""
+        r"""$$x\!=\!$a+b$ + y$$"""
         result = _run_fix(r'$$x\!=\!$a+b$ + y$$')
         assert r'\!=\!' in result
         assert 'MATH' not in result
 
     def test_display_with_underscore_inside(self):
-        """$$x = $\_1$ + y$$"""
+        r"""$$x = $\_1$ + y$$"""
         result = _run_fix(r'$$x = $\_1$ + y$$')
         # 内嵌数学的 _ 应该被还原
         assert '$_1$' in result
@@ -317,7 +317,7 @@ class TestGlobalBackslashReduction:
         assert r'$\mathrm{SO}$' in result
 
     def test_double_backslash_before_other(self):
-        """\\\\! → \\!（然后 Phase 2 保护 \!）"""
+        """\\\\! → \\!（然后 Phase 2 保护 \\!）"""
         result = _run_fix(r'$\\\\!$')
         assert r'$\!$' in result
 
@@ -390,7 +390,7 @@ class TestEdgeCases:
 
     def test_newline_inside_display_math(self):
         """$$ 内跨行"""
-        result = _run_fix('$$\na\_{1} + b\^{2}\n$$')
+        result = _run_fix('$$\na\\_{1} + b\\^{2}\n$$')
         assert 'MATH' not in result
         assert '_' in result  # 下标还原
         assert '^' in result  # 上标还原

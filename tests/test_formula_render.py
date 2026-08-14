@@ -2,15 +2,12 @@
 
 锁定 latex_to_png 的渲染成功/降级边界（CJK 拒绝、异常降级、空串）。
 """
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
 
-try:
-    import matplotlib
-    HAS_MPL = True
-except ImportError:
-    HAS_MPL = False
+HAS_MPL = importlib.util.find_spec("matplotlib") is not None
 
 from shared.formula_render import _CJK_FONT, latex_to_png
 

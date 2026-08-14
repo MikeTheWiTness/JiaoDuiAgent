@@ -54,7 +54,7 @@ from shared.chinese_classics_tools import _clean_for_matching, extract_body_segm
 with open(os.path.join(PAPER, "第1题", "第1题.md"), encoding="utf-8") as f:
     raw1 = f.read()
 body = extract_body_segment(raw1)
-print(f"\n[路径C（新管线: extract_body_segment 切正文段）]")
+print("\n[路径C（新管线: extract_body_segment 切正文段）]")
 if not body:
     print("  extract_body_segment 返回 None")
 else:

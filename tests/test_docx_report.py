@@ -303,10 +303,10 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
 
 
 class TestEscapedPipeInMarkers(unittest.TestCase):
-    """回归：原文字段中的 LaTeX 转义竖线 \| 不得被当作字段分隔符。
+    """回归：原文字段中的 LaTeX 转义竖线 \\| 不得被当作字段分隔符。
 
-    修复前：_PAT 按 [^|] 分割，【N|$\left\|…\right\|$|改】 的 original 在
-    \| 处截断，后半截拼进 correction 还带 |，批注内容损坏。
+    修复前：_PAT 按 [^|] 分割，【N|$\\left\\|…\right\\|$|改】 的 original 在
+    \\| 处截断，后半截拼进 correction 还带 |，批注内容损坏。
     """
 
     @classmethod
@@ -333,7 +333,7 @@ class TestEscapedPipeInMarkers(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_latex_pipe_not_split(self):
-        """\| 转义竖线整体保留在 original，批注数正确"""
+        r"""\| 转义竖线整体保留在 original，批注数正确"""
         docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)

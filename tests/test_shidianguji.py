@@ -14,7 +14,6 @@ class TestShidiangujiSupport(unittest.TestCase):
 
     def test_recognizes_shidianguji_url(self):
         tool = WebFetchTool()
-        url = "https://www.shidianguji.com/search?q=韦凑"
         self.assertIn("shidianguji", tool.description)
 
 

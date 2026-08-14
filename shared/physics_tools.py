@@ -10,7 +10,6 @@ IndependentSolveTool：
 """
 import json
 import os
-import threading
 from typing import Any
 
 import requests
@@ -18,7 +17,6 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 # ---- 模块级 API 配置（线程安全：threading.local()，跨模块共享） ----
-
 from shared._subject_api_config import get_subject_api_config, set_subject_api_config
 
 

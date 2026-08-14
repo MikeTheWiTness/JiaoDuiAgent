@@ -86,7 +86,7 @@ class TestCopyMdImages:
             pass  # src1 空, src2 有图
         sd2 = fx.src_dirs[1]
         (sd2 / "only_in_src2.png").write_bytes(b"img")
-        sd1 = fx.src_dirs[0]
+        fx.src_dirs[0]
 
         content = "![图](./only_in_src2.png)"
         result = copy_md_images(content, fx.src_dirs, fx.target_img_dir)
@@ -154,7 +154,7 @@ class TestCopyMdImages:
         content = "![x](./auto.png)"
         target = fx.target_img_dir.parent / "nested" / "images"
         assert not target.exists()
-        result = copy_md_images(content, fx.src_dirs, target)
+        copy_md_images(content, fx.src_dirs, target)
         assert target.exists()
 
     def test_filename_with_special_chars(self, fx):

@@ -337,7 +337,7 @@ def insert_comments_from_docx(docx_path, md_text):
     if _COMMENT_END_TOKEN_RE.search(md_text):
         # md 含占位符（pandoc 转换前已注入 temp docx）→ 精确替换，位置来自 docx
         new_md = replace_comment_placeholders(md_text, comments_dict, anchors)
-        log(f"✅ 已按占位符精确插入批注（位置来自 docx）")
+        log("✅ 已按占位符精确插入批注（位置来自 docx）")
     else:
         # 回退：文本搜索 + 屏蔽式插入（无占位符，如注入失败或 md 来自他处）
         new_md = insert_comments_into_md(md_text, comments_dict, anchors)

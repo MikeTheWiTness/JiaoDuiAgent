@@ -4,8 +4,8 @@
 - 纯数字短行（题号 vs 页码）上下文判定
 - 常规无用内容过滤
 """
-import sys
 import os
+import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

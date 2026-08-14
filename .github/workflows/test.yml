@@ -52,6 +52,11 @@ jobs:
           pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pytest pytest-cov
           pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.lock
 
+      - name: Lint with ruff
+        run: |
+          pip install -i https://pypi.tuna.tsinghua.edu.cn/simple ruff
+          ruff check .
+
       - name: Run tests
         run: |
           python -m pytest --tb=short -q -m "not e2e and not network and not slow"

@@ -8,8 +8,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.free_proofread import (
     create_free_proofread_md,
-    get_free_proofread_output_dir,
-    is_free_proofread_mode,
 )
 
 
@@ -55,36 +53,6 @@ class TestCreateFreeProofreadMd(unittest.TestCase):
         md_path = create_free_proofread_md(text, output_dir=self.tmpdir)
         basename = os.path.basename(md_path)
         self.assertIn("自由校对", basename)
-
-
-class TestGetFreeProofreadOutputDir(unittest.TestCase):
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def test_returns_dir_path(self):
-        result = get_free_proofread_output_dir(self.tmpdir)
-        self.assertIsInstance(result, str)
-        self.assertTrue(result.startswith(self.tmpdir))
-
-    def test_dir_name_contains_timestamp(self):
-        result = get_free_proofread_output_dir(self.tmpdir)
-        basename = os.path.basename(result)
-        self.assertIn("自由校对", basename)
-
-    def test_dir_created(self):
-        result = get_free_proofread_output_dir(self.tmpdir)
-        self.assertTrue(os.path.exists(result))
-        self.assertTrue(os.path.isdir(result))
-
-
-class TestFreeProofreadMode(unittest.TestCase):
-    def test_is_free_proofread_mode(self):
-        self.assertTrue(is_free_proofread_mode("自由校对"))
-        self.assertFalse(is_free_proofread_mode("讲义"))
-        self.assertFalse(is_free_proofread_mode("试卷"))
 
 
 class TestSubjectFreeMode(unittest.TestCase):

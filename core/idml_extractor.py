@@ -250,7 +250,7 @@ def _sort_stories(story_start, story_data, y_bin_size=60.0):
         if not y_values:
             continue
         y_min = min(y_values)
-        y_max = max(y_values)
+        max(y_values)
 
         # 按 y 分箱
         bins = {}
@@ -283,7 +283,7 @@ def _classify_heading(text, style):
     if _is_annotation_style(style):
         return None
 
-    style_lower = style.lower()
+    style.lower()
 
     if style in ('第一讲', '讲内容'):
         return 1

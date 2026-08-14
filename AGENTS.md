@@ -103,7 +103,7 @@ ADR 对应实现 commit 合并后，**立即**把 ADR 顶部「状态」字段�
 
 ## 架构设计约束（不可违反）
 
-1. **`core/` 零学科特定逻辑**。无 `if subject == "语文"` 分支，无硬编码工具映射。`api_client.py` 接受 `max_loops` 参数，不从学科名推算。
+1. **`core/` 零学科特定逻辑**。无 `if subject == "语文"` 分支，无硬编码工具映射。`max_loops` 由 `SessionContext` 携带（`api_client.call_api(ctx, ...)` 读取 `ctx.max_loops`），不从学科名推算。
 2. **`subject.py` 拥有全部业务逻辑**。工具、提示词、工具调用限制、拆分逻辑、校对流程、钩子——全部在学科的 `subject.py` 定义。可复用 `core/defaults`，也可完全替换。
 3. **`app.py` 拥有 UI**。每个学科有自己的 GUI。`ui/default_app.py` 是参考模板（可继承），非共享单体。`ui/widgets.py` 提供可复用构建块。
 4. **学科目录自治**。新增学科 = 新建目录含 `main.py` + `subject.py` + `app.py` + `config.json`。`core/`、`shared/`、`ui/` 零改动。
@@ -115,36 +115,34 @@ ADR 对应实现 commit 合并后，**立即**把 ADR 顶部「状态」字段�
 
 ## SubjectApp 接口
 
-每个 `subject.py` 必须定义 `SubjectApp` 类，含以下方法：
+每个 `subject.py` 定义 `SubjectApp` 类，继承 `core.base_subject.BaseSubjectApp`。零差异方法（`split_exam`、`collect_paper_dirs`、`get_ui_features`、`get_supported_file_types`、`proofread_one` 等）由基类提供，学科只覆盖学科化方法：
 
 ```python
-class SubjectApp:
-    name: str                          # 显示名（如 "高中物理"）
+class SubjectApp(BaseSubjectApp):
+    # 类属性
+    name: str          # 显示名（如 "高中物理"）
+    LEVEL: str         # 学段
+    SUBJECT: str       # 学科
 
     def __init__(self, subject_dir):   # subject_dir = 本学科目录路径
-        self.subject_dir = subject_dir
-        self.config = load_config(subject_dir)
-        self.tools = self.build_tools()
+        super().__init__(subject_dir)  # 基类：load_config + build_tools
 
-    def build_tools(self) -> list:     # 工具实例列表
+    # 学科化方法（必须覆盖）
+    def build_tools(self) -> list           # 工具实例列表
     def get_max_tool_loops(self) -> int
     def get_tool_instructions(self) -> str
     def get_question_prompt(self) -> str
-    def get_knowledge_prompt(self) -> str
+    def get_review_prompt(self) -> str      # 批注评审提示词
 
-    # 拆分
+    # 拆分（讲义走此方法；试卷拆分由基类 split_exam 统一实现）
     def split_lecture(self, md_file, output_root, base_name, options)
-    def split_exam(self, md_file, output_root, base_name)
-    def generate_knowledge(self, md_file, output_root, base_name)
 
-    # 校对
-    def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf)
-    def collect_paper_dirs(self, base_path) -> list
-
-    # 钩子（默认 no-op）
-    def pre_proofread_hook(self, md_text) -> str
+    # 钩子（默认 no-op；高中语文覆盖 _build_pre_hook 注入文言文搜索）
+    def pre_proofread_hook(self, md_text, api_url=None, api_key=None, model=None, q_dir=None) -> str
     def post_proofread_hook(self, result, q_dir): return result
 ```
+
+`proofread_one(self, ctx, q_dir, q_name, generate_pdf, source_mode="试卷", archive_root=None)`、`split_exam(self, md_file, output_root, base_name, options=None)` 等零差异方法由 `BaseSubjectApp` 提供，学科无需重复实现。`generate_knowledge` 已废弃（ADR-0017）。
 
 ---
 

@@ -1,6 +1,5 @@
 """text nav tools"""
 import threading
-from typing import Optional
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -16,7 +15,7 @@ def set_current_text(text: str):
     _thread_local.current_text = text
 
 
-def _get_current_text() -> Optional[str]:
+def _get_current_text() -> str | None:
     """获取当前线程的校对文本。"""
     return getattr(_thread_local, 'current_text', None)
 

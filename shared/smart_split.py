@@ -99,7 +99,7 @@ def smart_split_with_callable(md_content, llm_callable, md_file=None, output_roo
 
         log(f"   ⚠️ 第 {attempt+1} 次未识别到有效题目标记")
 
-    log(f"   ⚠️ 智能分割失败，降级为单单元")
+    log("   ⚠️ 智能分割失败，降级为单单元")
     return [{"content": md_content}]
 
 

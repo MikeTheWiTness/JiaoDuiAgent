@@ -852,7 +852,7 @@ def _build_math_only_re():
             if name.isalpha():
                 cmds.add(name)
     cmds.update({"mp", "supset", "sim", "circ"})
-    return re.compile(r'\\(%s)(?![a-zA-Z])' % '|'.join(sorted(cmds)))
+    return re.compile(r'\\({})(?![a-zA-Z])'.format('|'.join(sorted(cmds))))
 
 _MATH_ONLY_RE = _build_math_only_re()
 
@@ -1369,7 +1369,7 @@ def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -
             orig_comments = None
 
         corrections = data.get("corrections", [])
-        tool_calls = data.get("tool_calls", [])
+        data.get("tool_calls", [])
         review_judgments = data.get("review_judgments", [])
         review_supplements = data.get("review_supplements", [])
         section_title = _get_section_name(subdir)

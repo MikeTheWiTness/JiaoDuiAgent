@@ -5,8 +5,6 @@ shared/sympy_tools/templates.py（沙箱内嵌代码）中的 _parse_formula 实
 """
 import inspect
 
-import pytest
-
 
 def _extract_parse_formula_source(module, func_name: str) -> str:
     """提取模块中函数源码字符串（去缩进、去装饰器）。"""
