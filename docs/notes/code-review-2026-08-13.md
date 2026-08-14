@@ -16,6 +16,18 @@
 
 ---
 
+## 决策更新：LaTeX 排版功能将下线（仅保留 Word 排版）
+
+> 后续修复中，LaTeX/PDF 编译链路相关问题**不再修复**（相关文件未来随功能下线删除）。标注 ❌ 的条目取消：
+>
+> - **P1（已修复，功能将下线）**：P1-4 的 `shared/pdf_compiler.py` 部分、P1-5
+> - **P2（取消）**：D1、D2、F4
+> - **P3（取消）**：死代码 `shared/latex_generator.py:341-343`、风格 `shared/review_latex.py:58`；lint 债中 `tests/test_fix_latex_escapes.py` / `shared/latex_generator.py` / `tests/test_math_pdf.py` / `tools/build_minimal_texlive.py` 随文件下线一并取消
+>
+> Word 排版链路（`core/docx_report.py`、`shared/formula_render.py`、`shared/comment_marker.py`）保留，相关问题（B1/B2、D5、P1-6/P1-7 等）照常修复。
+
+---
+
 ## 一、P1 级问题（7 条，建议第一批修复）
 
 ### P1-1 UI 任务状态恢复无 finally 兜底 → 按钮永久置灰、应用卡死
@@ -94,8 +106,8 @@
 
 | # | 位置 | 问题 | 建议 |
 |---|---|---|---|
-| D1 | `shared/pdf_compiler.py:108-136` | 每次编译 `copytree` 全量复制便携版字体目录（数百 MB 级），无缓存/增量 | 缓存到固定目录 + 时间戳校验 |
-| D2 | `shared/pdf_compiler.py:423-428` | `item not in (images_map or {})` 比较对象是 section 标题 vs 目录名，语义错位 → 几乎无条件复制 tex_dir 全部子目录（含 `__pycache__`） | 修正比较逻辑或只复制 images 目录 |
+| D1 ❌ | `shared/pdf_compiler.py:108-136` | 每次编译 `copytree` 全量复制便携版字体目录（数百 MB 级），无缓存/增量 | 缓存到固定目录 + 时间戳校验 |
+| D2 ❌ | `shared/pdf_compiler.py:423-428` | `item not in (images_map or {})` 比较对象是 section 标题 vs 目录名，语义错位 → 几乎无条件复制 tex_dir 全部子目录（含 `__pycache__`） | 修正比较逻辑或只复制 images 目录 |
 | D3 | `shared/shidianguji_playwright.py:19-32` | `is_playwright_available()` 每次 launch+close 一个 Chromium 来"检测"，`extract_chapter`/`_search_detail_url` 各调一次，一道文言文题前置搜索启动 2-3 次浏览器 | 模块级缓存检测结果 |
 | D4 | `shared/sympy_tools/sandbox.py:35` | 每次计算 fork 新 Python 子进程 + 冷导入 sympy（约 1-3s/次），工具循环频繁调用时显著拖慢 | 常驻 worker 进程池或进程内 + 锁串行 |
 | D5 | `core/docx_report.py:24, 507-525` | 模块导入即拉起 matplotlib 并扫全系统字体（`_find_cjk_font` 遍历 ttflist，首载 0.5-2s）；每条批注每个 `$...$` 公式单独 `plt.figure`+`savefig`（100-500ms/张） | formula_render 惰性导入；相同公式体缓存 PNG；复用单个 figure |
@@ -119,7 +131,7 @@
 | F1 | `shared/physics_tools.py` vs `shared/chemistry_tools.py` | 两个解题工具约 90% 逐行相同（仅类名/文案/落盘文件名不同），ADR-0023 只去重了凭证部分 | 抽公共基类 + 学科子类 |
 | F2 | 7 个 `subject.py` | `get_question_prompt`/`get_review_prompt` 的拼接逻辑 3 份逐字相同 + 4 种变体（历史 react 评审无工具指令、英语工具指令只有名字列表）；历史/语文 `split_lecture` 也几乎逐字重复 | 下沉 `BaseSubjectApp` 模板方法 + 差异开关（如 `_append_tool_instructions`/`_post_split_hook`） |
 | F3 | `shared/chemistry_tools.py:52`、`shared/sympy_tools/tools.py:400`、`shared/sympy_tools/templates.py:189` | 化学式解析三处重复（注释自认需"保持同步"，易漂移） | 收敛为单一实现 |
-| F4 | `shared/latex_generator.py:59-75` vs `shared/review_latex.py:19-36` | `_LATEX_SPECIAL` + `_escape_text` 重复定义（review_latex 多 `#` 一项） | 收敛到一处 |
+| F4 ❌ | `shared/latex_generator.py:59-75` vs `shared/review_latex.py:19-36` | `_LATEX_SPECIAL` + `_escape_text` 重复定义（review_latex 多 `#` 一项） | 收敛到一处 |
 | F5 | `shared/split_post_utils.py:15-46` vs `:49-90` | `remove_navigation_units` 与 `mark_navigation_units` 遍历逻辑几乎相同 | 抽公共遍历函数 |
 | F6 | `ui/default_app.py:628`、`:1130-1133`、`core/docx_report.py:216` | 自然排序三份拷贝 | 统一到 core 工具函数 |
 
@@ -162,7 +174,7 @@
 - `shared/bash_tool.py:307-390`：`set_current_file`/`get_current_file`/`_next_mark_number`/`_sanitize_proofread_text`/`_validate_latex_braces`（ADR-0016 半接线产物，无生产调用方）
 - `core/base_subject.generate_knowledge`（ADR-0017 已废弃）
 - `core/docx_report.py:147-150`：`if gid in used_ids` 永不成立（gid 单调递增）
-- `shared/latex_generator.py:341-343`：`if not available_files: pass`；`templates.py:465`：`domain` 死参数
+- ~~`shared/latex_generator.py:341-343`：`if not available_files: pass`~~（LaTeX 下线）；`templates.py:465`：`domain` 死参数
 - `ui/default_app.py:98-103`：`show_intent_clean_option`/`show_source_modes`/`show_exec_modes` 定义后无人消费；`:865-866` `img_dir`/`fname` 死变量；`intent_clean_enabled` 无 UI 控件恒真
 
 ### 3. 测试工程
@@ -187,7 +199,7 @@
 - `core/docx_report._convert_multiline_tables:291`：`re.split(r" {2,}")` 会把含双空格的单元格内容错误切分
 - `core/logging_utils.py:115-125`：新旧双轨日志（`_log_func` + logging），`_initialized` 读取无锁；`emit` 吞 UI 回调异常无降级日志
 - `shared/chinese_classics_tools.py:890`：`except (json.JSONDecodeError, Exception)` 冗余（前者是后者子类）；`:859` `startswith("[E")` 与任何返回格式不匹配
-- `shared/review_latex.py:58`：所有换行（含空行）一律转 `\\`，空行产生 LaTeX "no line here to end" 警告
+- ~~`shared/review_latex.py:58`：所有换行（含空行）一律转 `\\`，空行产生 LaTeX "no line here to end" 警告~~（LaTeX 下线）
 - `shared/sympy_tools/safety.py:12-16`：黑名单 `\bhttp\b`/`\bsubprocess\b` 误伤注释/字符串字面量
 - `shared/image_utils.py:88-94`：不同源目录同名图片静默先到先得
 - `shared/plan_tools.py:71`：`_run` 返回 dict 与 BaseTool 常规 str 返回不一致
