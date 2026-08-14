@@ -4,6 +4,7 @@ import shutil
 import tempfile
 
 from shared.bash_tool import (
+    EditFileTool,
     FileReadTool,
     FileWriteTool,
     _validate_bash_command,
@@ -109,6 +110,19 @@ class TestValidateBashCommand:
         err = _validate_bash_command("nmap localhost", None)
         assert err is not None
 
+    # ---- python -c 沙箱（P1-2） ----
+
+    def test_block_python_c_import_shutil(self):
+        err = _validate_bash_command('python -c "import shutil; shutil.rmtree(\'/tmp/x\')"', None)
+        assert err is not None
+
+    def test_block_python_c_import_os_open(self):
+        err = _validate_bash_command('python -c "import os; print(open(\'/etc/hosts\').read())"', None)
+        assert err is not None
+
+    def test_allow_python_c_pure_calc(self):
+        assert _validate_bash_command('python -c "print(1+1)"', None) is None
+
 
 class TestValidateFilePath:
     """回归：_validate_file_path（FileReadTool/FileWriteTool 路径限制）。
@@ -188,3 +202,21 @@ class TestValidateFilePath:
     def test_read_tool_free_mode_compatible(self):
         target = self._target()
         assert "内容" in FileReadTool()._run(target)
+
+    # ---- EditFileTool 集成（P1-3） ----
+
+    def test_edit_tool_blocks_outside_path(self):
+        et = EditFileTool(allowed_dir=self.tmp)
+        result = et._run("/etc/hosts", "旧", "新")
+        assert "错误" in result
+
+    def test_edit_tool_parent_traversal_blocked(self):
+        et = EditFileTool(allowed_dir=self.tmp)
+        outside = os.path.join(self.tmp, "..", "secret.txt")
+        result = et._run(outside, "x", "y")
+        assert "错误" in result
+
+    def test_edit_tool_allows_inside_path(self):
+        target = self._target()
+        et = EditFileTool(allowed_dir=self.tmp)
+        assert "替换成功" in et._run(target, "内容", "新内容")

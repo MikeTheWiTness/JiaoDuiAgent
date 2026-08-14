@@ -258,6 +258,25 @@ def _format_compile_error(stage: str, retcode_info: str,
 
 # ---- C1: _run_xelatex / _run_xdvipdfmx ----
 
+def _run_with_timeout(cmd: list, compile_kwargs: dict, stage_name: str) -> int:
+    """运行子进程，超时时终止子进程并抛 RuntimeError。
+
+    subprocess.call/run 在 timeout 时抛 TimeoutExpired 但不终止子进程，
+    改用 Popen + communicate(timeout=...)：超时自动 kill 并回收，避免
+    xelatex/xdvipdfmx 残留进程持续占用 CPU 并写出半成品。
+    """
+    kw = dict(compile_kwargs)
+    timeout = kw.pop('timeout', None)
+    proc = subprocess.Popen(cmd, **kw)
+    try:
+        proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise RuntimeError(f"{stage_name} 编译超时（{timeout}秒），已终止进程")
+    return proc.returncode
+
+
 def _run_xelatex(xelatex_path: str, tmp_tex: str, tmpdir: str,
                  base: str, log_path: str,
                  build_env: dict | None) -> int:
@@ -285,7 +304,7 @@ def _run_xelatex(xelatex_path: str, tmp_tex: str, tmpdir: str,
         si.wShowWindow = subprocess.SW_HIDE
         compile_kwargs['startupinfo'] = si
 
-    retcode = subprocess.call(cmd, **compile_kwargs)
+    retcode = _run_with_timeout(cmd, compile_kwargs, "XeLaTeX")
     # nonstopmode 下 xelatex 即使只有 minor warnings 也会返回非零，
     # 但 XDV 可能生成成功。以 XDV 是否有效为准。
     xdv_path = os.path.join(tmpdir, f"{base}.xdv")
@@ -327,7 +346,7 @@ def _run_xdvipdfmx(xelatex_path: str, tmpdir: str, base: str,
         compile_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
         compile_kwargs['startupinfo'] = nt_startupinfo
 
-    retcode2 = subprocess.call(cmd, **compile_kwargs)
+    retcode2 = _run_with_timeout(cmd, compile_kwargs, "xdvipdfmx")
 
     # 检测 xdvipdfmx 阶段失败
     pdf_exists = os.path.isfile(tmp_pdf)

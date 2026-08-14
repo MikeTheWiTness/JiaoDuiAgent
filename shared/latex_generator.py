@@ -1307,6 +1307,16 @@ def _get_section_name(q_dir: str) -> str:
     return name
 
 
+def _restore_marked_newlines(text: str) -> str:
+    """把 marked_text 中的字面 \\n 还原为换行，保留 LaTeX 命令（\\newline / \\noindent 等）。
+
+    marked_text 存盘时真实换行被转成字面 \\n（core/parsing.py），
+    直接 replace 会误伤 \\newline、\\noindent 等命令中的 \\n 前缀。
+    只还原后跟非 ASCII 字母的 \\n（LaTeX 命令名均为「\\ + 字母」）。
+    """
+    return re.sub(r'(?<!\\)\\n(?![a-zA-Z])', '\n', text)
+
+
 def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -> str | None:
     """扫描讲义目录下所有题目/知识子目录，生成一份汇总 PDF。
 
@@ -1345,7 +1355,7 @@ def generate_combined_pdf(lecture_dir: str, pdf_output_dir: str | None = None) -
 
         marked_text = data.get("marked_text", "")
         if marked_text:
-            md_content = marked_text.replace(chr(92) + 'n', '\n')
+            md_content = _restore_marked_newlines(marked_text)
         else:
             with open(md_path, encoding="utf-8") as f:
                 md_content = f.read()

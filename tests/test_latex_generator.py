@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.latex_generator import _escape_math_chars_outside_math
+from shared.latex_generator import _escape_math_chars_outside_math, _restore_marked_newlines
 
 
 class TestEscapeMathCharsOutsideMath(unittest.TestCase):
@@ -54,6 +54,44 @@ class TestEscapeMathCharsOutsideMath(unittest.TestCase):
 
     def test_empty_string(self):
         self.assertEqual(_escape_math_chars_outside_math(''), '')
+
+
+class TestRestoreMarkedNewlines(unittest.TestCase):
+    """marked_text 字面 \\n 还原为换行，同时保留 LaTeX 命令（P1-5）。
+
+    回归：修复前用 str.replace('\\n', '\\n') 会把 \\noindent / \\newline 等
+    命令中的 \\n 前缀一并替换，生成损坏 .tex。
+    """
+
+    def test_literal_newline_before_chinese_restored(self):
+        self.assertEqual(
+            _restore_marked_newlines(r'编号：第1题\n内容'),
+            '编号：第1题\n内容')
+
+    def test_literal_newline_before_digit_restored(self):
+        self.assertEqual(
+            _restore_marked_newlines(r'abc\n123'),
+            'abc\n123')
+
+    def test_literal_newline_before_punct_restored(self):
+        self.assertEqual(
+            _restore_marked_newlines(r'abc\n, def'),
+            'abc\n, def')
+
+    def test_noindent_command_preserved(self):
+        self.assertEqual(
+            _restore_marked_newlines(r'\noindent 段落'),
+            r'\noindent 段落')
+
+    def test_newline_command_preserved(self):
+        self.assertEqual(
+            _restore_marked_newlines(r'\newline 后'),
+            r'\newline 后')
+
+    def test_mixed_command_and_literal_newline(self):
+        self.assertEqual(
+            _restore_marked_newlines(r'\noindent\n正文'),
+            r'\noindent' + '\n正文')
 
 
 if __name__ == "__main__":

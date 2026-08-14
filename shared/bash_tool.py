@@ -10,6 +10,8 @@ import subprocess
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from shared.sympy_tools.safety import check_dangerous
+
 # ─── BashTool ───────────────────────────────────────────────
 
 BASH_TIMEOUT = 30  # Bash 命令执行超时（秒）
@@ -65,6 +67,14 @@ def _validate_bash_command(command: str, allowed_dir: str | None) -> str | None:
     if first_cmd and first_cmd not in _ALLOWED_COMMANDS:
         return f"错误：不允许的命令 '{first_cmd}'。允许的命令: {', '.join(_ALLOWED_COMMANDS[:6])}..."
 
+    # 2.5 python -c 代码参数静态扫描：白名单放行 python，但 -c 内的代码
+    # 可绕过危险模式与 allowed_dir 路径检查（如 import shutil; shutil.rmtree）。
+    # 复用 sympy 沙箱黑名单，拦截文件/网络/子进程/动态执行等危险操作。
+    if first_cmd in ("python", "python3") and re.search(r'-c\b', stripped):
+        danger = check_dangerous(stripped)
+        if danger:
+            return f"错误：python -c 代码包含危险操作（{danger}）"
+
     # 3. 路径越界检查（如有 allowed_dir）
     if allowed_dir:
         allowed = os.path.abspath(allowed_dir)
@@ -72,8 +82,8 @@ def _validate_bash_command(command: str, allowed_dir: str | None) -> str | None:
         if re.search(r'(\b|;)\s*cd\s+', stripped):
             return "错误：不允许 cd 命令"
 
-        # 禁止绝对路径引用（/etc/、/home/ 等），
-        # 但允许 python -c 内部的字符串（不做静态分析）
+        # 禁止绝对路径引用（/etc/、/home/ 等）。
+        # python -c 内部字符串的路径无法逐 token 检查，已由上方 check_dangerous 黑名单兜底。
         # 简单策略：禁止以 / 开头的路径参数
         for token in stripped.split():
             if token.startswith('/') and not token.startswith(allowed):
@@ -84,7 +94,7 @@ def _validate_bash_command(command: str, allowed_dir: str | None) -> str | None:
 
 class BashParams(BaseModel):
     command: str = Field(
-        description="要执行的 bash 命令。支持管道、重定向、python -c 等。"
+        description="要执行的 bash 命令。支持管道、重定向。文件读写请用 read_file/write_file/edit_file 专用工具。"
     )
 
 
@@ -100,10 +110,10 @@ class BashTool(BaseTool):
     name: str = "bash"
     description: str = (
         "执行 bash 命令来读取或编辑文件。常用命令：\n"
-        "- python -c \"...\" — 用 Python 脚本读取/编辑文件（最推荐，跨平台）\n"
         "- sed -i 's/旧/新/g' <文件路径> — 替换文本\n"
-        "注意：Windows 不支持 cat；用 python 读取文件。"
-        "每个 python -c 命令末尾必须有 print()，否则看不到输出！"
+        "- cat <文件路径> — 读取文件（Windows 不支持，用 read_file）\n"
+        "注意：优先用 read_file/write_file/edit_file 专用工具读写文件（受目录限制保护）；"
+        "python -c 仅限纯计算，禁止文件/网络/子进程操作。"
     )
     args_schema: type[BaseModel] = BashParams
 
@@ -165,7 +175,12 @@ class EditFileTool(BaseTool):
     )
     args_schema: type[BaseModel] = EditFileParams
 
+    allowed_dir: str | None = None
+
     def _run(self, path: str, old_string: str, new_string: str) -> str:
+        err = _validate_file_path(path, self.allowed_dir)
+        if err:
+            return err
         if not old_string:
             return "错误：old_string 不能为空"
 

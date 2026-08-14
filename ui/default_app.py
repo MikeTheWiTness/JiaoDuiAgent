@@ -251,6 +251,9 @@ class DefaultApp:
 
     def _delete_selected_from_list(self):
         """删除清单中选中的项。"""
+        if self.task_running:
+            messagebox.showwarning("提示", "任务运行中，无法修改清单")
+            return
         selected = self.list_box.curselection()
         if not selected:
             return
@@ -725,38 +728,37 @@ class DefaultApp:
         self.proofread_result = {}
 
         def _run():
-            pdf_dir = os.path.join(self.output_dir.get(), "校对PDF")
-            total = len(self.proofread_list)
-            success = 0
-            for i, (dir_path, paper_name) in enumerate(self.proofread_list):
-                if self.task_interrupt:
-                    log("\n===== 任务已中断 =====")
-                    break
-                log(f"\n📄 [{i+1}/{total}] 正在生成 PDF：{paper_name}")
-                if self.generate_pdf.get():
-                    try:
-                        pdf_path = generate_combined_pdf(dir_path, pdf_dir)
-                        if pdf_path:
-                            log(f"   ✅ PDF 已生成：{pdf_path}")
-                            success += 1
-                        else:
-                            log(f"   ⚠️ PDF 生成失败：未找到可用的校对数据")
-                    except Exception as e:
-                        log(f"   ❌ PDF 生成异常：{e}")
-                if self.pipeline.typeset_enabled and self.generate_docx.get():
-                    try:
-                        docx_dir = os.path.join(self.output_dir.get(), "校对Word")
-                        docx_path = generate_combined_docx(dir_path, docx_dir)
-                        if docx_path:
-                            log(f"   ✅ Word 批注报告已生成：{docx_path}")
-                    except Exception as e:
-                        log(f"   ❌ Word 生成异常：{e}")
-            if not self.task_interrupt:
-                log(f"\n===== PDF 生成完成：{success}/{total} =====")
-            self.task_running = False
-            self.task_interrupt = False
-            self.root.after(0, lambda: self.btn_action.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.btn_stop.config(state=tk.DISABLED))
+            try:
+                pdf_dir = os.path.join(self.output_dir.get(), "校对PDF")
+                total = len(self.proofread_list)
+                success = 0
+                for i, (dir_path, paper_name) in enumerate(self.proofread_list):
+                    if self.task_interrupt:
+                        log("\n===== 任务已中断 =====")
+                        break
+                    log(f"\n📄 [{i+1}/{total}] 正在生成 PDF：{paper_name}")
+                    if self.generate_pdf.get():
+                        try:
+                            pdf_path = generate_combined_pdf(dir_path, pdf_dir)
+                            if pdf_path:
+                                log(f"   ✅ PDF 已生成：{pdf_path}")
+                                success += 1
+                            else:
+                                log(f"   ⚠️ PDF 生成失败：未找到可用的校对数据")
+                        except Exception as e:
+                            log(f"   ❌ PDF 生成异常：{e}")
+                    if self.pipeline.typeset_enabled and self.generate_docx.get():
+                        try:
+                            docx_dir = os.path.join(self.output_dir.get(), "校对Word")
+                            docx_path = generate_combined_docx(dir_path, docx_dir)
+                            if docx_path:
+                                log(f"   ✅ Word 批注报告已生成：{docx_path}")
+                        except Exception as e:
+                            log(f"   ❌ Word 生成异常：{e}")
+                if not self.task_interrupt:
+                    log(f"\n===== PDF 生成完成：{success}/{total} =====")
+            finally:
+                self._reset_task_state()
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -805,12 +807,21 @@ class DefaultApp:
                 log("❌ 文件名包含 ')'，已取消")
                 return
 
+        self.task_running = True
+        self.task_interrupt = False
         self.btn_action.config(state=tk.DISABLED)
+        self.btn_stop.config(state=tk.NORMAL)
         self.on_start_conversion()
         t = threading.Thread(target=self._conversion_thread, args=(out_dir,), daemon=True)
         t.start()
 
     def _conversion_thread(self, out_root):
+        try:
+            self._conversion_thread_run(out_root)
+        finally:
+            self._reset_task_state()
+
+    def _conversion_thread_run(self, out_root):
         source = self.content_type.get()
         do_split = self.pipeline.split_enabled
         do_proof = self.pipeline.proof_enabled
@@ -895,6 +906,9 @@ class DefaultApp:
             log(f"开始转换，模式={source}，共 {total} 个文件")
 
             for idx, file_path in enumerate(self.file_list, 1):
+                if self.task_interrupt:
+                    log("\n===== 任务已中断 =====")
+                    break
                 fname = os.path.basename(file_path)
                 basename = os.path.splitext(fname)[0].strip()
                 ext = os.path.splitext(fname)[1].lower()
@@ -1042,7 +1056,7 @@ class DefaultApp:
         else:
             log(f"✅ 拆分完成，成功 {len(converted_dirs)} 个")
 
-        if do_proof:
+        if do_proof and not self.task_interrupt:
             if converted_dirs:
                 log("\n📋 自动加载到校对清单...")
                 for d in converted_dirs:
@@ -1065,9 +1079,11 @@ class DefaultApp:
         model = self.api_config.get("model_name", "")
         if not all([api_url, api_key, model]):
             messagebox.showerror("错误", "请先配置 API（点击 ⚙️ API 配置）")
+            self._reset_task_state()
             return
         if not self.proofread_list:
             messagebox.showwarning("提示", "校对清单为空，请先进行转换或选择试卷目录")
+            self._reset_task_state()
             return
         if self.task_running:
             return
@@ -1085,6 +1101,13 @@ class DefaultApp:
             self.task_interrupt = True
             self._interrupt_event.set()  # 通知所有线程中断
             log("===== 已触发中断（取消进行中的请求） =====")
+
+    def _reset_task_state(self):
+        """统一复位任务状态并恢复按钮（线程内调用，UI 更新经 root.after 调度）。"""
+        self.task_running = False
+        self.task_interrupt = False
+        self.root.after(0, lambda: self.btn_action.config(state=tk.NORMAL))
+        self.root.after(0, lambda: self.btn_stop.config(state=tk.DISABLED))
 
     def _proofread_thread(self):
         api_url = self.api_config.get("api_url", "")
@@ -1281,10 +1304,7 @@ class DefaultApp:
             import traceback
             log(f"❌ 任务异常：{e}\n{traceback.format_exc()}")
         finally:
-            self.task_running = False
-            self.task_interrupt = False
-            self.root.after(0, lambda: self.btn_action.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.btn_stop.config(state=tk.DISABLED))
+            self._reset_task_state()
 
     def _export_paper_report(self, paper_name, paper_results, report_root):
         safe_name = "".join(c for c in paper_name if c not in r'\/:*?"<>|')

@@ -32,34 +32,37 @@ def _run_in_subprocess(code: str, timeout: int) -> dict:
             "_allowed['__build_class__'] = __build_class__\n"
             "exec(sys.stdin.read(), {'__builtins__': _allowed, '__name__': '__main__'})\n"
         )
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, "-c", restricted_code],
-            input=code, env=env,
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=env, text=True, encoding="utf-8", errors="replace",
             **(dict(creationflags=subprocess.CREATE_NO_WINDOW) if os.name == 'nt' else {}),
         )
+        try:
+            stdout, stderr = proc.communicate(input=code, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            elapsed = int((time.monotonic() - start) * 1000)
+            return {
+                "success": False, "result": None,
+                "error": f"Execution timed out ({timeout}s)",
+                "code": code, "elapsed_ms": elapsed,
+            }
+
         elapsed = int((time.monotonic() - start) * 1000)
 
         if proc.returncode != 0:
             return {
                 "success": False, "result": None,
-                "error": proc.stderr.strip() or "Unknown subprocess error",
+                "error": stderr.strip() or "Unknown subprocess error",
                 "code": code, "elapsed_ms": elapsed,
             }
 
-        result = json.loads(proc.stdout.strip())
+        result = json.loads(stdout.strip())
         return {
             "success": True, "result": result,
             "error": None, "code": code, "elapsed_ms": elapsed,
-        }
-
-    except subprocess.TimeoutExpired:
-        elapsed = int((time.monotonic() - start) * 1000)
-        return {
-            "success": False, "result": None,
-            "error": f"Execution timed out ({timeout}s)",
-            "code": code, "elapsed_ms": elapsed,
         }
     except Exception as e:
         elapsed = int((time.monotonic() - start) * 1000)
