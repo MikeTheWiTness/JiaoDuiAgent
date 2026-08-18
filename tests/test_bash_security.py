@@ -4,6 +4,7 @@ import shutil
 import tempfile
 
 from shared.bash_tool import (
+    BashTool,
     EditFileTool,
     FileReadTool,
     FileWriteTool,
@@ -123,6 +124,24 @@ class TestValidateBashCommand:
     def test_allow_python_c_pure_calc(self):
         assert _validate_bash_command('python -c "print(1+1)"', None) is None
 
+    def test_block_python_c_sys_modules(self):
+        """sys.modules 可绕过 import os 黑名单，必须拦截"""
+        err = _validate_bash_command(
+            'python -c "import sys; sys.modules[\'os\'].system(\'id\')"', None)
+        assert err is not None
+
+    def test_block_python_c_importlib(self):
+        """importlib.import_module 可绕过 import os 黑名单，必须拦截"""
+        err = _validate_bash_command(
+            'python -c "import importlib; importlib.import_module(\'os\').system(\'id\')"', None)
+        assert err is not None
+
+    def test_block_python_c_builtins(self):
+        """builtins 可绕过 __builtins__ 专门匹配，必须拦截"""
+        err = _validate_bash_command(
+            'python -c "import builtins; builtins.open(\'/etc/hosts\')"', None)
+        assert err is not None
+
     # ---- H1-a：管道/分号/&& 绕过 ----
 
     def test_block_pipe_to_python_c(self):
@@ -202,6 +221,44 @@ class TestValidateBashCommand:
                 f.write("x")
             err = _validate_bash_command(f"cat {target}", work)
             assert err is None
+
+
+class TestBashToolExecution:
+    """BashTool._run 集成：校验拦截的命令不能真正执行，合法简单命令仍可用。"""
+
+    def test_blocked_pipe_is_not_executed(self):
+        with _TempDir() as work:
+            tool = BashTool(allowed_dir=work)
+            result = tool._run('echo pwn | python -c "import os; print(1)"')
+            assert "错误" in result
+            assert "pwn" not in result
+
+    def test_python_c_pure_calc_still_works(self):
+        with _TempDir() as work:
+            tool = BashTool(allowed_dir=work)
+            result = tool._run('python -c "print(40 + 2)"')
+            assert "42" in result
+
+    def test_cat_relative_file_still_works(self):
+        with _TempDir() as work:
+            target = os.path.join(work, "file.txt")
+            with open(target, "w", encoding="utf-8") as f:
+                f.write("内容")
+            tool = BashTool(allowed_dir=work)
+            result = tool._run("cat file.txt")
+            assert "内容" in result
+
+    def test_parent_traversal_is_not_executed(self):
+        with _TempDir() as parent:
+            work = os.path.join(parent, "allowed")
+            os.makedirs(work)
+            secret = os.path.join(parent, "secret.txt")
+            with open(secret, "w", encoding="utf-8") as f:
+                f.write("SECRET")
+            tool = BashTool(allowed_dir=work)
+            result = tool._run("cat ../secret.txt")
+            assert "错误" in result
+            assert "SECRET" not in result
 
 
 class TestValidateFilePath:
