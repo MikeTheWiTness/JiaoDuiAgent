@@ -1,6 +1,6 @@
 # ADR 0004：识典古籍 Playwright 集成与正文精确截取
 
-**状态**：已接受
+**状态**：已实现（commit 688ec4b）
 **日期**：2026-06-26
 **决策者**：MikeTheWiTness
 **相关 ADR**：[[ADR 0003 三层校对架构]](memory/shidianguji-text-extraction.md)

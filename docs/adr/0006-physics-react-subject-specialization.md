@@ -1,6 +1,6 @@
 # ADR 0006：高中物理 ReAct 机制学科化重构
 
-**状态**：已接受
+**状态**：已实现（commit 4bfd29e）
 **日期**：2026-06-29
 **决策者**：MikeTheWiTness
 **相关 ADR**：[[ADR 0005 ReAct 机制核心架构]](0005-react-mechanism-architecture.md)、[[ADR 0007 物理自主解题 Agent]](0007-physics-autonomous-solving-agent.md)

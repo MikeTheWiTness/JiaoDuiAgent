@@ -1,4 +1,4 @@
-"""PlanUpdateTool — LLM ���主管理校对计划的工具。
+"""PlanUpdateTool — LLM 自主管理校对计划的工具。
 
 参考 Claude Code TodoWriteTool (src/tools/TodoWriteTool/) 的模式：
 - LLM 通过工具调用管理计划状态（非系统解析自由文本）

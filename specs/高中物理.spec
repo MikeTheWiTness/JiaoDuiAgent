@@ -78,7 +78,6 @@ a = Analysis(
         'PIL',
         'PIL.Image',
         'docx',
-        'lxml',
         'requests',
         'pydantic',
         'langchain_core',

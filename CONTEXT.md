@@ -1,7 +1,7 @@
 # CONTEXT.md — 校对工具 ReAct 机制设计上下文
 
-> 最后更新：2026-07-24
-> 状态：通用 ReAct 机制已上线；物理校对 ReAct 学科化重构设计完成（ADR-0006，待落地）；物理自主解题 agent 另立 ADR-0007（仅设计）；语文题目校对节点图重构已上线（ADR-0008，已实现 commit 待补）；语文知识类校对维度叠加架构设计完成（ADR-0009，待落地）；工具生成校对标记已落地（ADR-0016，commit `541f66c`）；统一规则拆分 section 模式已落地（ADR-0017，commit `9bf087a`）；智能拆分工具化已落地（ADR-0018，commit `6ddd08b`）；架构审查修复主体已落地（ADR-0019，commit `a0309df`；C1.3 剩余 6 处 except 扫尾延后，部分并入 ADR-0021 承接）；斜体/上下标分离已落地（ADR-0020，commit `3173b29`）；call_api 重构拆分 + 退化测试修复 + 散落超时常量上提设计完成（ADR-0021，已实现 commit faa4d6d；2026-07-24 审查收紧为"纯优化零功能变更"，BashTool 安全加固剥离到独立 ADR）；UI 编排下沉到 core 的 ConversionService+ProofreadService 设计完成（ADR-0022，已落地（部分）commit 552fe9a；保留 task_interrupt 作 mirror 不强行删）；物理/化学跨模块凭证设置逻辑去重 + 缓存锁 + env 读改写保键设计完成（ADR-0023，已实现 commit 72ada63；原"删第三轨"方案回退为跨模块去重，不破坏 build_tools 时序）；latex_generator 大函数 pipeline 化 + 内部重复去重设计完成（ADR-0024，已实现 commit 16d7fcf；"C2 补 `$` 兜底"剥离为独立 bug 修复，加"严格保留原差异 / log 逐字不变"原则）；pdf_compiler 拆四函数 + 诊断去重设计完成（ADR-0025，已实现 commit daf84dd；texmf_root 为 None 返回 None 不传 env）；化学式解析双源同步测试锁设计完成（ADR-0026，已实现 commit 7346cf4；原 inspect.getsource runtime 注入方案因 PyInstaller OSError 回退为保留字面量 + CI 同步锁）；工程化基线（ruff+pre-commit+pyproject+锁文件）+ 集成测试复位（markers 取代 --ignore + 双平台 CI）设计完成（ADR-0027，已实现 commit 298498a；`pytest.ini addopts` 默认加 `-m "not e2e and not network and not slow"` 维根本地行为）；清理与流程约束执行清单完成（Issue 048，不立 ADR）
+> 最后更新：2026-08-18
+> 状态：通用 ReAct 机制已上线；物理校对 ReAct 学科化重构设计完成（ADR-0006，待落地）；物理自主解题 agent 另立 ADR-0007（仅设计）；语文题目校对节点图重构已上线（ADR-0008，已实现 commit 待补）；语文知识类校对维度叠加架构设计完成（ADR-0009，待落地）；工具生成校对标记未实现（ADR-0016，待合并）；统一规则拆分 section 模式已落地（ADR-0017，commit `9bf087a`）；智能拆分工具化已落地（ADR-0018，commit `6ddd08b`）；架构审查修复主体已落地（ADR-0019，commit `a0309df`；C1.3 剩余 6 处 except 扫尾延后，部分并入 ADR-0021 承接）；斜体/上下标分离已落地（ADR-0020，commit `3173b29`）；call_api 重构拆分 + 退化测试修复 + 散落超时常量上提设计完成（ADR-0021，已实现 commit faa4d6d；2026-07-24 审查收紧为"纯优化零功能变更"，BashTool 安全加固剥离到独立 ADR）；UI 编排下沉到 core（ADR-0022）已撤销（未实施），生产继续走 UI 线程；物理/化学跨模块凭证设置逻辑去重 + 缓存锁 + env 读改写保键设计完成（ADR-0023，已实现 commit 72ada63；原"删第三轨"方案回退为跨模块去重，不破坏 build_tools 时序）；latex_generator 大函数 pipeline 化 + 内部重复去重设计完成（ADR-0024，已实现 commit 16d7fcf；"C2 补 `$` 兜底"剥离为独立 bug 修复，加"严格保留原差异 / log 逐字不变"原则）；pdf_compiler 拆四函数 + 诊断去重设计完成（ADR-0025，已实现 commit daf84dd；texmf_root 为 None 返回 None 不传 env）；化学式解析双源同步测试锁设计完成（ADR-0026，已实现 commit 7346cf4；原 inspect.getsource runtime 注入方案因 PyInstaller OSError 回退为保留字面量 + CI 同步锁）；工程化基线（ruff+pre-commit+pyproject+锁文件）+ 集成测试复位（markers 取代 --ignore + 双平台 CI）设计完成（ADR-0027，已实现 commit 298498a；pytest 配置收敛到 pyproject.toml，默认 `-m "not e2e and not network and not slow"` 维根本地行为）；清理与流程约束执行清单完成（Issue 048，不立 ADR）
 
 ## 1. 问题与目标
 
@@ -358,7 +358,7 @@ finalize_result（可信度门槛）→ ok=true 才返回答案
 
 ---
 
-## 12. 工具生成校对标记（ADR-0016，设计中）
+## 12. 工具生成校对标记（ADR-0016，未实现/待合并）
 
 ### 12.1 问题
 
@@ -402,13 +402,13 @@ update_proofread_mark(mark_number, original?, corrected?, reason?)
 | 兼容策略 | 新增可选模式，不替换现有流程 |
 | 工具集 | read_file + add/update_mark + edit_file + write_file |
 
-### 12.4 待落地
+### 12.4 现状
 
-详见 [ADR-0016](docs/adr/0016-tool-generated-proofread-marks.md)。先在语文学科试验，验证通过后逐步推广。
+详见 [ADR-0016](docs/adr/0016-tool-generated-proofread-marks.md)。add_proofread_mark / update_proofread_mark 仍在 `feat/add-proofread-mark` 分支待合并，未进入 main。
 
 ---
 
-## 13. 统一规则拆分 —— section 模式（ADR-0017，设计中）
+## 13. 统一规则拆分 —— section 模式（ADR-0017，已实现）
 
 ### 13.1 问题
 
@@ -449,13 +449,13 @@ title 模式的问题：知识提取易漏/错归、审核需在题目和知识�
 | 连续标题合并 | `## 模块N` 紧接 `### 必备知识` 无实质内容时自动合并为一个单元，消除空壳单元 |
 | 学科扩展 | 留空，后续按需追加 |
 
-### 13.4 待落地
+### 13.4 已实现
 
 详见 [ADR-0017](docs/adr/0017-unified-section-split.md)。改动面：`defaults.py`、`config_loader.py`、`config_schema.py`、`base_subject.py`、`default_app.py` + 8 个学科 config。
 
 ---
 
-## 14. 智能拆分工具化 + 标记统一（ADR-0018，设计中）
+## 14. 智能拆分工具化 + 标记统一（ADR-0018，已实现）
 
 ### 14.1 问题
 
@@ -479,6 +479,6 @@ title 模式的问题：知识提取易漏/错归、审核需在题目和知识�
 
 ADR-0016（edit_file 工具）+ ADR-0017（单元命名）→ ADR-0018
 
-### 14.5 待落地
+### 14.5 已实现
 
 详见 [ADR-0018](docs/adr/0018-smart-split-tool-integration.md)。

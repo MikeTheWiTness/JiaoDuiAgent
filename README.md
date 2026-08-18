@@ -28,7 +28,6 @@ JiaoDuiAgent/
 │   ├── pandoc_utils.py       # Pandoc 转换
 │   ├── env_config.py         # .env 读写
 │   ├── logging_utils.py      # 日志
-│   ├── paths.py              # 路径工具（frozen 兼容）
 │   └── manual_split.py       # 人工标记分割
 ├── shared/                   # 共享工具库
 │   ├── sympy_tools/          # 符号计算工具集
@@ -108,7 +107,7 @@ v3.0 将 LLM 从"一次性生成"升级为**自主规划-定位-校对**的代�
 
 **工作流**：声明计划 → 逐项执行 → 定位原文 → 验证证据 → 标记错误 → 全部完成自检输出
 
-ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校对模式。
+ReAct 模式通过 GUI 开关一键切换；关闭时使用传统提示词模式（部分学科仍保留符号计算/联网等工具调用，并非严格的一次性生成）。
 
 ## 三层分离架构
 
@@ -141,13 +140,13 @@ ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校
 
 | 学科 | 版本 | ReAct | 工具数 | 特色功能 |
 |------|------|-------|--------|---------|
-| 高中语文 | v3.0 | ✅ 范例 | 3（plan + navigate + 前置搜索） | 文言文/诗歌校验、批注评审、识典古籍 |
-| 高中物理 | v3.0 | ✅ | 10（6 sympy + web_search + 3 ReAct） | 物理公式求解、量纲分析、向量运算 |
-| 高中化学 | v3.0 | ✅ | 9（6 sympy + 3 ReAct） | 化学方程式配平、化学计量计算 |
-| 小学数学 | v3.0 | ✅ | 7（4 sympy + 3 ReAct） | 算术验证、方程求解、五核校对 |
-| 初中英语 | v3.0 | ✅ | 3（plan + navigate） | 词汇/语法/题型分层校对 |
-| 小学语文 | v3.0 | ✅ | 3（plan + navigate） | 拼音/汉字/古诗词校对、IDML 支持 |
-| 高中历史 | v3.0 | ✅ | 3（plan + navigate） | 史料辨析、时序判断、史论结合校对 |
+| 高中语文 | v3.0 | ✅ 范例 | 4 | 文言文/诗歌校验、批注评审、识典古籍 |
+| 高中物理 | v3.0 | ✅ | 11 | 物理公式求解、量纲分析、向量运算 |
+| 高中化学 | v3.0 | ✅ | 11 | 化学方程式配平、化学计量计算 |
+| 小学数学 | v3.0 | ✅ | 10 | 算术验证、方程求解、五核校对 |
+| 初中英语 | v3.0 | ✅ | 3 | 词汇/语法/题型分层校对 |
+| 小学语文 | v3.0 | ✅ | 3 | 拼音/汉字/古诗词校对、IDML 支持 |
+| 高中历史 | v3.0 | ✅ | 3 | 史料辨析、时序判断、史论结合校对 |
 
 ## 核心功能
 
@@ -160,7 +159,7 @@ ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校
 | 自由校对模式 | 直接粘贴文本或上传图片/文件，无需 Word 格式 |
 | 批注评审模式 | 提取 Word 文档中的批注，逐条评审批注质量并补充遗漏错误 |
 
-### 五种执行模式
+### 执行模式（管线开关）
 
 | 模式 | 说明 |
 |------|------|
@@ -184,24 +183,20 @@ ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校
 ### 给新学科写 subject.py（v3.0 最低要求）
 
 ```python
-from core.config_loader import load_config
+from core.base_subject import BaseSubjectApp
 from core.defaults import (
     default_split_lecture, default_split_exam,
-    default_generate_knowledge, default_proofread_one,
-    default_collect_paper_dirs,
+    default_proofread_one, default_collect_paper_dirs,
 )
 
-class SubjectApp:
+class SubjectApp(BaseSubjectApp):
     name = "学科名"
     version = "v3.0"
     LEVEL = "学段"
     SUBJECT = "学科"
 
     def __init__(self, subject_dir):
-        self.subject_dir = subject_dir
-        self.config = load_config(subject_dir)
-        self.react_mode = False          # 由 UI 控制
-        self.tools = self.build_tools()
+        super().__init__(subject_dir)  # 基类：load_config + build_tools
 
     def build_tools(self):
         base = []  # 学科专业工具
@@ -222,10 +217,15 @@ class SubjectApp:
                 return "\n".join(agent_lines)
         return "\n".join(self.config.get("question_prompt_lines", []))
 
-    # proofread_one 签名必须一致:
-    def proofread_one(self, api_url, api_key, model, q_dir, q_name, is_knowledge, generate_pdf, source_mode="试卷"):
+    # proofread_one 签名必须一致（零差异方法由 BaseSubjectApp 提供，一般无需覆盖）:
+    def proofread_one(self, ctx, q_dir, q_name, generate_pdf, source_mode="试卷",
+                      archive_root=None, enable_format_fix=None):
         ...
-        return default_proofread_one(..., react_mode=self.react_mode)
+        return default_proofread_one(
+            ctx, q_dir, q_name, prompt, self.tools, generate_pdf,
+            pre_hook=pre_hook, react_mode=self.react_mode,
+            archive_root=archive_root, enable_format_fix=enable_format_fix,
+        )
 ```
 
 ## 相关文档

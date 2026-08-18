@@ -142,7 +142,7 @@ class SubjectApp(BaseSubjectApp):
     def post_proofread_hook(self, result, q_dir): return result
 ```
 
-`proofread_one(self, ctx, q_dir, q_name, generate_pdf, source_mode="试卷", archive_root=None)`、`split_exam(self, md_file, output_root, base_name, options=None)` 等零差异方法由 `BaseSubjectApp` 提供，学科无需重复实现。`generate_knowledge` 已废弃（ADR-0017）。
+`proofread_one(self, ctx, q_dir, q_name, generate_pdf, source_mode="试卷", archive_root=None, enable_format_fix=None)`、`split_exam(self, md_file, output_root, base_name, options=None)` 等零差异方法由 `BaseSubjectApp` 提供，学科无需重复实现。`generate_knowledge` 已废弃（ADR-0017）。
 
 ---
 
