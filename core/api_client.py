@@ -381,7 +381,7 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix
                         if isinstance(part, dict) and part.get("type") == "text":
                             lines.append(f"### 用户输入\n\n```\n{part['text']}\n```\n\n")
                         elif isinstance(part, dict) and part.get("type") == "image_url":
-                            lines.append(f"### 用户输入（图片）\n\n[{part.get('image_url', {}).get('url', '')}]\n\n")
+                            lines.append(f"### 用户输入（图片）\n\n[{part.get('image_url', {}).get('url', '')[:80]}...]\n\n")
                 else:
                     lines.append(f"### 用户输入\n\n```\n{str(content)}\n```\n\n")
             elif role == "assistant":
