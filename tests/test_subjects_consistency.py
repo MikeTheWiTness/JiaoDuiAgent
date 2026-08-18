@@ -9,7 +9,9 @@
 """
 import importlib.util
 import inspect
+import json
 import os
+import re
 import sys
 import unittest
 
@@ -22,6 +24,18 @@ SUBJECT_DIRS = sorted(
     d for d in os.listdir(SUBJECTS_ROOT)
     if os.path.isdir(os.path.join(SUBJECTS_ROOT, d))
 )
+
+def _extract_declared_tool_names(agent_lines):
+    """从 agent_prompt 的 **工具名** 声明中提取工具名（支持斜杠并列写法）。"""
+    names = set()
+    for line in agent_lines:
+        for m in re.finditer(r'\*\*([a-z_][a-z0-9_]*(?:\s*/\s*[a-z_][a-z0-9_]*)*)\*\*', line):
+            for part in m.group(1).split("/"):
+                name = part.strip()
+                if name:
+                    names.add(name)
+    return names
+
 
 REQUIRED_METHODS = [
     "build_tools",
@@ -157,6 +171,31 @@ class TestQuestionPromptToolInstructions(unittest.TestCase):
         self.assertTrue(app.tools, "化学学科应构建工具")
         prompt = app.get_question_prompt()
         self.assertIn(app.get_tool_instructions()[:80], prompt)
+
+
+class TestAgentPromptToolsSubset(unittest.TestCase):
+    """M4 回归：agent_prompt 声明的工具必须是实际 build_tools() 的子集。"""
+
+    def test_declared_tools_are_subset_of_build_tools(self):
+        for d in SUBJECT_DIRS:
+            subject_dir = os.path.join(SUBJECTS_ROOT, d)
+            agent_path = os.path.join(subject_dir, "agent_prompt.json")
+            if not os.path.isfile(agent_path):
+                continue
+            with open(agent_path, encoding="utf-8") as f:
+                agent_lines = json.load(f).get("agent_prompt_lines", [])
+            declared = _extract_declared_tool_names(agent_lines)
+            if not declared:
+                continue
+            mod = _load_subject(subject_dir)
+            app = mod.SubjectApp(subject_dir)
+            app.react_mode = True
+            actual = {t.name for t in app.tools}
+            missing = declared - actual
+            self.assertFalse(
+                missing,
+                f"{d} agent_prompt 声明了实际不存在的工具: {sorted(missing)}",
+            )
 
 
 class TestRealConfigsValid(unittest.TestCase):

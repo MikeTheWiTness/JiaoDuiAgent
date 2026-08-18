@@ -17,13 +17,15 @@ def clear_config_cache():
 
 
 def load_config(subject_dir):
-    """加载并缓存学科配置。使用 (subject_dir, config_mtime, env_mtime) 作缓存键，
-    config.json 或 .env 任一文件改动后缓存自动失效。"""
+    """加载并缓存学科配置。使用 (subject_dir, config_mtime, env_mtime, agent_prompt_mtime)
+    作缓存键，config.json、.env 或 agent_prompt.json 任一文件改动后缓存自动失效。"""
     config_path = os.path.join(subject_dir, "config.json")
     env_path = os.path.join(subject_dir, ".env")
+    agent_prompt_path = os.path.join(subject_dir, "agent_prompt.json")
     config_mtime = os.path.getmtime(config_path) if os.path.isfile(config_path) else 0
     env_mtime = os.path.getmtime(env_path) if os.path.isfile(env_path) else 0
-    cache_key = (subject_dir, config_mtime, env_mtime)
+    agent_prompt_mtime = os.path.getmtime(agent_prompt_path) if os.path.isfile(agent_prompt_path) else 0
+    cache_key = (subject_dir, config_mtime, env_mtime, agent_prompt_mtime)
 
     with _cache_lock:
         cached = _config_cache.get(cache_key)

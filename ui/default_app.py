@@ -13,6 +13,7 @@ from core.config_loader import clear_config_cache, load_config
 from core.defaults import (
     clean_intent_md_file,
     clean_md_file,
+    default_convert_file_to_md,
     fix_floating_images,
     fix_latex_escapes,
     normalize_option_spacing,
@@ -21,7 +22,7 @@ from core.defaults import (
 from core.docx_report import generate_combined_docx
 from core.env_config import load_env_config, save_env_config
 from core.logging_utils import log, set_log_func
-from core.pandoc_utils import check_pandoc, convert_with_pandoc
+from core.pandoc_utils import check_pandoc
 from core.session_context import SessionContext
 from core.unit_detect import is_unit_dir
 from shared.latex_generator import generate_combined_pdf
@@ -965,17 +966,17 @@ class DefaultApp:
                 else:
                     use_mathjax = (source == "讲义")
 
+                    # 统一走默认转换实现：pandoc 转换 → normalize_caret_tilde → 格式增强。
+                    # 学科可覆盖 convert_file_to_md 提供自定义转换（此时格式归一由自定义实现负责）。
                     convert_func = getattr(self.subject_app, 'convert_file_to_md', None)
-                    if convert_func:
-                        result = convert_func(convert_source, raw_md, img_dir, use_mathjax=use_mathjax)
-                        if isinstance(result, dict):
-                            ok = result.get('success', False)
-                            needs_post = result.get('needs_post_process', True)
-                        else:
-                            ok = result
-                            needs_post = True
+                    if convert_func is None:
+                        convert_func = default_convert_file_to_md
+                    result = convert_func(convert_source, raw_md, img_dir, use_mathjax=use_mathjax)
+                    if isinstance(result, dict):
+                        ok = result.get('success', False)
+                        needs_post = result.get('needs_post_process', True)
                     else:
-                        ok = convert_with_pandoc(convert_source, raw_md, img_dir, use_mathjax=use_mathjax)
+                        ok = result
                         needs_post = True
 
                 # temp docx 已被 pandoc 读取完毕，清理（成功/失败都清）
@@ -990,10 +991,8 @@ class DefaultApp:
                     log("   ❌ 转换失败")
                     continue
 
-                # Word 格式增强：提取着重号、下划线、波浪线、删除线等特殊格式
-                if not is_md_file and ext in ('.docx', '.doc'):
-                    from core.pandoc_utils import enhance_docx_conversion
-                    enhance_docx_conversion(file_path, raw_md)
+                # Word 格式增强已收敛到 default_convert_file_to_md / 自定义 convert_file_to_md 内，
+                # UI 不再重复调用，避免小学语文被处理两次。
 
                 if needs_post:
                     if source == "讲义":
@@ -1234,6 +1233,7 @@ class DefaultApp:
                                     self.subject_app.proofread_one,
                                     unit_ctx, q_dir, q_name, generate_pdf, content,
                                     archive_root=out_root,
+                                    enable_format_fix=True,
                                 )
                                 future_map[future] = (q_dir, q_name)
 
@@ -1274,6 +1274,7 @@ class DefaultApp:
                         data = self.subject_app.proofread_one(
                             unit_ctx, q_dir, q_name, generate_pdf, content,
                             archive_root=out_root,
+                            enable_format_fix=True,
                         )
                         if data is None:
                             log(f"   ❌ {q_name} 校对失败：proofread_one 返回了 None")

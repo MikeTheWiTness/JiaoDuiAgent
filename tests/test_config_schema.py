@@ -82,3 +82,30 @@ class TestConfigSchema:
         })
         result = validate_config(config_dir)
         assert "knowledge_agent_prompt_lines" in result
+
+    def test_question_prompt_lines_element_non_str_raises(self, config_dir):
+        """M9：question_prompt_lines 元素必须是 str，否则 join 会 TypeError"""
+        self._write_config(config_dir, {
+            "question_prompt_lines": ["题", 123],
+        })
+        with pytest.raises(ValueError, match="元素必须是字符串"):
+            validate_config(config_dir)
+
+    def test_knowledge_agent_prompt_lines_element_non_str_raises(self, config_dir):
+        """M9：knowledge_agent_prompt_lines 元素必须是 str"""
+        self._write_config(config_dir, {
+            "question_prompt_lines": ["题"],
+            "knowledge_agent_prompt_lines": [123],
+        })
+        with pytest.raises(ValueError, match="元素必须是字符串"):
+            validate_config(config_dir)
+
+    def test_agent_prompt_lines_element_non_str_raises(self, config_dir):
+        """M9：agent_prompt.json 的 agent_prompt_lines 元素必须是 str"""
+        self._write_config(config_dir, {
+            "question_prompt_lines": ["题"],
+        })
+        with open(config_dir / "agent_prompt.json", "w", encoding="utf-8") as f:
+            json.dump({"agent_prompt_lines": [123]}, f, ensure_ascii=False)
+        with pytest.raises(ValueError, match="agent_prompt_lines.*元素必须是字符串"):
+            validate_config(config_dir)

@@ -31,11 +31,16 @@ def validate_config(subject_dir) -> dict:
             errors.append(f"缺少必填字段 '{field}'")
         elif not isinstance(raw[field], list) or len(raw[field]) == 0:
             errors.append(f"'{field}' 必须是非空字符串数组")
+        elif not all(isinstance(x, str) for x in raw[field]):
+            errors.append(f"'{field}' 的元素必须是字符串")
 
     # ---- 类型检查 ----
     if "knowledge_agent_prompt_lines" in raw:
-        if not isinstance(raw["knowledge_agent_prompt_lines"], list):
+        value = raw["knowledge_agent_prompt_lines"]
+        if not isinstance(value, list):
             errors.append("'knowledge_agent_prompt_lines' 必须是字符串数组")
+        elif not all(isinstance(x, str) for x in value):
+            errors.append("'knowledge_agent_prompt_lines' 的元素必须是字符串")
 
     if "lecture_split" in raw:
         ls = raw["lecture_split"]
@@ -84,9 +89,21 @@ def validate_config(subject_dir) -> dict:
         try:
             with open(agent_file, encoding="utf-8") as f:
                 agent_data = json.load(f)
-            config["agent_prompt_lines"] = agent_data.get("agent_prompt_lines", [])
+            agent_lines = agent_data.get("agent_prompt_lines", [])
+            if not isinstance(agent_lines, list):
+                errors.append("'agent_prompt_lines' 必须是字符串数组")
+            elif not all(isinstance(x, str) for x in agent_lines):
+                errors.append("'agent_prompt_lines' 的元素必须是字符串")
+            config["agent_prompt_lines"] = agent_lines
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"加载 agent_prompt.json 失败: {e}")
+
+    # agent_prompt 校验错误与 config.json 错误同样需要中断加载
+    if errors:
+        raise ValueError(
+            f"配置文件校验失败: {config_path}\n" +
+            "\n".join(f"  - {e}" for e in errors)
+        )
 
     return config

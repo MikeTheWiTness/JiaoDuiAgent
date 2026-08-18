@@ -3,6 +3,7 @@ from core.api_client import (
     StopReason,
     _compress_history,
     _is_empty_or_duplicate,
+    _save_conversation_log,
 )
 
 
@@ -215,6 +216,104 @@ class TestRunToolLoopRobustness:
         assert "### 第2轮 — LLM 最终回复" in text
         assert "第二轮推理：确认无错误" in text
         assert "推理内容（reasoning_content）" in text
+
+    def test_interrupted_saves_conversation_log(self, tmp_path):
+        """M7：工具循环中断路径必须补存主 _API对话记录.md"""
+        import dataclasses
+        import threading
+
+        from core import api_client
+        from core.api_client import StopReason
+
+        ctx = dataclasses.replace(
+            self._make_ctx(tmp_path),
+            interrupt_event=threading.Event(),
+        )
+        ctx.interrupt_event.set()
+        choice = {
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "fake_tool", "arguments": "{}"}}
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+        result = api_client._run_tool_loop(
+            ctx, choice,
+            messages=[{"role": "user", "content": "题目"}],
+            tool_instances=[], openai_tools=[],
+            tool_calls_log=[], initial_header="# HEADER",
+            payload={}, chat_url="http://x", headers={},
+            reasoning_effort=None,
+            total_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        )
+        assert result.stop_reason == StopReason.INTERRUPTED
+        log_path = tmp_path / "_API对话记录.md"
+        assert log_path.exists()
+        text = log_path.read_text(encoding="utf-8")
+        assert "# HEADER" in text
+        assert "题目" in text
+
+    def test_tool_loop_saves_main_conversation_log(self, tmp_path):
+        """M7：TOOL_LOOP 压缩路径必须补存主 _API对话记录.md"""
+        from unittest import mock
+
+        from core import api_client
+        from core.api_client import StopReason
+
+        ctx = self._make_ctx(tmp_path)
+        tool_choice = {
+            "message": {
+                "role": "assistant",
+                "content": "连续空结果",
+                "tool_calls": [
+                    {"id": f"call_{i}", "function": {"name": "fake_tool", "arguments": "{}"}}
+                    for i in range(3)
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+        end_choice = {
+            "message": {"role": "assistant", "content": "压缩后的最终回复"},
+            "finish_reason": "stop",
+        }
+
+        with mock.patch.object(api_client, "execute_tool", return_value=""), \
+                mock.patch.object(api_client, "_post_chat",
+                                  return_value=(end_choice, {"total_tokens": 1})):
+            result = api_client._run_tool_loop(
+                ctx, tool_choice,
+                messages=[{"role": "user", "content": "题目"}],
+                tool_instances=[], openai_tools=[],
+                tool_calls_log=[], initial_header="# HEADER",
+                payload={}, chat_url="http://x", headers={},
+                reasoning_effort=None,
+                total_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            )
+
+        assert result.stop_reason == StopReason.TOOL_LOOP
+        main_log = tmp_path / "_API对话记录.md"
+        full_log = tmp_path / "_API对话记录_full.md"
+        assert main_log.exists(), "TOOL_LOOP 应保存主日志"
+        assert full_log.exists(), "TOOL_LOOP 压缩前应保存 _full 日志"
+        assert "压缩后的最终回复" in main_log.read_text(encoding="utf-8")
+
+    def test_conversation_log_does_not_truncate_long_content(self, tmp_path):
+        """M7：对话记录不再截断 LLM 原始返回/工具返回/参数"""
+        long_text = "长内容" * 5000  # 远超旧 5000/10000 截断阈值
+        messages = [
+            {"role": "user", "content": long_text},
+            {"role": "assistant", "content": long_text},
+            {"role": "tool", "content": long_text},
+        ]
+        _save_conversation_log(
+            messages, str(tmp_path), q_title="t", initial_header="# HEADER",
+        )
+        text = (tmp_path / "_API对话记录.md").read_text(encoding="utf-8")
+        assert long_text in text
+        assert "[截断]" not in text
 
     def test_429_retry_after_respected(self, tmp_path):
         """回归：429 响应的 Retry-After 必须影响退避时长"""

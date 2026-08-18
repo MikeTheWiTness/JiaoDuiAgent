@@ -781,7 +781,9 @@ def read_md_for_unit(q_dir: str, q_name: str) -> str | None:
     return None
 
 
-def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_hook=None, react_mode=False, archive_root=None):
+def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
+                          pre_hook=None, react_mode=False, archive_root=None,
+                          enable_format_fix=None):
     md_content = read_md_for_unit(q_dir, q_name)
     if not md_content:
         return {"success": False, "result": "", "error": "未找到 md 文件"}
@@ -871,7 +873,11 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf, pre_h
     if result.get("stop_reason") != StopReason.ERROR:
         # ---- 格式审查 + bash 直接编辑文件修正 ----
         format_ok, format_issues = _enforce_format(res)
-        if not format_ok and generate_pdf:
+        # 格式修正开关与“生成 LaTeX PDF”彻底解耦：
+        # 默认兼容旧调用（未显式传 enable_format_fix 时沿用 generate_pdf），
+        # UI 侧显式传 True，取消 PDF 勾选不再禁用 LLM 格式修正。
+        should_fix_format = generate_pdf if enable_format_fix is None else enable_format_fix
+        if not format_ok and should_fix_format:
             # 先把原始输出写入文件（不含头部元信息），供 LLM 用 bash 直接编辑
             md_path = os.path.join(q_dir, "_校对报告.md")
             try:

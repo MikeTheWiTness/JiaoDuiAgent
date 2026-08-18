@@ -379,11 +379,11 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix
                 if isinstance(content, list):
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "text":
-                            lines.append(f"### 用户输入\n\n```\n{part['text'][:5000]}\n```\n\n")
+                            lines.append(f"### 用户输入\n\n```\n{part['text']}\n```\n\n")
                         elif isinstance(part, dict) and part.get("type") == "image_url":
-                            lines.append(f"### 用户输入（图片）\n\n[{part.get('image_url', {}).get('url', '')[:80]}...]\n\n")
+                            lines.append(f"### 用户输入（图片）\n\n[{part.get('image_url', {}).get('url', '')}]\n\n")
                 else:
-                    lines.append(f"### 用户输入\n\n```\n{str(content)[:5000]}\n```\n\n")
+                    lines.append(f"### 用户输入\n\n```\n{str(content)}\n```\n\n")
             elif role == "assistant":
                 turn += 1
                 reasoning = (reasonings or {}).get(turn)
@@ -391,24 +391,24 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix
                 if tool_calls:
                     lines.append(f"### 第{turn}轮 — LLM 请求工具调用\n\n")
                     if content:
-                        lines.append(f"**思考内容:**\n\n```\n{content[:2000]}\n```\n\n")
+                        lines.append(f"**思考内容:**\n\n```\n{content}\n```\n\n")
                     for tc in tool_calls:
                         tc_name = tc.get("function", {}).get("name", "?")
                         tc_args = tc.get("function", {}).get("arguments", "{}")
                         lines.append(f"- **工具**: `{tc_name}`\n")
                         try:
                             args_obj = json.loads(tc_args)
-                            lines.append(f"- **参数**: `{json.dumps(args_obj, ensure_ascii=False)[:300]}`\n\n")
+                            lines.append(f"- **参数**: `{json.dumps(args_obj, ensure_ascii=False)}`\n\n")
                         except Exception:
-                            lines.append(f"- **参数**: `{tc_args[:300]}`\n\n")
+                            lines.append(f"- **参数**: `{tc_args}`\n\n")
                 else:
                     lines.append(f"### 第{turn}轮 — LLM 最终回复\n\n")
-                    lines.append(f"```\n{content[:10000]}{'...[截断]' if len(str(content)) > 10000 else ''}\n```\n\n")
+                    lines.append(f"```\n{content}\n```\n\n")
                 if reasoning:
                     lines.append(f"**推理内容（reasoning_content）:**\n\n"
-                                 f"```\n{reasoning[:10000]}{'...[截断]' if len(reasoning) > 10000 else ''}\n```\n\n")
+                                 f"```\n{reasoning}\n```\n\n")
             elif role == "tool":
-                lines.append(f"### 工具返回\n\n```\n{str(content)[:5000]}\n```\n\n")
+                lines.append(f"### 工具返回\n\n```\n{str(content)}\n```\n\n")
         with open(log_path, "w", encoding="utf-8") as f:
             f.write("".join(lines))
         log(f"   📝 完整对话记录已保存: {log_path}")
@@ -589,6 +589,11 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
         # 检查中断信号
         if ctx.interrupt_event and ctx.interrupt_event.is_set():
             log("   ⚠️ 收到中断信号，停止工具循环")
+            # 中断路径同样补存主对话日志，避免中间过程丢失
+            _save_conversation_log(
+                messages, ctx.output_dir, q_title="", initial_header=initial_header,
+                reasonings=reasonings,
+            )
             return LoopResult(
                 stop_reason=StopReason.INTERRUPTED,
                 messages=messages,
@@ -696,7 +701,11 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                 content = choice["message"]["content"]
                 _record_reasoning(choice["message"])
                 messages.append({"role": "assistant", "content": content})
-                # 注意：TOOL_LOOP 路径不调用 _save_conversation_log，与原行为一致
+                # TOOL_LOOP 路径补存主对话日志（_full 已保存压缩前完整历史）
+                _save_conversation_log(
+                    messages, ctx.output_dir, q_title="", initial_header=initial_header,
+                    reasonings=reasonings,
+                )
                 return LoopResult(
                     content=content,
                     reasoning=reasoning,
