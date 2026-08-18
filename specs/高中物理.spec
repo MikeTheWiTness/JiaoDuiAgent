@@ -14,8 +14,10 @@ a = Analysis(
     pathex=[project_root],
     binaries=[],
     datas=[
-        # config.json 放在 _internal 根目录，首次运行时由 main.py 复制到 exe 同级
+        # config.json / agent_prompt.json 放在 _internal 根目录，
+        # 首次运行时由 main.py 复制到 exe 同级
         (os.path.join(subject_dir, 'config.json'), '.'),
+        (os.path.join(subject_dir, 'agent_prompt.json'), '.'),
         (os.path.join(subject_dir, 'subject.py'), '.'),
         (os.path.join(subject_dir, 'app.py'), '.'),
         (os.path.join(project_root, 'shared', 'templates'), 'templates'),

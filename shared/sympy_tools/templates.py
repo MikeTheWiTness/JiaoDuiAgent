@@ -90,6 +90,7 @@ _TEMPLATES: dict[str, Template] = {
         + "        eqs.append(_safe_sympify(_e, local_dict=_LOCALS))\n"
         + "vars = symbols($var_names)\n"
         + "result = solve(eqs, vars, dict=True)\n"
+        + "$domain_filter_code\n"
         + _SERIALIZER
     ),
     "equality": Template(
@@ -103,9 +104,6 @@ _TEMPLATES: dict[str, Template] = {
         + "        result = bool(a.equals(b))\n"
         + "    except Exception:\n"
         + "        pass\n"
-        + "if not result:\n"
-        + "    sq_diff = simplify(a**2 - b**2)\n"
-        + "    result = sq_diff == 0\n"
         + _SERIALIZER
     ),
     "differentiate": Template(
@@ -380,6 +378,16 @@ def build_code(operation: str, **params) -> str:
     else:
         operation_code = "\nresult = 'unsupported operation'\n"
 
+    # SolveEquationTool domain 过滤：real 域剔除复数根
+    domain = str(params.get("domain", "real")).lower()
+    if domain == "real":
+        domain_filter_code = (
+            "result = [sol for sol in result "
+            "if all(v.is_real is not False for v in sol.values())]"
+        )
+    else:
+        domain_filter_code = ""
+
     # Vector ops params
     vec_a = params.get("vec_a", [0, 0])
     vec_b = params.get("vec_b", [0, 0])
@@ -462,7 +470,7 @@ def build_code(operation: str, **params) -> str:
         equations=json_repr(params.get("equations", [])),
         var_names=json_repr(var_names),
         variables=json_repr(params.get("variables", [])),
-        domain=params.get("domain", "S.Reals"),
+        domain_filter_code=domain_filter_code,
         variable=json_repr(params.get("variable", "x")),
         order=str(params.get("order", 1)),
         method=params.get("method", "simplify"),

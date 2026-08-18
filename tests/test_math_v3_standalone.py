@@ -203,6 +203,28 @@ class TestToolExecution(unittest.TestCase):
         self.assertTrue(r["success"], f"solve_proportion 失败: {r}")
         self.assertAlmostEqual(r["result"][0]["x"], 9.0)
 
+    def test_solve_real_domain_rejects_complex_roots(self):
+        """M3：domain=real 时不得返回复数根"""
+        r = self._run_tool("solve_equation", equations=["x**2 + 1 = 0"],
+                           variables=["x"], domain="real")
+        self.assertTrue(r["success"], f"solve_real_domain 失败: {r}")
+        self.assertEqual(r["result"], [])
+
+    def test_solve_real_domain_keeps_real_roots(self):
+        """M3：domain=real 时保留实数根"""
+        r = self._run_tool("solve_equation", equations=["x**2 - 4 = 0"],
+                           variables=["x"], domain="real")
+        self.assertTrue(r["success"], f"solve_real_domain 失败: {r}")
+        roots = sorted(float(sol["x"]) for sol in r["result"])
+        self.assertEqual(roots, [-2.0, 2.0])
+
+    def test_solve_complex_domain_still_returns_complex(self):
+        """M3：domain=complex 保持原行为"""
+        r = self._run_tool("solve_equation", equations=["x**2 + 1 = 0"],
+                           variables=["x"], domain="complex")
+        self.assertTrue(r["success"], f"solve_complex_domain 失败: {r}")
+        self.assertEqual(len(r["result"]), 2)
+
     # ── check_equality ──
 
     def test_check_equal(self):
@@ -214,6 +236,19 @@ class TestToolExecution(unittest.TestCase):
     def test_check_not_equal(self):
         r = self._run_tool("check_equality",
                            expression_a="x + 1", expression_b="x - 1")
+        self.assertTrue(r["success"])
+        self.assertFalse(r["result"])
+
+    def test_check_opposite_expressions_not_equal(self):
+        """H2：相反数必须判为不等（回归平方差兜底误判）"""
+        r = self._run_tool("check_equality", expression_a="x", expression_b="-x")
+        self.assertTrue(r["success"])
+        self.assertFalse(r["result"])
+
+    def test_check_opposite_numeric_not_equal(self):
+        """H2：sqrt(2) 与 -sqrt(2) 必须判为不等"""
+        r = self._run_tool("check_equality",
+                           expression_a="sqrt(2)", expression_b="-sqrt(2)")
         self.assertTrue(r["success"])
         self.assertFalse(r["result"])
 

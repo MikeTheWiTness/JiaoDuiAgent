@@ -5,6 +5,7 @@
 """
 import os
 import re
+import shlex
 import subprocess
 
 from langchain_core.tools import BaseTool
@@ -33,7 +34,7 @@ _DANGEROUS_PATTERNS = [
     r'\bdd\s+if=',                # 磁盘操作
 ]
 
-# 允许的命令前缀（仅这些命令可通过 BashTool 执行）
+# 允许的命令（仅这些命令可通过 BashTool 执行）
 _ALLOWED_COMMANDS = [
     "python", "python3",
     "sed", "cat", "type", "dir", "ls",
@@ -42,51 +43,114 @@ _ALLOWED_COMMANDS = [
     "mkdir", "cp", "mv",
 ]
 
+_WINDOWS_ABSOLUTE_RE = re.compile(r'^[A-Za-z]:[\\/]')
+
+
+def _contains_shell_metachar(command: str) -> bool:
+    """检查命令中是否有可执行 shell 多命令/注入的元字符。
+
+    单引号内的字符安全；双引号内的 $ 和反引号仍会被 shell 展开，
+    因此视为危险。反斜杠仅用于跳过下一个字符的判断。
+    """
+    in_single = False
+    in_double = False
+    escaped = False
+    for ch in command:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and not in_single:
+            escaped = True
+            continue
+        if in_single:
+            if ch == "'":
+                in_single = False
+            continue
+        if in_double:
+            if ch == '"':
+                in_double = False
+            elif ch in "$`":
+                return True
+            continue
+        if ch == "'":
+            in_single = True
+        elif ch == '"':
+            in_double = True
+        elif ch in ';|&<>()`${}\n\r':
+            return True
+    return False
+
+
+def _is_outside_allowed_dir(token: str, allowed_real: str) -> bool:
+    """判断 token 作为路径是否落在 allowed_real 之外。
+
+    相对路径以 allowed_real 为基准求 realpath，可同时拦截
+    `..` 穿越、绝对路径和目录内符号链接指向外部的情况。
+    """
+    if not token or token.startswith("-"):
+        return False
+    if token.startswith("~") or _WINDOWS_ABSOLUTE_RE.match(token) or os.path.isabs(token):
+        target = os.path.realpath(token)
+    else:
+        target = os.path.realpath(os.path.join(allowed_real, token))
+    return not (target == allowed_real or target.startswith(allowed_real + os.sep))
+
 
 def _validate_bash_command(command: str, allowed_dir: str | None) -> str | None:
     """验证 bash 命令安全性。返回错误消息，通过返回 None。
 
     检查：
     1. 命令非空
-    2. 不含危险模式（rm -rf / curl / wget 等）
-    3. 仅使用允许的命令
-    4. 如有 allowed_dir，禁止绝对路径和 cd 越界
+    2. 不含 shell 多命令/注入元字符（; | & < > $() `、换行等）
+    3. 不含危险模式（rm -rf / curl / wget 等）
+    4. 仅使用允许的命令；python 仅允许 `python -c "<代码>"`
+    5. 如有 allowed_dir，所有参数路径必须落在 allowed_dir 内
     """
     stripped = command.strip()
     if not stripped:
         return "错误：命令不能为空"
+
+    # 0. 拒绝 shell 多命令/注入形态（管道、分号、&&、换行、命令替换、重定向等）
+    if _contains_shell_metachar(stripped):
+        return (
+            "错误：命令包含不支持的 shell 元字符（管道/分号/重定向/命令替换/换行等）；"
+            "BashTool 仅允许单条简单命令"
+        )
 
     # 1. 危险模式检查
     for pat in _DANGEROUS_PATTERNS:
         if re.search(pat, stripped):
             return f"错误：命令包含禁止的模式（{pat}）"
 
-    # 2. 命令白名单（取管道/分隔符前的第一个命令）
-    first_cmd = re.split(r'[;|&]', stripped)[0].strip().split()[0] if stripped.split() else ""
-    # 对于 python -c "..." 形式，first_cmd 就是 python
-    if first_cmd and first_cmd not in _ALLOWED_COMMANDS:
+    # 2. 白名单与参数解析
+    try:
+        args = shlex.split(stripped, posix=(os.name != "nt"))
+    except ValueError as e:
+        return f"错误：命令无法解析（引号不匹配等）：{e}"
+    if not args:
+        return "错误：命令不能为空"
+
+    first_cmd = args[0].lower()
+    if first_cmd not in _ALLOWED_COMMANDS:
         return f"错误：不允许的命令 '{first_cmd}'。允许的命令: {', '.join(_ALLOWED_COMMANDS[:6])}..."
 
-    # 2.5 python -c 代码参数静态扫描：白名单放行 python，但 -c 内的代码
-    # 可绕过危险模式与 allowed_dir 路径检查（如 import shutil; shutil.rmtree）。
-    # 复用 sympy 沙箱黑名单，拦截文件/网络/子进程/动态执行等危险操作。
-    if first_cmd in ("python", "python3") and re.search(r'-c\b', stripped):
-        danger = check_dangerous(stripped)
+    # 2.5 python 仅允许 `python -c "<代码>"` 的纯计算形态；
+    # python -m / 脚本路径 / 复杂参数会绕过 -c 代码扫描，一律拒绝。
+    if first_cmd in ("python", "python3"):
+        if len(args) != 3 or args[1] != "-c":
+            return "错误：python 仅允许 python -c '<代码>' 单条命令（禁止 -m/脚本路径）"
+        danger = check_dangerous(args[2])
         if danger:
             return f"错误：python -c 代码包含危险操作（{danger}）"
 
     # 3. 路径越界检查（如有 allowed_dir）
     if allowed_dir:
-        allowed = os.path.abspath(allowed_dir)
-        # 禁止 cd 命令（可能用于目录穿越）
-        if re.search(r'(\b|;)\s*cd\s+', stripped):
-            return "错误：不允许 cd 命令"
-
-        # 禁止绝对路径引用（/etc/、/home/ 等）。
-        # python -c 内部字符串的路径无法逐 token 检查，已由上方 check_dangerous 黑名单兜底。
-        # 简单策略：禁止以 / 开头的路径参数
-        for token in stripped.split():
-            if token.startswith('/') and not token.startswith(allowed):
+        allowed = os.path.realpath(os.path.abspath(allowed_dir))
+        python_code = args[2] if first_cmd in ("python", "python3") and len(args) >= 3 else None
+        for token in args:
+            if token == python_code:
+                continue
+            if _is_outside_allowed_dir(token, allowed):
                 return f"错误：禁止访问 allowed_dir 外的路径: {token}"
 
     return None
@@ -94,7 +158,8 @@ def _validate_bash_command(command: str, allowed_dir: str | None) -> str | None:
 
 class BashParams(BaseModel):
     command: str = Field(
-        description="要执行的 bash 命令。支持管道、重定向。文件读写请用 read_file/write_file/edit_file 专用工具。"
+        description="要执行的单条 bash 命令。不支持管道、重定向、命令替换等 shell 特性。"
+        "文件读写请用 read_file/write_file/edit_file 专用工具。"
     )
 
 
@@ -109,11 +174,12 @@ class BashTool(BaseTool):
 
     name: str = "bash"
     description: str = (
-        "执行 bash 命令来读取或编辑文件。常用命令：\n"
+        "执行单条 bash 命令来读取或编辑文件。常用命令：\n"
         "- sed -i 's/旧/新/g' <文件路径> — 替换文本\n"
         "- cat <文件路径> — 读取文件（Windows 不支持，用 read_file）\n"
-        "注意：优先用 read_file/write_file/edit_file 专用工具读写文件（受目录限制保护）；"
-        "python -c 仅限纯计算，禁止文件/网络/子进程操作。"
+        "注意：仅支持单条简单命令，不支持管道/分号/重定向/命令替换/换行等 shell 特性；"
+        "优先用 read_file/write_file/edit_file 专用工具读写文件（受目录限制保护）；"
+        "python 仅允许 python -c '<纯计算代码>'，禁止文件/网络/子进程操作。"
     )
     args_schema: type[BaseModel] = BashParams
 
@@ -249,11 +315,14 @@ class FileReadParams(BaseModel):
 
 
 def _validate_file_path(path: str, allowed_dir: str | None) -> str | None:
-    """校验文件路径是否在 allowed_dir 内。返回错误消息，通过返回 None。"""
+    """校验文件路径是否在 allowed_dir 内。返回错误消息，通过返回 None。
+
+    使用 realpath 归一化，可拦截 `..`、绝对路径穿越与符号链接逃逸。
+    """
     if not allowed_dir:
         return None
-    allowed = os.path.abspath(allowed_dir)
-    target = os.path.abspath(path)
+    allowed = os.path.realpath(os.path.abspath(allowed_dir))
+    target = os.path.realpath(os.path.abspath(path))
     if target == allowed or target.startswith(allowed + os.sep):
         return None
     return f"错误：禁止访问 allowed_dir 外的路径: {path}"

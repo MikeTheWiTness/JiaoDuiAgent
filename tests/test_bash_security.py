@@ -123,6 +123,86 @@ class TestValidateBashCommand:
     def test_allow_python_c_pure_calc(self):
         assert _validate_bash_command('python -c "print(1+1)"', None) is None
 
+    # ---- H1-a：管道/分号/&& 绕过 ----
+
+    def test_block_pipe_to_python_c(self):
+        err = _validate_bash_command(
+            'echo hi | python -c "import os; print(1)"', None)
+        assert err is not None
+
+    def test_block_semicolon_python_c(self):
+        err = _validate_bash_command(
+            'echo hi; python -c "import os; print(1)"', None)
+        assert err is not None
+
+    def test_block_and_python_c(self):
+        err = _validate_bash_command(
+            'echo hi && python -c "import os; print(1)"', None)
+        assert err is not None
+
+    # ---- H1-b：换行 / 命令替换 / python -m / 脚本路径绕过 ----
+
+    def test_block_newline_python_c(self):
+        err = _validate_bash_command(
+            'echo hi\npython -c "import os; print(1)"', None)
+        assert err is not None
+
+    def test_block_command_substitution(self):
+        err = _validate_bash_command(
+            'echo $(python -c "import os; print(1)")', None)
+        assert err is not None
+
+    def test_block_backtick_command_substitution(self):
+        err = _validate_bash_command(
+            'echo `python -c "import os; print(1)"`', None)
+        assert err is not None
+
+    def test_block_python_module(self):
+        err = _validate_bash_command("python -m http.server", None)
+        assert err is not None
+
+    def test_block_python_script(self):
+        err = _validate_bash_command("python script.py", None)
+        assert err is not None
+
+    # ---- H1-c：allowed_dir 相对路径穿越 ----
+
+    def test_block_parent_traversal_cat(self):
+        with _TempDir() as work:
+            err = _validate_bash_command("cat ../secret.txt", work)
+            assert err is not None
+
+    def test_block_parent_traversal_redirect_write(self):
+        with _TempDir() as work:
+            err = _validate_bash_command("echo evil > ../../pwn.txt", work)
+            assert err is not None
+
+    def test_block_parent_traversal_cp(self):
+        with _TempDir() as work:
+            err = _validate_bash_command("cp ../../x.txt .", work)
+            assert err is not None
+
+    def test_block_parent_traversal_ls(self):
+        with _TempDir() as work:
+            err = _validate_bash_command("ls ../..", work)
+            assert err is not None
+
+    def test_allow_relative_path_inside_allowed_dir(self):
+        with _TempDir() as work:
+            target = os.path.join(work, "file.txt")
+            with open(target, "w", encoding="utf-8") as f:
+                f.write("x")
+            err = _validate_bash_command("cat file.txt", work)
+            assert err is None
+
+    def test_allow_absolute_path_inside_allowed_dir(self):
+        with _TempDir() as work:
+            target = os.path.join(work, "file.txt")
+            with open(target, "w", encoding="utf-8") as f:
+                f.write("x")
+            err = _validate_bash_command(f"cat {target}", work)
+            assert err is None
+
 
 class TestValidateFilePath:
     """回归：_validate_file_path（FileReadTool/FileWriteTool 路径限制）。

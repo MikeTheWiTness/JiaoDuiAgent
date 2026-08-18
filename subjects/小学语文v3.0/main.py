@@ -25,13 +25,14 @@ def _get_subject_dir():
 
 
 def _ensure_config(subject_dir):
-    """首次运行从内置资源复制 config.json 到 subject_dir。"""
-    config_path = os.path.join(subject_dir, "config.json")
-    if os.path.exists(config_path):
-        return
-    builtin_config = _get_resource_path("config.json")
-    if os.path.exists(builtin_config):
-        shutil.copy2(builtin_config, config_path)
+    """首次运行从内置资源复制 config.json/agent_prompt.json 到 subject_dir。"""
+    for name in ("config.json", "agent_prompt.json"):
+        dest = os.path.join(subject_dir, name)
+        if os.path.exists(dest):
+            continue
+        builtin = _get_resource_path(name)
+        if os.path.exists(builtin):
+            shutil.copy2(builtin, dest)
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

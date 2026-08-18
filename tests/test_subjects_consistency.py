@@ -172,6 +172,34 @@ class TestRealConfigsValid(unittest.TestCase):
                             f"{d} question_prompt_lines 为空")
 
 
+class TestPackagingResources(unittest.TestCase):
+    """H3 回归：打包资源必须包含 agent_prompt.json，且首次运行会复制到 exe 同级"""
+
+    def test_all_subjects_have_agent_prompt_file(self):
+        for d in SUBJECT_DIRS:
+            agent_prompt = os.path.join(SUBJECTS_ROOT, d, "agent_prompt.json")
+            self.assertTrue(os.path.isfile(agent_prompt),
+                            f"{d} 缺少 agent_prompt.json")
+
+    def test_main_ensure_config_copies_agent_prompt(self):
+        for d in SUBJECT_DIRS:
+            main_path = os.path.join(SUBJECTS_ROOT, d, "main.py")
+            with open(main_path, encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn('"agent_prompt.json"', content,
+                          f"{d}/main.py 的 _ensure_config 未复制 agent_prompt.json")
+
+    def test_spec_datas_include_agent_prompt(self):
+        spec_dir = os.path.join(REPO_ROOT, "specs")
+        specs = [f for f in os.listdir(spec_dir) if f.endswith(".spec")]
+        self.assertTrue(specs, "仓库应有至少一个 PyInstaller spec")
+        for spec_name in specs:
+            with open(os.path.join(spec_dir, spec_name), encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("agent_prompt.json", content,
+                          f"{spec_name} datas 缺少 agent_prompt.json")
+
+
 class TestMathSubjectDir(unittest.TestCase):
     """回归：小学数学 main.py 的 subject_dir 解析。
 
