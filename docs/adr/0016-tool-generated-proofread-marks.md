@@ -1,6 +1,6 @@
 # ADR 0016：工具生成校对标记 —— 替代 LLM 手写内联标记
 
-**状态**：已实现（commit 541f66c）（EditFileTool + 手动标记统一；add_proofread_mark 工具在分支 feat/add-proofread-mark 待合并）
+**状态**：未实现（待合并）— 已落地的仅有 EditFileTool 与手动标记统一；add_proofread_mark / update_proofread_mark 仍在分支 feat/add-proofread-mark 待合并
 **日期**：2026-07-07
 **实现日期**：2026-07-09
 **决策者**：MikeTheWiTness

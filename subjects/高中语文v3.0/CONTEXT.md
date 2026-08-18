@@ -136,7 +136,6 @@ raw.md 按标题或题号拆分为子目录，每题目录含：
 | `core/defaults.py` | 默认校对流程 + 转换后格式增强 |
 | `shared/review_mode.py` | 批注提取、评审 prompt、评审结果解析 |
 | `shared/latex_generator.py` | paracol 双栏 .tex 生成，含批注评审渲染 |
-| `shared/review_latex.py` | 逐条展开式批注评审 PDF（备用，未接入主流程） |
 | `shared/docx_format_enhancer.py` | Word 特殊格式提取与注入 |
 | `shared/templates/proofread_template.tex` | LaTeX 模板（字体、宏包、页面布局） |
 | `ui/default_app.py` | 主调度器：转换→拆分→校对→PDF |

@@ -121,20 +121,25 @@ def main():
 
     # ── 调用 API ──
     from core.api_client import call_api
+    from core.session_context import SessionContext
 
-    print(">>> 发送请求...")
-    result = call_api(
+    ctx = SessionContext(
         api_url=api_url,
         api_key=api_key,
         model=model,
+        max_loops=args.max_loops,
+        max_tokens=32768,
+        output_dir=q_dir,
+    )
+
+    print(">>> 发送请求...")
+    result = call_api(
+        ctx,
         md_text=md_content,
         images=[],
         q_title=q_title,
         system_prompt=system_prompt,
         tools=tools,
-        max_loops=args.max_loops,
-        max_tokens=32768,
-        output_dir=q_dir,
     )
 
     print()

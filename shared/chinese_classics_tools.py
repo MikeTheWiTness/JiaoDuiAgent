@@ -3,8 +3,6 @@ import json
 import os
 import re
 
-import requests
-
 from core.logging_utils import log
 
 CLASSICAL_PARTICLES = [
@@ -70,79 +68,6 @@ def _strip_leadin(text):
     result = re.sub(r'^[\(（].*?[\)）]', '', result)
     result = re.sub(r'^[\d一二三四五六七八九十]+[、．.．]\s*', '', result)
     return result.strip()
-
-def extract_text_start_via_api(text, api_url, api_key, model, timeout=15):
-    """使用 API 从试题文本中提取文言文/诗歌正文的开头 20 字。
-
-    用于生成精准的搜索关键词，避免引导语干扰。
-    返回提取到的开头文本，失败返回 None。
-    """
-    # 清理批注标记，避免干扰 LLM 判断
-    clean_text = _clean_annotations(text)
-    sample = clean_text[:300]
-
-    system_prompt = (
-        "你是一个文本提取器。只输出 JSON，不输出任何其他内容。"
-    )
-
-    user_prompt = (
-        "从以下语文试题文本中，提取文言文/古诗/词/曲的正文开头。\n"
-        "\n"
-        "规则：\n"
-        "1. 去掉\"阅读下面的文言文，完成1-4题\"等引导语\n"
-        "2. 去掉题号（如\"一、\"\"1.\"）和段落标题\n"
-        "3. 去掉作者名和出处标注\n"
-        "4. 只提取汉字，去掉标点符号和空格\n"
-        "5. 如果文本不包含文言文或古诗词，text 填 \"MODERN\"\n"
-        "\n"
-        "输出格式（严格 JSON，不要其他文字）：\n"
-        '{"text": "韦凑字彦宗京兆万年人永淳初解褐婺州参军事"}\n'
-        "\n"
-        f"文本：\n{sample}"
-    )
-
-    try:
-        chat_url = api_url.rstrip("/")
-        if not chat_url.endswith("/chat/completions"):
-            chat_url += "/chat/completions"
-
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.1,
-            "max_tokens": 200,
-            "response_format": {"type": "json_object"},
-        }
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        resp = requests.post(chat_url, json=payload, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        body = resp.json()
-        msg = body["choices"][0].get("message", {})
-        raw = msg.get("content", "") or msg.get("reasoning_content", "") or ""
-        raw = raw.strip()
-        log(f"   🔧 API 原始返回: {raw[:120]}")
-        # 解析 JSON
-        data = json.loads(raw)
-        result = data.get("text", "")
-        if result == "MODERN" or not result:
-            return None
-        # 清理结果：去标点、取前20字
-        clean = re.sub(r'[^一-鿿]', '', result)
-        if len(clean) > 20:
-            clean = clean[:20]
-        if len(clean) < 3:
-            return None
-        log(f"   🎯 API 提取正文开头：{clean}")
-        return clean
-    except Exception as e:
-        log(f"   ⚠️ API 提取正文开头失败：{e}")
-        return None
 
 def detect_text_type(text):
     if not text or not text.strip():

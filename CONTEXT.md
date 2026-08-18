@@ -82,7 +82,7 @@ Agent 自主规划工作步骤，系统只控制入口（prompt 框架）和出�
 2. **max_loops 超限**：不再清空历史。触发时压缩历史 + 去工具：移除无效 tool_calls/tool_result 对 → 插入压缩摘要 user 消息 → 下一轮不带 tools
 3. **返回值扩展**：从 `(content, tool_calls_log, reasoning)` 扩展为 dict，包含 `messages` 列表和 `stop_reason`（end_turn / tool_loop / max_turns / error）
 4. **连续空结果检测**：连续 3 轮空/重复结果 → StopReason.TOOL_LOOP → 触发压缩
-5. **新增 `call_api_continue()`**：接收已有 messages + 追加消息，发起单次请求（无工具循环），用于格式修正
+5. ~~**新增 `call_api_continue()`**~~：已删除（2026-08-18，格式修正已改用 bash 直接编辑，生产零调用）
 
 ### 3.2 PlanUpdateTool（替代 ## 校对计划自由文本）
 
@@ -121,8 +121,8 @@ LLM 首轮调用 `plan_update` 声明计划步骤，后续每完成一步调用�
 - 编号集合一致性检查（非简单计数对比）
 - 标记格式完整性检查（发现 `【` 后缺少 `编号|` 的情况）
 
-**第二级：LLM 格式修正**（`_llm_format_fix`）
-- 不合格 → 调用 `call_api_continue`（不带工具）+ 精简格式修正 prompt
+**第二级：LLM 格式修正**（`core/format_enforcement._bash_format_fix`）
+- 不合格 → 通过 `bash` / `read_file` / `write_file` 直接编辑 `_校对报告.md`
 - 仅重组格式，不改校对结论
 - 修正后仍不合格 → 标记警告，不阻塞
 

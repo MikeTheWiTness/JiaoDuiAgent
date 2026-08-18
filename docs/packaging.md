@@ -123,7 +123,6 @@ a = Analysis(
 	        'shared.free_proofread',
 	        'shared.smart_split',
 	        'shared.review_mode',
-	        'shared.review_latex',
 	        'shared.docx_comments',
 	        'shared.docx_format_enhancer',
 	        'shared.chinese_classics_tools',

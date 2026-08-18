@@ -1,15 +1,12 @@
-"""校对 Session 持久化 —— 记录进度，支持中断恢复。
+"""校对 Session 持久化 —— 记录当前校对进度。
 
 使用方式：
     from shared.session import SessionManager
 
     mgr = SessionManager(session_dir)
     mgr.start_session("高中物理", questions)
-    mgr.mark_in_progress("第1题")
     mgr.mark_completed("第1题")
-
-    # 恢复
-    unfinished = SessionManager.find_unfinished(session_dir)
+    mgr.mark_failed("第1题", "错误信息")
 """
 import json
 import os
@@ -77,9 +74,6 @@ class SessionManager:
 
     # ---- 状态更新 ----
 
-    def mark_in_progress(self, name: str):
-        self._update_status(name, QuestionStatus.IN_PROGRESS)
-
     def mark_completed(self, name: str):
         self._update_status(name, QuestionStatus.COMPLETED)
 
@@ -108,18 +102,6 @@ class SessionManager:
                 return QuestionStatus(q["status"])
         return None
 
-    def get_pending_questions(self) -> list[dict]:
-        """返回未完成的题目列表。"""
-        if not self._data:
-            return []
-        return [
-            q for q in self._data["questions"]
-            if q["status"] in (QuestionStatus.PENDING.value, QuestionStatus.IN_PROGRESS.value)
-        ]
-
-    def is_all_done(self) -> bool:
-        return len(self.get_pending_questions()) == 0
-
     # ---- 持久化 ----
 
     def _save(self):
@@ -132,45 +114,3 @@ class SessionManager:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self._data, f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, self.session_file)  # 原子操作
-
-    def load_session(self, session_id: str) -> bool:
-        """从文件加载已有 session。"""
-        self.session_id = session_id
-        self.session_file = self.session_dir / f"session_{session_id}.json"
-        if not self.session_file.exists():
-            return False
-        with open(self.session_file, encoding="utf-8") as f:
-            self._data = json.load(f)
-        return True
-
-    # ---- 静态方法 ----
-
-    @staticmethod
-    def find_unfinished(session_dir: Path) -> list[dict]:
-        """查找所有未完成的 session。"""
-        session_dir = Path(session_dir)
-        if not session_dir.exists():
-            return []
-
-        unfinished = []
-        for f in sorted(session_dir.glob("session_*.json")):
-            try:
-                with open(f, encoding="utf-8") as fh:
-                    data = json.load(fh)
-                questions = data.get("questions", [])
-                pending = [
-                    q for q in questions
-                    if q["status"] not in (QuestionStatus.COMPLETED.value,)
-                ]
-                if pending:
-                    unfinished.append({
-                        "session_id": data["session_id"],
-                        "subject": data.get("subject", "未知"),
-                        "start_time": data.get("start_time", ""),
-                        "total": len(questions),
-                        "done": len(questions) - len(pending),
-                        "pending": len(pending),
-                    })
-            except (json.JSONDecodeError, KeyError):
-                pass
-        return unfinished

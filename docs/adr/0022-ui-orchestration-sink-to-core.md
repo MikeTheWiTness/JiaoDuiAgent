@@ -1,8 +1,8 @@
 # ADR 0022：UI 编排下沉到 core（ConversionService + ProofreadService）
 
-**状态**：已落地（部分）— unit_detect 单一源 + 服务骨架 + 测试已交付（commit 552fe9a）；UI 业务搬迁待后续
-**日期**：2026-07-23（2026-07-24 修订）
-**实现日期**：2026-07-24
+**状态**：已撤销（未实施）— 2026-08-18 决定删除未接线的服务骨架，生产继续使用 `ui/default_app._conversion_thread/_proofread_thread`
+**日期**：2026-07-23（2026-07-24 修订；2026-08-18 撤销）
+**实现日期**：无
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0019 架构审查修复]](0019-architecture-review-fixes.md)、[[ADR 0013 UI 模式重设计]](0013-ui-mode-redesign.md)
 
