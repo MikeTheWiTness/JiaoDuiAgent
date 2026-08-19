@@ -22,8 +22,17 @@ API_FORMAT_RESPONSES = "responses"
 
 # 断点续传快照（ADR-0029）
 CHECKPOINT_FILENAME = "_校对续传.json"
+CHECKPOINT_CORRUPT_FILENAME = "_校对续传.corrupt.json"
 CHECKPOINT_SCHEMA_VERSION = 1
 _CHECKPOINT_ATOMIC_TMP = "_校对续传.tmp"
+# 快照必需字段（缺失 = 文件级损坏，重命名 .corrupt 保留现场）
+_REQUIRED_CHECKPOINT_KEYS = {
+    "schema_version", "messages", "tool_calls_log", "reasonings",
+    "assistant_turn", "total_usage", "loop", "search_count",
+    "empty_streak", "recent_results", "openai_tools", "reasoning_effort",
+    "q_title", "prompt_hash", "md_hash", "model", "image_paths",
+    "initial_header",
+}
 
 # 工具分类常量（供工具循环熔断/配额逻辑使用）
 _SEARCH_TOOLS = {"web_search", "web_fetch"}
@@ -272,6 +281,38 @@ class ProofreadState:
             "image_paths": list(self.image_paths),
             "initial_header": _scrub_header_images(self.initial_header, self.image_paths),
         }
+
+    @classmethod
+    def load(cls, data: dict, output_dir: str | None = None) -> "ProofreadState":
+        """从快照重建 ProofreadState（ADR-0029，Issue 051）。
+
+        - 图片从 `<output_dir>/images/` 目录按 `image_paths` 重新编码回填
+          （`checkpoint:<name>` 标记 → data URL）；文件缺失即降级缺失（log 警告）
+        - `choice` 为瞬态，重建后须由 call_api 发起下一轮请求再填充
+        """
+        state = cls(
+            messages=list(data.get("messages") or []),
+            loop=int(data.get("loop", 0)),
+            search_count=int(data.get("search_count", 0)),
+            empty_streak=int(data.get("empty_streak", 0)),
+            recent_results=list(data.get("recent_results") or []),
+            tool_calls_log=list(data.get("tool_calls_log") or []),
+            reasonings=dict(data.get("reasonings") or {}),
+            assistant_turn=int(data.get("assistant_turn", 0)),
+            openai_tools=data.get("openai_tools"),
+            reasoning_effort=data.get("reasoning_effort"),
+            total_usage=dict(data.get("total_usage") or {}),
+            initial_header=data.get("initial_header", ""),
+            q_title=data.get("q_title", ""),
+            prompt_hash=data.get("prompt_hash", ""),
+            md_hash=data.get("md_hash", ""),
+            model=data.get("model", ""),
+            image_paths=list(data.get("image_paths") or []),
+        )
+        if state.image_paths and output_dir:
+            state.messages = _reencode_checkpoint_images(
+                state.messages, state.image_paths, output_dir)
+        return state
 
 
 # ---- 工具定义 ----
@@ -587,22 +628,32 @@ def _strip_images_to_paths(messages, image_paths):
 
     - 仅替换 `data:` 开头的 url（即 base64 内联图片），其余原样保留
     - 按 image_paths 顺序逐图消费；文件名引用形如 `checkpoint:<name>`
-    - 返回新拷贝，不动原 messages（循环仍需真实 base64 继续发请求）
+    - 逐元素复制而非整体 deepcopy：同一 dict 在消息中被引用多次（如同一图片对象
+      重复入列）时也必须各自独立替换，避免 deepcopy 的 memo 去重导致只替换第一处
+    - 返回新结构，不动原 messages（循环仍需真实 base64 继续发请求）
     """
-    import copy
     if not image_paths:
-        return copy.deepcopy(messages)
+        return [dict(m) for m in messages]
     paths_iter = iter(image_paths)
-    stripped = copy.deepcopy(messages)
-    for msg in stripped:
+    stripped = []
+    for msg in messages:
+        new_msg = dict(msg)
         content = msg.get("content")
         if isinstance(content, list):
-            for part in content:
+            new_content = list(content)
+            for i, part in enumerate(content):
                 if isinstance(part, dict) and part.get("type") == "image_url":
-                    url = part.get("image_url", {}).get("url", "")
-                    if url and url.startswith("data:"):
-                        name = next(paths_iter, "")
-                        part["image_url"]["url"] = f"checkpoint:{name}"
+                    p = dict(part)
+                    img_url = p.get("image_url")
+                    if isinstance(img_url, dict):
+                        p["image_url"] = dict(img_url)
+                        url = p["image_url"].get("url", "")
+                        if url and url.startswith("data:"):
+                            name = next(paths_iter, "")
+                            p["image_url"]["url"] = f"checkpoint:{name}"
+                    new_content[i] = p
+            new_msg["content"] = new_content
+        stripped.append(new_msg)
     return stripped
 
 
@@ -968,6 +1019,138 @@ def _clear_checkpoint(ctx) -> None:
         log(f"   ⚠️ 快照清理失败: {e}\n{traceback.format_exc()}")
 
 
+# ---- 断点恢复（ADR-0029，Issue 051）----
+
+def _image_file_to_data_url(img_dir: str, name: str) -> str | None:
+    """按文件名从 images/ 目录重新编码图片为 data URL（复用校对入口编码逻辑：mime 判断 + 10MB 过滤）。
+
+    缺失 / 超限 / 解码失败 → 返回 None（上层 log 警告并降级缺失）。
+    """
+    import base64 as _b64
+    img_path = os.path.join(img_dir, name)
+    if not os.path.exists(img_path):
+        return None
+    ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
+    if ext not in ("png", "jpg", "jpeg", "gif"):
+        return None
+    try:
+        if os.path.getsize(img_path) > MAX_FILE_SIZE:
+            return None
+        with open(img_path, "rb") as fi:
+            b64 = _b64.b64encode(fi.read()).decode()
+        mime = ("image/png" if ext == "png"
+                else "image/jpeg" if ext in ("jpg", "jpeg")
+                else "image/gif")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
+
+def _reencode_checkpoint_images(messages: list, image_paths: list, output_dir: str) -> list:
+    """恢复时把消息中 `checkpoint:<name>` 图片标记替换为重新编码的 data URL。
+
+    图片从 `<output_dir>/images/` 按名重编码回填；文件缺失/超限/解码失败时
+    log 警告该图降级缺失（保留消息结构，移除此 image part 的数据 URL）。
+    """
+    import copy
+    img_dir = os.path.join(output_dir, "images")
+    missing = set()
+    restored = [copy.deepcopy(m) for m in messages]
+    for msg in restored:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                url = part.get("image_url", {}).get("url", "")
+                if url.startswith("checkpoint:"):
+                    name = url[len("checkpoint:"):]
+                    data_url = _image_file_to_data_url(img_dir, name)
+                    if data_url is None:
+                        missing.add(name)
+                        part["image_url"]["url"] = ""   # 降级缺失，调用侧会跳过空 URL
+                        continue
+                    part["image_url"]["url"] = data_url
+    for name in sorted(missing):
+        log(f"   ⚠️ 快照恢复：图片缺失或无效，已降级缺失（images/{name}）")
+    return restored
+
+
+def _read_checkpoint_json(path: str) -> dict | None:
+    """读取快照 JSON；解析失败 → None（视为文件级损坏）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _rename_corrupt(path: str) -> None:
+    """文件级损坏：重命名为 `_校对续传.corrupt.json` 保留现场，从零开始。"""
+    corrupt_path = os.path.join(os.path.dirname(path), CHECKPOINT_CORRUPT_FILENAME)
+    try:
+        os.replace(path, corrupt_path)
+        log(f"   ⚠️ 快照损坏，已保留现场为 {CHECKPOINT_CORRUPT_FILENAME}，本轮从零开始")
+    except Exception as e:
+        log(f"   ⚠️ 快照损坏且重命名失败: {e}\n{traceback.format_exc()}")
+
+
+def _delete_checkpoint_file(path: str) -> None:
+    """校验不匹配：直接删除快照（换模式/改题/换模型是正常操作流转，无痕进行）。"""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception as e:
+        log(f"   ⚠️ 快照删除失败: {e}\n{traceback.format_exc()}")
+
+
+def _validate_checkpoint(ctx, data: dict, q_title: str, system_prompt: str,
+                         checkpoint_md_hash: str) -> bool:
+    """四重校验，任一不匹配即不恢复。"""
+    if data.get("q_title") != q_title:
+        return False
+    if data.get("prompt_hash") != _stable_hash(system_prompt):
+        return False
+    if data.get("md_hash") != (checkpoint_md_hash or ""):
+        return False
+    if data.get("model") != ctx.model:
+        return False
+    return True
+
+
+def _try_restore_checkpoint(ctx, q_title: str, system_prompt: str,
+                            checkpoint_md_hash: str):
+    """call_api 入口检测快照：校验通过重建 ProofreadState，否则返回 None。
+
+    - 文件级损坏（JSON 解析失败 / schema_version 不认识 / 缺必需字段）
+      → 重命名 `_校对续传.corrupt.json` 保留现场，从零开始
+    - 四重校验不匹配 → 直接删除快照，无痕从零开始
+    - 校验通过 → log 单行提示 + 返回重建的 state（含图片重编码回填）
+    """
+    if not _checkpoint_enabled(ctx):
+        return None
+    path = _checkpoint_path(ctx)
+    if not os.path.exists(path):
+        return None
+
+    data = _read_checkpoint_json(path)
+    if data is None:
+        _rename_corrupt(path)
+        return None
+    if data.get("schema_version") != CHECKPOINT_SCHEMA_VERSION \
+            or not _REQUIRED_CHECKPOINT_KEYS.issubset(data.keys()):
+        _rename_corrupt(path)
+        return None
+    if not _validate_checkpoint(ctx, data, q_title, system_prompt, checkpoint_md_hash):
+        _delete_checkpoint_file(path)
+        return None
+
+    state = ProofreadState.load(data, output_dir=ctx.output_dir)
+    log(f"   ⏩ {q_title}：检测到中断快照（已进行 {state.loop} 轮工具循环），从断点续跑")
+    return state
+
+
 # ---- C1: _run_tool_loop ----
 
 def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
@@ -1171,8 +1354,12 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     # 注入当前校对文本，供 text_nav_tools（locate_paragraph/read_section）使用
     from shared.text_nav_tools import set_current_text as _set_nav_text
     _set_nav_text(md_text)
+    # 断点续传恢复（仅 enable_checkpoint=True 路径；四重校验通过才续跑）
+    restored_state = _try_restore_checkpoint(ctx, q_title, system_prompt, checkpoint_md_hash)
     # 累计整个 call_api 过程的所有 token 消耗
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if restored_state is not None:
+        total_usage = restored_state.total_usage  # 恢复后不清零，继续累加
     # 连续相同类型错误计数（熔断器）
     consecutive_errors = 0
     last_error_type = None
@@ -1183,25 +1370,30 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
 
     for retry in range(MAX_RETRY + 1):
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": [
-                    {"type": "text", "text": f"编号：{q_title}\n内容：\n{md_text}"},
-                    *effective_images,
-                ]},
-            ]
-            # 工具循环状态唯一载体（重试时 openai_tools/total_usage 跨轮共享，与旧行为一致）
-            state = ProofreadState(
-                messages=messages,
-                openai_tools=openai_tools,
-                reasoning_effort=reasoning_effort,
-                total_usage=total_usage,
-                q_title=q_title,
-                prompt_hash=_stable_hash(system_prompt),
-                md_hash=checkpoint_md_hash or "",
-                model=ctx.model,
-                image_paths=list(image_paths or []),
-            )
+            if restored_state is not None:
+                # 从断点续跑：使用重建的 state（消息/计数器/累计用量/图片已回填）
+                state = restored_state
+                restored_state = None   # 仅首次尝试使用
+            else:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": f"编号：{q_title}\n内容：\n{md_text}"},
+                        *effective_images,
+                    ]},
+                ]
+                # 工具循环状态唯一载体（重试时 openai_tools/total_usage 跨轮共享，与旧行为一致）
+                state = ProofreadState(
+                    messages=messages,
+                    openai_tools=openai_tools,
+                    reasoning_effort=reasoning_effort,
+                    total_usage=total_usage,
+                    q_title=q_title,
+                    prompt_hash=_stable_hash(system_prompt),
+                    md_hash=checkpoint_md_hash or "",
+                    model=ctx.model,
+                    image_paths=list(image_paths or []),
+                )
             # payload 每轮由 state + ctx 派生
             payload = _build_payload(ctx, state)
 
@@ -1209,10 +1401,11 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             _payload_size = len(json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8'))
             log(f"   📤 发送请求 → 模型: {ctx.model}, 系统提示词: {len(system_prompt)}字符, "
                 f"文本: {len(md_text)}字符, 图片: {len(effective_images)}张, "
-                f"工具: {len(openai_tools) if openai_tools else 0}个, "
+                f"工具: {len(state.openai_tools) if state.openai_tools else 0}个, "
                 f"payload: {_payload_size // 1024}KB")
 
-            state.initial_header = _dump_initial_payload(q_title, system_prompt, md_text, effective_images, openai_tools)
+            if not state.initial_header:
+                state.initial_header = _dump_initial_payload(q_title, system_prompt, md_text, effective_images, openai_tools)
 
             # 首次请求
             state.choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
