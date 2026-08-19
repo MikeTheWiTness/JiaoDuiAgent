@@ -1119,6 +1119,16 @@ def _validate_checkpoint(ctx, data: dict, q_title: str, system_prompt: str,
     return True
 
 
+def _state_has_history(state) -> bool:
+    """判断 state 是否已有对话历史（超出初始 system+user 即视为有）。
+
+    用于重试起点决策（ADR-0029「仅首次请求失败无历史时才从零开始」）：
+    - 首次请求失败：messages 恒为 [system, user]（长度 2）→ 从零重建
+    - 工具循环中途 / 压缩后 / 快照恢复后失败：messages 已超出初始两条 → 携带续跑
+    """
+    return state is not None and len(state.messages) > 2
+
+
 def _try_restore_checkpoint(ctx, q_title: str, system_prompt: str,
                             checkpoint_md_hash: str):
     """call_api 入口检测快照：校验通过重建 ProofreadState，否则返回 None。
@@ -1360,6 +1370,8 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     if restored_state is not None:
         total_usage = restored_state.total_usage  # 恢复后不清零，继续累加
+    # 跨重试携带的工具循环状态（Issue 052：重试不重建对话、不重放已完成工具）
+    state = None
     # 连续相同类型错误计数（熔断器）
     consecutive_errors = 0
     last_error_type = None
@@ -1374,7 +1386,8 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                 # 从断点续跑：使用重建的 state（消息/计数器/累计用量/图片已回填）
                 state = restored_state
                 restored_state = None   # 仅首次尝试使用
-            else:
+            elif not _state_has_history(state):
+                # 首次请求失败（无任何历史）：从零建立对话（现状行为）
                 messages = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": [
@@ -1394,6 +1407,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                     model=ctx.model,
                     image_paths=list(image_paths or []),
                 )
+            # else: 已有 LLM 交互历史（中途/压缩/恢复后的重试）→ 携带 state 续跑，不重放已完成工具
             # payload 每轮由 state + ctx 派生
             payload = _build_payload(ctx, state)
 
