@@ -1,6 +1,6 @@
 # ADR 0029：校对断点续传（磁盘快照 + 自动恢复）
 
-**状态**：已接受（设计经 2026-08-18 grill 访谈修订，待落地）
+**状态**：已实现（commit 7bbfa7c）
 **日期**：2026-08-18
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0021 call_api 重构]](0021-call-api-refactor-bashtool-safety-test-degradation.md)、[[ADR 0028 工具循环搜索配额与选择性熔断]](0028-tool-loop-search-quota-and-selective-circuit-break.md)
