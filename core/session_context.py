@@ -14,6 +14,7 @@ class SessionContext:
     max_tokens: int = 16384
     reasoning_effort: str = "high"
     api_format: str = "chat/completions"
+    enable_checkpoint: bool = False  # 断点续传门控：仅校对主流程开启（ADR-0029）
     output_dir: str | None = None
     interrupt_event: threading.Event | None = None  # 中断信号
 

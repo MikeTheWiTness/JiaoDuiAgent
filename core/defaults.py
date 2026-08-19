@@ -1,10 +1,11 @@
 import base64
+import dataclasses
 import os
 import re
 from pathlib import Path
 
 from core import config_loader
-from core.api_client import MAX_FILE_SIZE, StopReason, call_api
+from core.api_client import MAX_FILE_SIZE, StopReason, _stable_hash, call_api
 from core.format_enforcement import _enforce_format, enforce_and_fix
 from core.logging_utils import log
 from core.parsing import save_proofread_json
@@ -788,6 +789,11 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
     if not md_content:
         return {"success": False, "result": "", "error": "未找到 md 文件"}
 
+    # 断点续传门控：仅校对主流程开启（ADR-0029）；格式修正/智能分割/e2e 零改动
+    ctx = dataclasses.replace(ctx, enable_checkpoint=True)
+    # 校验字段：pre_hook 之前的原始单元 md 哈希（语文前置参考动态注入，不能作校验基准）
+    md_hash = _stable_hash(md_content)
+
     # 前置处理 hook：文言文/诗歌的前置搜索 + diff
     if pre_hook:
         try:
@@ -808,6 +814,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
             log("   🔒 前置参考已注入，关闭联网搜索")
 
     images_b64 = []
+    image_filenames = []   # 与 images_b64 同序（快照以文件名清单存储，恢复时按名重编码）
     img_dir = os.path.join(q_dir, "images")
     if os.path.exists(img_dir):
         for img_file in os.listdir(img_dir):
@@ -827,6 +834,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime};base64,{b64}"}
                 })
+                image_filenames.append(img_file)
             except Exception:
                 log(f"   ⚠️ 图片 base64 编码失败: {img_path}")
                 continue
@@ -854,7 +862,8 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
                 pass  # 非化学学科无 chemistry_tools 模块，忽略
 
         result = call_api(ctx, md_content, images_b64,
-                          q_name, prompt, tools=tools)
+                          q_name, prompt, tools=tools,
+                          checkpoint_md_hash=md_hash, image_paths=image_filenames)
         res = result["content"]
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")

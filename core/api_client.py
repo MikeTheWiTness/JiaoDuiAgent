@@ -20,6 +20,11 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 API_FORMAT_CHAT_COMPLETIONS = "chat/completions"
 API_FORMAT_RESPONSES = "responses"
 
+# 断点续传快照（ADR-0029）
+CHECKPOINT_FILENAME = "_校对续传.json"
+CHECKPOINT_SCHEMA_VERSION = 1
+_CHECKPOINT_ATOMIC_TMP = "_校对续传.tmp"
+
 # 工具分类常量（供工具循环熔断/配额逻辑使用）
 _SEARCH_TOOLS = {"web_search", "web_fetch"}
 _MAX_SEARCH = 5
@@ -231,8 +236,42 @@ class ProofreadState:
         "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
     })
     initial_header: str = ""
+    # 快照校验/元数据字段（ADR-0029，随 dump 落盘）
+    q_title: str = ""
+    prompt_hash: str = ""
+    md_hash: str = ""                               # pre_hook 之前的原始单元 md 哈希
+    model: str = ""
+    image_paths: list = field(default_factory=list)  # 图片文件名清单（ordered，无 base64）
     # 当前轮 LLM 响应（瞬态，不入快照）
     choice: dict | None = field(default=None, repr=False)
+
+    def dump(self) -> dict:
+        """序列化快照（ADR-0029）。
+
+        快照与循环状态是同一个数据结构，杜绝两份清单漂移；
+        choice 为瞬态不入快照；图片以文件名清单存储，消息内图片 base64 替换为
+        文件名引用（`checkpoint:<name>` 标记），快照内无 base64 数据。
+        """
+        return {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "messages": _strip_images_to_paths(self.messages, self.image_paths),
+            "tool_calls_log": self.tool_calls_log,
+            "reasonings": self.reasonings,
+            "assistant_turn": self.assistant_turn,
+            "total_usage": dict(self.total_usage),
+            "loop": self.loop,
+            "search_count": self.search_count,
+            "empty_streak": self.empty_streak,
+            "recent_results": self.recent_results,
+            "openai_tools": self.openai_tools,
+            "reasoning_effort": self.reasoning_effort,
+            "q_title": self.q_title,
+            "prompt_hash": self.prompt_hash,
+            "md_hash": self.md_hash,
+            "model": self.model,
+            "image_paths": list(self.image_paths),
+            "initial_header": _scrub_header_images(self.initial_header, self.image_paths),
+        }
 
 
 # ---- 工具定义 ----
@@ -537,6 +576,54 @@ def _accumulate_usage(total: dict, usage: dict) -> dict:
     return total
 
 
+def _stable_hash(text: str) -> str:
+    """对文本做稳定哈希，用作快照校验字段（prompt_hash / md_hash）。"""
+    import hashlib
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _strip_images_to_paths(messages, image_paths):
+    """把消息里的图片 base64 数据 URL 替换为文件名引用（快照内无 base64）。
+
+    - 仅替换 `data:` 开头的 url（即 base64 内联图片），其余原样保留
+    - 按 image_paths 顺序逐图消费；文件名引用形如 `checkpoint:<name>`
+    - 返回新拷贝，不动原 messages（循环仍需真实 base64 继续发请求）
+    """
+    import copy
+    if not image_paths:
+        return copy.deepcopy(messages)
+    paths_iter = iter(image_paths)
+    stripped = copy.deepcopy(messages)
+    for msg in stripped:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    url = part.get("image_url", {}).get("url", "")
+                    if url and url.startswith("data:"):
+                        name = next(paths_iter, "")
+                        part["image_url"]["url"] = f"checkpoint:{name}"
+    return stripped
+
+
+def _scrub_header_images(initial_header: str, image_paths) -> str:
+    """把 initial_header 中图片 base64 URL 摘录替换为文件名（快照内无 base64）。
+
+    initial_header 由 _dump_initial_payload 生成，图片部分仅含 80 字符摘录，
+    但仍是 base64 数据，须在快照中替换为 `checkpoint:<name>` 引用。
+    """
+    import re
+    if not image_paths or "data:" not in initial_header:
+        return initial_header
+    paths_iter = iter(image_paths)
+
+    def _repl(_m):
+        name = next(paths_iter, "")
+        return f"checkpoint:{name}"
+
+    return re.sub(r"data:\S*", _repl, initial_header)
+
+
 def _is_empty_or_duplicate(result: str, recent_results: list) -> bool:
     """判断工具返回是否为空或与最近结果重复（用于连续空结果检测）。
 
@@ -838,6 +925,49 @@ def _build_payload(ctx, state):
     return payload
 
 
+# ---- 断点续传快照（ADR-0029，Issue 050 保存侧）----
+
+def _checkpoint_enabled(ctx) -> bool:
+    """门控：仅 enable_checkpoint=True 且存在单元目录时落盘/清理。"""
+    return bool(getattr(ctx, "enable_checkpoint", False)) and bool(getattr(ctx, "output_dir", None))
+
+
+def _checkpoint_path(ctx) -> str:
+    """快照文件路径：<单元目录>/_校对续传.json。"""
+    return os.path.join(ctx.output_dir, CHECKPOINT_FILENAME)
+
+
+def _atomic_write_json(path: str, data: dict) -> None:
+    """原子写：临时文件 + os.replace（与 SessionManager._save 同模式，支持并行校对）。"""
+    tmp_path = os.path.join(os.path.dirname(path), _CHECKPOINT_ATOMIC_TMP)
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _save_checkpoint(ctx, state) -> None:
+    """在协议合法的轮次边界把 state 落盘为快照。失败只告警，不中断校对。"""
+    if not _checkpoint_enabled(ctx):
+        return
+    try:
+        os.makedirs(ctx.output_dir, exist_ok=True)
+        _atomic_write_json(_checkpoint_path(ctx), state.dump())
+    except Exception as e:
+        log(f"   ⚠️ 快照写入失败: {e}\n{traceback.format_exc()}")
+
+
+def _clear_checkpoint(ctx) -> None:
+    """单元正常完成（END_TURN / MAX_TURNS / TOOL_LOOP）后删除快照。"""
+    if not _checkpoint_enabled(ctx):
+        return
+    path = _checkpoint_path(ctx)
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception as e:
+        log(f"   ⚠️ 快照清理失败: {e}\n{traceback.format_exc()}")
+
+
 # ---- C1: _run_tool_loop ----
 
 def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
@@ -880,6 +1010,8 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
             )
             state.messages = _compress_history(state.messages, len(state.tool_calls_log))
             state.openai_tools = None  # 关闭工具调用
+            # 压缩历史后同样保存（发下一轮请求之前，协议合法状态）
+            _save_checkpoint(ctx, state)
             state.choice, usage = _post_chat(chat_url, _build_payload(ctx, state), headers, api_format=api_format)
             _accumulate_usage(state.total_usage, usage)
             reasoning = state.choice.get("message", {}).get("reasoning_content", "")
@@ -955,6 +1087,8 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
                 state.messages = _compress_history(state.messages, len(state.tool_calls_log), disable_all=False)
                 # 只移除搜索/抓取工具，保留其他工具（read_file、write_file 等）
                 state.openai_tools = [t for t in state.openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if state.openai_tools else None
+                # 压缩历史后同样保存（发下一轮请求之前）
+                _save_checkpoint(ctx, state)
                 state.choice, usage = _post_chat(chat_url, _build_payload(ctx, state), headers, api_format=api_format)
                 _accumulate_usage(state.total_usage, usage)
                 reasoning = state.choice.get("message", {}).get("reasoning_content", "")
@@ -987,6 +1121,8 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
         else:
             state.loop += 1
 
+        # 轮次边界保存点：整轮工具结果全部回填完毕、发下一轮请求之前
+        _save_checkpoint(ctx, state)
         state.choice, usage = _post_chat(chat_url, _build_payload(ctx, state), headers, api_format=api_format)
         _accumulate_usage(state.total_usage, usage)
 
@@ -1010,8 +1146,13 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
 # ---- call_api（重构后的编排主函数）----
 
 def call_api(ctx, md_text, images, q_title, system_prompt,
-             tools=None):
-    """校对 API 调用入口。ctx 为 SessionContext 实例。"""
+             tools=None, checkpoint_md_hash=None, image_paths=None):
+    """校对 API 调用入口。ctx 为 SessionContext 实例。
+
+    checkpoint_md_hash/image_paths 仅在校对主流程开启快照时使用：
+    - checkpoint_md_hash：pre_hook 之前的原始单元 md 哈希（ADR-0029 四重校验基准）
+    - image_paths：图片文件名清单（与 images 同序），快照内以文件名引用而非 base64
+    """
     err_msg = ""
     proof_err = None
     tool_instances = tools or []
@@ -1055,6 +1196,11 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                 openai_tools=openai_tools,
                 reasoning_effort=reasoning_effort,
                 total_usage=total_usage,
+                q_title=q_title,
+                prompt_hash=_stable_hash(system_prompt),
+                md_hash=checkpoint_md_hash or "",
+                model=ctx.model,
+                image_paths=list(image_paths or []),
             )
             # payload 每轮由 state + ctx 派生
             payload = _build_payload(ctx, state)
@@ -1081,6 +1227,10 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                     result.messages, ctx.output_dir, q_title, state.initial_header,
                     reasonings=result.reasonings,
                 )
+
+            # 正常完成（END_TURN / MAX_TURNS / TOOL_LOOP）→ 清除快照；ERROR/中断保留
+            if result.stop_reason in (StopReason.END_TURN, StopReason.MAX_TURNS, StopReason.TOOL_LOOP):
+                _clear_checkpoint(ctx)
 
             return result.as_dict()
 
