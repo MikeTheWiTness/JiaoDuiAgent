@@ -115,7 +115,6 @@ class TestRunToolLoopRobustness:
 
         from core import api_client
 
-        messages = [{"role": "system", "content": "系统提示"}]
         end_turn_choice = {"message": {"role": "assistant", "content": "最终结果"},
                            "finish_reason": "stop"}
         # 循环内第一次 _post_chat 即返回 end_turn（消耗顺序：仅此一个响应）
@@ -123,19 +122,19 @@ class TestRunToolLoopRobustness:
 
         with mock.patch.object(api_client, "_post_chat",
                                side_effect=lambda *a, **k: (next(responses), {"total_tokens": 1})):
+            state = api_client.ProofreadState(
+                messages=[{"role": "system", "content": "系统提示"}],
+                openai_tools=[],
+                reasoning_effort=None,
+                initial_header="",
+                choice=first_choice,
+            )
             return api_client._run_tool_loop(
                 ctx,
-                first_choice,
-                messages,
+                state,
                 tool_instances=[],
-                openai_tools=[],
-                tool_calls_log=[],
-                initial_header="",
-                payload={},
                 chat_url="http://x",
                 headers={},
-                reasoning_effort=None,
-                total_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             )
 
     def test_missing_tool_calls_key_no_crash(self, tmp_path):
@@ -240,14 +239,16 @@ class TestRunToolLoopRobustness:
             },
             "finish_reason": "tool_calls",
         }
-        result = api_client._run_tool_loop(
-            ctx, choice,
+        state = api_client.ProofreadState(
             messages=[{"role": "user", "content": "题目"}],
-            tool_instances=[], openai_tools=[],
-            tool_calls_log=[], initial_header="# HEADER",
-            payload={}, chat_url="http://x", headers={},
+            openai_tools=[],
             reasoning_effort=None,
-            total_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            initial_header="# HEADER",
+            choice=choice,
+        )
+        result = api_client._run_tool_loop(
+            ctx, state,
+            tool_instances=[], chat_url="http://x", headers={},
         )
         assert result.stop_reason == StopReason.INTERRUPTED
         log_path = tmp_path / "_API对话记录.md"
@@ -283,14 +284,16 @@ class TestRunToolLoopRobustness:
         with mock.patch.object(api_client, "execute_tool", return_value=""), \
                 mock.patch.object(api_client, "_post_chat",
                                   return_value=(end_choice, {"total_tokens": 1})):
-            result = api_client._run_tool_loop(
-                ctx, tool_choice,
+            state = api_client.ProofreadState(
                 messages=[{"role": "user", "content": "题目"}],
-                tool_instances=[], openai_tools=[],
-                tool_calls_log=[], initial_header="# HEADER",
-                payload={}, chat_url="http://x", headers={},
+                openai_tools=[],
                 reasoning_effort=None,
-                total_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                initial_header="# HEADER",
+                choice=tool_choice,
+            )
+            result = api_client._run_tool_loop(
+                ctx, state,
+                tool_instances=[], chat_url="http://x", headers={},
             )
 
         assert result.stop_reason == StopReason.TOOL_LOOP
@@ -344,6 +347,46 @@ class TestRunToolLoopRobustness:
         assert sleeps, "应有退避等待"
         assert sleeps[0] >= 12, f"退避 {sleeps[0]}s < Retry-After 12s"
         assert result["stop_reason"] == StopReason.ERROR
+
+    def test_state_loop_counter_respected_at_entry(self, tmp_path):
+        """契约：loop 计数在 state 上——入口即达 max_loops 走 MAX_TURNS。
+
+        旧实现 loop 为循环内局部变量恒从 0 起，无法预置；收拢进 ProofreadState 后
+        计数可跨调用携带，这是「快照 = 序列化 state」的前提。
+        """
+        from unittest import mock
+
+        from core import api_client
+        from core.api_client import StopReason
+
+        ctx = self._make_ctx(tmp_path)  # max_loops=1
+        choice = {
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "fake_tool", "arguments": "{}"}}
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+        state = api_client.ProofreadState(
+            messages=[{"role": "user", "content": "题目"}],
+            openai_tools=[],
+            reasoning_effort=None,
+            initial_header="# HEADER",
+            loop=5,  # 预置触顶：证明循环计数来自 state
+            choice=choice,
+        )
+        end_choice = {"message": {"role": "assistant", "content": "压缩后回复"},
+                      "finish_reason": "stop"}
+        with mock.patch.object(api_client, "_post_chat",
+                               return_value=(end_choice, {"total_tokens": 1})):
+            result = api_client._run_tool_loop(
+                ctx, state, tool_instances=[], chat_url="http://x", headers={},
+            )
+        assert result.stop_reason == StopReason.MAX_TURNS
+        assert result.content == "压缩后回复"
 
 
 class TestResponsesApiSupport:

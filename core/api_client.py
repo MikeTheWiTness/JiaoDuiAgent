@@ -209,6 +209,32 @@ class LoopResult:
         }
 
 
+@dataclass
+class ProofreadState:
+    """工具循环全部可变状态的唯一载体（ADR-0029：快照 = dump() / 续跑 = load()）。
+
+    循环计数器、记录器、突变后的 openai_tools、累计用量全收拢在此；
+    `payload` 不入 state——纯派生件，循环内每轮由 ctx + state 重建（见 _build_payload）。
+    `choice` 为当前轮 LLM 响应（瞬态，不随快照序列化）。
+    """
+    messages: list = field(default_factory=list)
+    loop: int = 0
+    search_count: int = 0
+    empty_streak: int = 0
+    recent_results: list = field(default_factory=list)
+    tool_calls_log: list = field(default_factory=list)
+    reasonings: dict = field(default_factory=dict)   # {assistant 轮次: reasoning_content}
+    assistant_turn: int = 0
+    openai_tools: list | None = None                # 搜索配额耗尽/压缩后可能已移除工具
+    reasoning_effort: str | None = None
+    total_usage: dict = field(default_factory=lambda: {
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+    })
+    initial_header: str = ""
+    # 当前轮 LLM 响应（瞬态，不入快照）
+    choice: dict | None = field(default=None, repr=False)
+
+
 # ---- 工具定义 ----
 
 def tool_to_openai(tool):
@@ -235,6 +261,11 @@ def tool_to_openai(tool):
 def _normalize_api_format(api_format: str) -> str:
     """归一化 API 格式值，兼容 `responses` 与 `/responses` 两种写法。"""
     return (api_format or API_FORMAT_CHAT_COMPLETIONS).strip().lstrip("/").lower()
+
+
+def _ctx_api_format(ctx) -> str:
+    """读取 ctx 上的 API 格式（与 max_loops 由 ctx 携带同一模式，默认 chat/completions）。"""
+    return getattr(ctx, "api_format", API_FORMAT_CHAT_COMPLETIONS) or API_FORMAT_CHAT_COMPLETIONS
 
 
 def build_api_url(base_url: str, api_format: str = API_FORMAT_CHAT_COMPLETIONS) -> str:
@@ -789,91 +820,98 @@ def _build_error_report(ctx, proof_err, err_msg, q_title, consecutive_errors, la
     return error_summary
 
 
+def _build_payload(ctx, state):
+    """按 state + ctx 派生本轮请求 payload（不入 state，避免两份清单漂移）。
+
+    重新发送时 payload 总是由最新 messages / openai_tools / reasoning_effort 重建，
+    循环内不再对 payload 就地突变。
+    """
+    payload = {
+        "model": ctx.model,
+        "messages": state.messages,
+        "max_tokens": ctx.max_tokens,
+    }
+    if state.reasoning_effort:
+        payload["reasoning_effort"] = state.reasoning_effort
+    if state.openai_tools is not None:
+        payload["tools"] = state.openai_tools
+    return payload
+
+
 # ---- C1: _run_tool_loop ----
 
-def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
-                   tool_calls_log, initial_header, payload, chat_url, headers,
-                   reasoning_effort, total_usage,
-                   api_format: str = API_FORMAT_CHAT_COMPLETIONS):
-    """工具调用循环状态机。返回 LoopResult，4 条退出路径各走各的 stop_reason。"""
-    loop = 0
-    recent_results = []
-    empty_streak = 0
-    search_count = 0
-    reasonings = {}   # {assistant 轮次: reasoning_content}，随对话记录落盘
-    assistant_turn = 0
+def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
+    """工具调用循环状态机。返回 LoopResult，4 条退出路径各走各的 stop_reason。
+
+    state 为 ProofreadState 唯一载体：messages/计数器/记录器/累计用量/突变后工具
+    全收拢其上；payload 每轮由 ctx + state 派生（_build_payload），无就地突变。
+    """
+    api_format = _ctx_api_format(ctx)
 
     def _record_reasoning(msg_dict):
-        nonlocal assistant_turn
-        assistant_turn += 1
+        state.assistant_turn += 1
         reasoning = msg_dict.get("reasoning_content", "")
         if reasoning:
-            reasonings[assistant_turn] = reasoning
+            state.reasonings[state.assistant_turn] = reasoning
 
-    while choice.get("finish_reason") == "tool_calls" or choice.get("message", {}).get("tool_calls"):
+    while state.choice.get("finish_reason") == "tool_calls" or state.choice.get("message", {}).get("tool_calls"):
         # 检查中断信号
         if ctx.interrupt_event and ctx.interrupt_event.is_set():
             log("   ⚠️ 收到中断信号，停止工具循环")
             # 中断路径同样补存主对话日志，避免中间过程丢失
             _save_conversation_log(
-                messages, ctx.output_dir, q_title="", initial_header=initial_header,
-                reasonings=reasonings,
+                state.messages, ctx.output_dir, q_title="", initial_header=state.initial_header,
+                reasonings=state.reasonings,
             )
             return LoopResult(
                 stop_reason=StopReason.INTERRUPTED,
-                messages=messages,
-                tool_calls_log=tool_calls_log,
-                usage=total_usage,
-                reasonings=reasonings,
+                messages=state.messages,
+                tool_calls_log=state.tool_calls_log,
+                usage=state.total_usage,
+                reasonings=state.reasonings,
             )
 
-        if loop >= ctx.max_loops:
+        if state.loop >= ctx.max_loops:
             log(f"   ⚠️ 工具调用超限（{ctx.max_loops}轮），压缩历史 + 去工具...")
             # 保存压缩前的完整日志（含工具调用）
             _save_conversation_log(
-                messages, ctx.output_dir, q_title="", initial_header=initial_header,
-                suffix="_full", reasonings=reasonings,
+                state.messages, ctx.output_dir, q_title="", initial_header=state.initial_header,
+                suffix="_full", reasonings=state.reasonings,
             )
-            messages = _compress_history(messages, len(tool_calls_log))
-            openai_tools = None  # 关闭工具调用
-            payload = {
-                "model": ctx.model, "messages": messages,
-                "max_tokens": ctx.max_tokens,
-            }
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
-            choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
-            _accumulate_usage(total_usage, usage)
-            reasoning = choice.get("message", {}).get("reasoning_content", "")
-            content = choice["message"]["content"]
-            _record_reasoning(choice["message"])
-            messages.append({"role": "assistant", "content": content})
+            state.messages = _compress_history(state.messages, len(state.tool_calls_log))
+            state.openai_tools = None  # 关闭工具调用
+            state.choice, usage = _post_chat(chat_url, _build_payload(ctx, state), headers, api_format=api_format)
+            _accumulate_usage(state.total_usage, usage)
+            reasoning = state.choice.get("message", {}).get("reasoning_content", "")
+            content = state.choice["message"]["content"]
+            _record_reasoning(state.choice["message"])
+            state.messages.append({"role": "assistant", "content": content})
             _save_conversation_log(
-                messages, ctx.output_dir, q_title="", initial_header=initial_header,
-                reasonings=reasonings,
+                state.messages, ctx.output_dir, q_title="", initial_header=state.initial_header,
+                reasonings=state.reasonings,
             )
             return LoopResult(
                 content=content,
                 reasoning=reasoning,
-                messages=messages,
+                messages=state.messages,
                 stop_reason=StopReason.MAX_TURNS,
-                tool_calls_log=tool_calls_log,
-                usage=total_usage,
-                reasonings=reasonings,
+                tool_calls_log=state.tool_calls_log,
+                usage=state.total_usage,
+                reasonings=state.reasonings,
             )
 
         # 回传前剔除输出专用字段 reasoning_content（部分端点回传会 400/膨胀）
-        _record_reasoning(choice["message"])
-        messages.append({k: v for k, v in choice["message"].items()
-                         if k != "reasoning_content"})
+        _record_reasoning(state.choice["message"])
+        state.messages.append({k: v for k, v in state.choice["message"].items()
+                               if k != "reasoning_content"})
         # 记录 LLM 返回的工具调用请求
-        assistant_text = choice["message"].get("content", "")
+        assistant_text = state.choice["message"].get("content", "")
         if assistant_text:
             log(f"   🤖 LLM 思考: {assistant_text[:150].replace(chr(10), ' ')}")
 
         # 收集本轮工具名称，判断是否为纯搜索轮次（不占 loop，走独立配额）
         # 兼容 finish_reason="tool_calls" 但 message 无 tool_calls 键的端点
-        turn_tool_calls = choice["message"].get("tool_calls") or []
+        turn_tool_calls = state.choice["message"].get("tool_calls") or []
         turn_tool_names = {tc["function"]["name"] for tc in turn_tool_calls}
         is_pure_search = turn_tool_names and turn_tool_names.issubset(_SEARCH_TOOLS)
 
@@ -884,12 +922,12 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
             except json.JSONDecodeError:
                 args = {}
             result = execute_tool(tool_instances, tool_name, args)
-            tool_calls_log.append({
+            state.tool_calls_log.append({
                 "tool": tool_name,
                 "args": args,
                 "result": result[:2000],
             })
-            messages.append({
+            state.messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
                 "content": result[:8000],
@@ -900,75 +938,72 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
 
             # 连续空结果检测（仅对检索/抓取类工具有效）
             # 搜索工具有独立配额，导航/控制/文件工具不计入
-            recent_results.append(result)
+            state.recent_results.append(result)
             if tool_name not in _NAV_CONTROL_TOOLS and tool_name not in _SEARCH_TOOLS:
-                if _is_empty_or_duplicate(result, recent_results):
-                    empty_streak += 1
+                if _is_empty_or_duplicate(result, state.recent_results):
+                    state.empty_streak += 1
                 else:
-                    empty_streak = 0
+                    state.empty_streak = 0
 
-            if empty_streak >= 3:
+            if state.empty_streak >= 3:
                 log("   ⚠️ 连续 3 轮空结果，压缩历史 + 移除搜索工具...")
                 # 保存压缩前的完整日志（含工具调用），_full 后缀避免被后续覆盖
                 _save_conversation_log(
-                    messages, ctx.output_dir, q_title="", initial_header=initial_header,
-                    suffix="_full", reasonings=reasonings,
+                    state.messages, ctx.output_dir, q_title="", initial_header=state.initial_header,
+                    suffix="_full", reasonings=state.reasonings,
                 )
-                messages = _compress_history(messages, len(tool_calls_log), disable_all=False)
+                state.messages = _compress_history(state.messages, len(state.tool_calls_log), disable_all=False)
                 # 只移除搜索/抓取工具，保留其他工具（read_file、write_file 等）
-                openai_tools = [t for t in openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if openai_tools else None
-                payload["tools"] = openai_tools
-                payload["messages"] = messages
-                choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
-                _accumulate_usage(total_usage, usage)
-                reasoning = choice.get("message", {}).get("reasoning_content", "")
-                content = choice["message"]["content"]
-                _record_reasoning(choice["message"])
-                messages.append({"role": "assistant", "content": content})
+                state.openai_tools = [t for t in state.openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if state.openai_tools else None
+                state.choice, usage = _post_chat(chat_url, _build_payload(ctx, state), headers, api_format=api_format)
+                _accumulate_usage(state.total_usage, usage)
+                reasoning = state.choice.get("message", {}).get("reasoning_content", "")
+                content = state.choice["message"]["content"]
+                _record_reasoning(state.choice["message"])
+                state.messages.append({"role": "assistant", "content": content})
                 # TOOL_LOOP 路径补存主对话日志（_full 已保存压缩前完整历史）
                 _save_conversation_log(
-                    messages, ctx.output_dir, q_title="", initial_header=initial_header,
-                    reasonings=reasonings,
+                    state.messages, ctx.output_dir, q_title="", initial_header=state.initial_header,
+                    reasonings=state.reasonings,
                 )
                 return LoopResult(
                     content=content,
                     reasoning=reasoning,
-                    messages=messages,
+                    messages=state.messages,
                     stop_reason=StopReason.TOOL_LOOP,
-                    tool_calls_log=tool_calls_log,
-                    usage=total_usage,
-                    reasonings=reasonings,
+                    tool_calls_log=state.tool_calls_log,
+                    usage=state.total_usage,
+                    reasonings=state.reasonings,
                 )
 
         # 搜索独立配额：纯搜索轮次不占 loop，单独计数
         if is_pure_search:
-            search_count += 1
-            log(f"   🔍 搜索轮次: {search_count}/{_MAX_SEARCH}")
-            if search_count >= _MAX_SEARCH:
+            state.search_count += 1
+            log(f"   🔍 搜索轮次: {state.search_count}/{_MAX_SEARCH}")
+            if state.search_count >= _MAX_SEARCH:
                 log("   ⚠️ 搜索配额耗尽，移除搜索工具...")
-                openai_tools = [t for t in openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if openai_tools else None
-                payload["tools"] = openai_tools
-                messages.append({"role": "user", "content": "【系统提示】搜索次数已达上限，搜索/抓取工具已被禁用。请继续使用其他工具完成校对。"})
+                state.openai_tools = [t for t in state.openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if state.openai_tools else None
+                state.messages.append({"role": "user", "content": "【系统提示】搜索次数已达上限，搜索/抓取工具已被禁用。请继续使用其他工具完成校对。"})
         else:
-            loop += 1
+            state.loop += 1
 
-        choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
-        _accumulate_usage(total_usage, usage)
+        state.choice, usage = _post_chat(chat_url, _build_payload(ctx, state), headers, api_format=api_format)
+        _accumulate_usage(state.total_usage, usage)
 
     # while 循环自然结束 → END_TURN
-    reasoning = choice.get("message", {}).get("reasoning_content", "")
-    content = choice["message"]["content"]
-    _record_reasoning(choice.get("message", {}))
+    reasoning = state.choice.get("message", {}).get("reasoning_content", "")
+    content = state.choice["message"]["content"]
+    _record_reasoning(state.choice.get("message", {}))
     if content:
-        messages.append({"role": "assistant", "content": content})
+        state.messages.append({"role": "assistant", "content": content})
     return LoopResult(
         content=content,
         reasoning=reasoning,
-        messages=messages,
+        messages=state.messages,
         stop_reason=StopReason.END_TURN,
-        tool_calls_log=tool_calls_log,
-        usage=total_usage,
-        reasonings=reasonings,
+        tool_calls_log=state.tool_calls_log,
+        usage=state.total_usage,
+        reasonings=state.reasonings,
     )
 
 
@@ -979,7 +1014,6 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     """校对 API 调用入口。ctx 为 SessionContext 实例。"""
     err_msg = ""
     proof_err = None
-    tool_calls_log = []
     tool_instances = tools or []
     openai_tools = [tool_to_openai(t) for t in tool_instances] if tool_instances else None
     # 自动检测模型是否支持 reasoning_effort
@@ -1001,13 +1035,12 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     # 连续相同类型错误计数（熔断器）
     consecutive_errors = 0
     last_error_type = None
-    api_format = getattr(ctx, "api_format", API_FORMAT_CHAT_COMPLETIONS) or API_FORMAT_CHAT_COMPLETIONS
+    api_format = _ctx_api_format(ctx)
     chat_url = build_api_url(ctx.api_url, api_format)
 
     headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
 
     for retry in range(MAX_RETRY + 1):
-        tool_calls_log.clear()
         try:
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -1016,14 +1049,15 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                     *effective_images,
                 ]},
             ]
-            payload = {
-                "model": ctx.model, "messages": messages,
-                "max_tokens": ctx.max_tokens,
-            }
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
-            if openai_tools:
-                payload["tools"] = openai_tools
+            # 工具循环状态唯一载体（重试时 openai_tools/total_usage 跨轮共享，与旧行为一致）
+            state = ProofreadState(
+                messages=messages,
+                openai_tools=openai_tools,
+                reasoning_effort=reasoning_effort,
+                total_usage=total_usage,
+            )
+            # payload 每轮由 state + ctx 派生
+            payload = _build_payload(ctx, state)
 
             # 记录 payload 大小日志
             _payload_size = len(json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8'))
@@ -1032,23 +1066,19 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                 f"工具: {len(openai_tools) if openai_tools else 0}个, "
                 f"payload: {_payload_size // 1024}KB")
 
-            initial_header = _dump_initial_payload(q_title, system_prompt, md_text, effective_images, openai_tools)
+            state.initial_header = _dump_initial_payload(q_title, system_prompt, md_text, effective_images, openai_tools)
 
             # 首次请求
-            choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
+            state.choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
             _accumulate_usage(total_usage, usage)
 
             # 工具循环
-            result = _run_tool_loop(
-                ctx, choice, messages, tool_instances, openai_tools,
-                tool_calls_log, initial_header, payload, chat_url, headers,
-                reasoning_effort, total_usage, api_format=api_format,
-            )
+            result = _run_tool_loop(ctx, state, tool_instances, chat_url, headers)
 
             # END_TURN 路径在 _run_tool_loop 内未保存日志，此处补存
             if result.stop_reason == StopReason.END_TURN:
                 _save_conversation_log(
-                    result.messages, ctx.output_dir, q_title, initial_header,
+                    result.messages, ctx.output_dir, q_title, state.initial_header,
                     reasonings=result.reasonings,
                 )
 
