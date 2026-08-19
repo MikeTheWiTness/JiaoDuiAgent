@@ -13,6 +13,7 @@ class SessionContext:
     max_loops: int = 20
     max_tokens: int = 16384
     reasoning_effort: str = "high"
+    api_format: str = "chat/completions"
     output_dir: str | None = None
     interrupt_event: threading.Event | None = None  # 中断信号
 
@@ -26,6 +27,7 @@ class SessionContext:
         max_loops: int = 20,
         max_tokens: int = 16384,
         reasoning_effort: str = "high",
+        api_format: str = "chat/completions",
     ) -> "SessionContext":
         """从散列凭证构造 SessionContext（供迁移中的旧调用方使用）。
 
@@ -41,4 +43,5 @@ class SessionContext:
             max_loops=max_loops,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
+            api_format=api_format,
         )

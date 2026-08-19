@@ -128,7 +128,7 @@ class TestSplitModesExam(unittest.TestCase):
         import shared.smart_split as smart_mod
         orig = smart_mod.smart_split
 
-        def fake_smart(md, url, key, model, md_file=None, output_root=None):
+        def fake_smart(md, url, key, model, md_file=None, output_root=None, api_format="chat/completions"):
             return [{"content": "第一部分"}, {"content": "第二部分"}]
 
         smart_mod.smart_split = fake_smart

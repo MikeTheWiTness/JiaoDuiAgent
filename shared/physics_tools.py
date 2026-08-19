@@ -12,17 +12,20 @@ import json
 import os
 from typing import Any
 
-import requests
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
+
+from core.api_client import _post_chat, build_api_url
 
 # ---- 模块级 API 配置（线程安全：threading.local()，跨模块共享） ----
 from shared._subject_api_config import get_subject_api_config, set_subject_api_config
 
 
-def set_physics_api_config(api_url: str, api_key: str, model: str, output_dir: str | None = None):
+def set_physics_api_config(api_url: str, api_key: str, model: str,
+                           output_dir: str | None = None,
+                           api_format: str = "chat/completions"):
     """在 ReAct 工具循环开始前注入 API 配置（薄包装，签名与参数顺序逐字一致）。"""
-    set_subject_api_config(api_url, api_key, model, output_dir)
+    set_subject_api_config(api_url, api_key, model, output_dir, api_format=api_format)
 
 
 def _get_api_config() -> dict:
@@ -96,9 +99,8 @@ class IndependentSolveTool(BaseTool):
                 "error": "independent_solve 缺少 API 配置（api_url/api_key 未注入）",
             }, ensure_ascii=False)
 
-        chat_url = api_url.rstrip("/")
-        if not chat_url.endswith("/chat/completions"):
-            chat_url += "/chat/completions"
+        api_format = cfg.get("api_format", "chat/completions") or "chat/completions"
+        chat_url = build_api_url(api_url, api_format)
 
         # 干净 messages（无主对话历史）
         messages = [
@@ -109,16 +111,13 @@ class IndependentSolveTool(BaseTool):
         payload = {
             "model": model,
             "messages": messages,
-            "temperature": 0.3,
             "reasoning_effort": "high",
             "max_tokens": 32768,
         }
 
         try:
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            resp = requests.post(chat_url, json=payload, headers=headers, timeout=900)
-            resp.raise_for_status()
-            choice = resp.json()["choices"][0]
+            choice, _ = _post_chat(chat_url, payload, headers, api_format=api_format)
             content = choice["message"].get("content", "")
             reasoning = choice["message"].get("reasoning_content", "")
 

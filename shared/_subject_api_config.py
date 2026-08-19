@@ -7,13 +7,16 @@ import threading
 _local = threading.local()
 
 
-def set_subject_api_config(api_url: str, api_key: str, model: str, output_dir: str | None = None):
+def set_subject_api_config(api_url: str, api_key: str, model: str,
+                           output_dir: str | None = None,
+                           api_format: str = "chat/completions"):
     """设置当前线程的 API 凭证。"""
     _local.value = {
         "api_url": api_url,
         "api_key": api_key,
         "model": model,
         "output_dir": output_dir,
+        "api_format": api_format,
     }
 
 

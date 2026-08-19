@@ -429,9 +429,14 @@ class DefaultApp:
             self.log_panel.append(msg)
 
     def open_api_dialog(self):
-        def on_save(url, key, model):
-            save_env_config(self.subject_app.subject_dir, url, key, model)
-            self.api_config = {"api_url": url, "api_key": key, "model_name": model}
+        def on_save(url, key, model, api_format="chat/completions"):
+            save_env_config(self.subject_app.subject_dir, url, key, model, api_format)
+            self.api_config = {
+                "api_url": url,
+                "api_key": key,
+                "model_name": model,
+                "api_format": api_format,
+            }
             log("✅ API 配置已保存到 .env")
 
         ApiDialog(self.root, self.api_config, on_save)
@@ -898,7 +903,8 @@ class DefaultApp:
                 options = {"split_mode": split_mode,
                           "api_url": self.api_config.get("api_url", ""),
                           "api_key": self.api_config.get("api_key", ""),
-                          "model": self.api_config.get("model_name", "")}
+                          "model": self.api_config.get("model_name", ""),
+                          "api_format": self.api_config.get("api_format", "chat/completions")}
                 if hasattr(self.subject_app, 'split_exam'):
                     try:
                         split_ok = self.subject_app.split_exam(raw_md, split_root, basename, options)
@@ -1039,7 +1045,8 @@ class DefaultApp:
                 options = {"split_mode": split_mode,
                           "api_url": self.api_config.get("api_url", ""),
                           "api_key": self.api_config.get("api_key", ""),
-                          "model": self.api_config.get("model_name", "")}
+                          "model": self.api_config.get("model_name", ""),
+                          "api_format": self.api_config.get("api_format", "chat/completions")}
                 if source == "讲义":
                     options["do_clean"] = clean_enabled
                 try:
@@ -1142,6 +1149,7 @@ class DefaultApp:
         ctx = SessionContext(
             api_url=api_url, api_key=api_key, model=model,
             max_loops=self.subject_app.get_max_tool_loops(),
+            api_format=self.api_config.get("api_format", "chat/completions"),
             output_dir=out_root,
             interrupt_event=self._interrupt_event,
         )

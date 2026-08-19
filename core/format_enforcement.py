@@ -83,7 +83,8 @@ def _enforce_format(res: str):
 
 
 def _bash_format_fix(file_path: str, issues_desc: str,
-                     api_url: str, api_key: str, model: str) -> str | None:
+                     api_url: str, api_key: str, model: str,
+                     api_format: str = "chat/completions") -> str | None:
     """让 LLM 通过 bash 直接编辑文件来修正格式问题。
 
     与旧版 _llm_format_fix 的区别：
@@ -151,6 +152,7 @@ def _bash_format_fix(file_path: str, issues_desc: str,
             output_dir=file_dir,
             max_loops=3,
             max_tokens=16384,
+            api_format=api_format,
         )
         call_api(
             ctx,
@@ -176,7 +178,7 @@ def _bash_format_fix(file_path: str, issues_desc: str,
 
 
 def enforce_and_fix(file_path: str, res: str, api_url: str, api_key: str,
-                    model: str) -> tuple[str, bool, str]:
+                    model: str, api_format: str = "chat/completions") -> tuple[str, bool, str]:
     """格式审查 + bash 修正（新版：LLM 直接编辑文件）。
 
     Args:
@@ -194,7 +196,7 @@ def enforce_and_fix(file_path: str, res: str, api_url: str, api_key: str,
     if ok:
         return res, False, ""
 
-    fixed = _bash_format_fix(file_path, issues, api_url, api_key, model)
+    fixed = _bash_format_fix(file_path, issues, api_url, api_key, model, api_format=api_format)
     if fixed and _enforce_format(fixed)[0]:
         log("   ✅ bash 格式修正成功")
         return fixed, True, issues

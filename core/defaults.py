@@ -836,12 +836,20 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
         if react_mode:
             try:
                 from shared.physics_tools import set_physics_api_config
-                set_physics_api_config(ctx.api_url, ctx.api_key, ctx.model, output_dir=q_dir)
+                set_physics_api_config(
+                    ctx.api_url, ctx.api_key, ctx.model,
+                    output_dir=q_dir,
+                    api_format=getattr(ctx, "api_format", "chat/completions"),
+                )
             except ImportError:
                 pass  # 非物理学科无 physics_tools 模块，忽略
             try:
                 from shared.chemistry_tools import set_chemistry_api_config
-                set_chemistry_api_config(ctx.api_url, ctx.api_key, ctx.model, output_dir=q_dir)
+                set_chemistry_api_config(
+                    ctx.api_url, ctx.api_key, ctx.model,
+                    output_dir=q_dir,
+                    api_format=getattr(ctx, "api_format", "chat/completions"),
+                )
             except ImportError:
                 pass  # 非化学学科无 chemistry_tools 模块，忽略
 
@@ -887,7 +895,10 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
             except Exception:
                 import traceback
                 log(f"   ⚠️ 写入 _校对报告.md 失败 ({md_path}):\n{traceback.format_exc()}")
-            res, was_fixed, _ = enforce_and_fix(md_path, res, ctx.api_url, ctx.api_key, ctx.model)
+            res, was_fixed, _ = enforce_and_fix(
+                    md_path, res, ctx.api_url, ctx.api_key, ctx.model,
+                    api_format=getattr(ctx, "api_format", "chat/completions"),
+                )
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
 

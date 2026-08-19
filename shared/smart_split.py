@@ -103,12 +103,14 @@ def smart_split_with_callable(md_content, llm_callable, md_file=None, output_roo
     return [{"content": md_content}]
 
 
-def smart_split(md_content, api_url, api_key, model, md_file=None, output_root=None):
+def smart_split(md_content, api_url, api_key, model, md_file=None, output_root=None,
+                api_format="chat/completions"):
     from core.session_context import SessionContext
     ctx = SessionContext.from_credentials(
         api_url, api_key, model,
         max_loops=1,
         max_tokens=SMART_SPLIT_MAX_TOKENS,
+        api_format=api_format,
     )
 
     def _llm_call(text, prompt):

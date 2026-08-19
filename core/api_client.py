@@ -16,6 +16,10 @@ MAX_RETRY = 2
 TIME_OUT = (30, 1800)
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
+# API 格式常量
+API_FORMAT_CHAT_COMPLETIONS = "chat/completions"
+API_FORMAT_RESPONSES = "responses"
+
 # 工具分类常量（供工具循环熔断/配额逻辑使用）
 _SEARCH_TOOLS = {"web_search", "web_fetch"}
 _MAX_SEARCH = 5
@@ -228,6 +232,206 @@ def tool_to_openai(tool):
     }
 
 
+def _normalize_api_format(api_format: str) -> str:
+    """归一化 API 格式值，兼容 `responses` 与 `/responses` 两种写法。"""
+    return (api_format or API_FORMAT_CHAT_COMPLETIONS).strip().lstrip("/").lower()
+
+
+def build_api_url(base_url: str, api_format: str = API_FORMAT_CHAT_COMPLETIONS) -> str:
+    """根据 API 格式拼接完整端点 URL。
+
+    - chat/completions → 自动补 /chat/completions
+    - responses → 自动补 /responses
+    已带完整路径时保持原样。
+    """
+    url = (base_url or "").rstrip("/")
+    if _normalize_api_format(api_format) == API_FORMAT_RESPONSES:
+        if url.endswith("/responses"):
+            return url
+        if url.endswith("/chat/completions"):
+            url = url[: -len("/chat/completions")].rstrip("/")
+        return url + "/responses"
+
+    if url.endswith("/chat/completions"):
+        return url
+    if url.endswith("/responses"):
+        url = url[: -len("/responses")].rstrip("/")
+    return url + "/chat/completions"
+
+
+def _tool_to_responses(openai_tool: dict) -> dict:
+    """将 Chat Completions 工具定义转换为 Responses API 扁平结构。
+
+    兼容已扁平的 Responses 工具定义（直接原样返回）。
+    """
+    if "function" in openai_tool:
+        fn = openai_tool["function"]
+        return {
+            "type": "function",
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "parameters": fn.get("parameters", {}),
+        }
+    return openai_tool
+
+
+def _message_content_to_responses(content):
+    """将 Chat 消息 content（str 或 content part 列表）转为 Responses 输入 content。
+
+    纯文本内容优先转成字符串：部分严格网关只接受 `content` 为字符串；
+    含图片时保留 content part 数组。
+    """
+    if isinstance(content, str):
+        return content
+    parts = []
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                parts.append({"type": "input_text", "text": part.get("text", "")})
+            elif part.get("type") == "image_url":
+                url = part.get("image_url", {}).get("url", "")
+                if url:
+                    # 严格网关要求 image_url 为字符串 URL，而非 {url: ...} 对象
+                    parts.append({"type": "input_image", "image_url": url})
+    if not parts:
+        return ""
+    if all(part.get("type") == "input_text" for part in parts):
+        return "\n".join(part.get("text", "") for part in parts)
+    return parts
+
+
+def _messages_to_responses_input(messages: list) -> list:
+    """将 Chat Completions 的 messages 数组转换为 Responses API 的 input items。
+
+    转换规则：
+    - system/user/assistant 文本消息 → message item（assistant 用 output_text）
+    - assistant 消息中的 tool_calls → 独立 function_call item
+    - tool 消息 → function_call_output item
+    """
+    items = []
+    for msg in messages or []:
+        role = msg.get("role", "")
+        content = msg.get("content")
+        if role in ("system", "developer"):
+            parts = _message_content_to_responses(content)
+            if parts:
+                items.append({"type": "message", "role": role, "content": parts})
+        elif role == "user":
+            parts = _message_content_to_responses(content)
+            if parts:
+                items.append({"type": "message", "role": "user", "content": parts})
+        elif role == "assistant":
+            if content:
+                items.append({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": _assistant_content_to_responses(content),
+                })
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                items.append({
+                    "type": "function_call",
+                    "call_id": tc.get("id", ""),
+                    "name": fn.get("name", ""),
+                    "arguments": fn.get("arguments", ""),
+                })
+        elif role == "tool":
+            items.append({
+                "type": "function_call_output",
+                "call_id": msg.get("tool_call_id", ""),
+                "output": str(content) if content is not None else "",
+            })
+    return items
+
+
+def _assistant_content_to_responses(content):
+    """将 assistant 消息 content 转为 Responses 的 content。
+
+    纯文本内容优先转成字符串，严格网关更兼容；含其他类型时保留数组。
+    """
+    if isinstance(content, str):
+        return content
+    parts = []
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append({"type": "output_text", "text": part.get("text", "")})
+    if not parts:
+        return ""
+    if all(part.get("type") == "output_text" for part in parts):
+        return "\n".join(part.get("text", "") for part in parts)
+    return parts
+
+
+def _chat_payload_to_responses(payload: dict) -> dict:
+    """将 Chat Completions payload 转换为 Responses API 请求体。"""
+    body = {"model": payload["model"]}
+    if payload.get("messages") is not None:
+        body["input"] = _messages_to_responses_input(payload["messages"])
+    elif payload.get("input") is not None:
+        body["input"] = payload["input"]
+    if payload.get("max_tokens"):
+        body["max_output_tokens"] = payload["max_tokens"]
+    if payload.get("reasoning_effort"):
+        body["reasoning"] = {"effort": payload["reasoning_effort"]}
+    if payload.get("tools"):
+        body["tools"] = [_tool_to_responses(t) for t in payload["tools"]]
+    return body
+
+
+def _parse_responses_choice(resp_json: dict) -> dict:
+    """将 Responses API 响应转换为 Chat Completions 风格的 choice dict。
+
+    转换结果包含 message / finish_reason，供现有工具循环透明复用。
+    """
+    output = resp_json.get("output", [])
+    message = {"role": "assistant", "content": None}
+    tool_calls = []
+    reasoning_parts = []
+
+    for item in output:
+        item_type = item.get("type", "")
+        if item_type == "message":
+            text_parts = []
+            for part in item.get("content", []) or []:
+                if isinstance(part, dict) and part.get("type") == "output_text":
+                    text_parts.append(part.get("text", ""))
+            if text_parts:
+                message["content"] = "\n".join(text_parts)
+        elif item_type == "reasoning":
+            summary = item.get("summary", [])
+            if isinstance(summary, list):
+                reasoning_parts.extend(
+                    part.get("text", "")
+                    for part in summary
+                    if isinstance(part, dict) and part.get("type") == "summary_text"
+                )
+            else:
+                text = item.get("text") or item.get("content")
+                if text:
+                    reasoning_parts.append(str(text))
+        elif item_type == "function_call":
+            call_id = item.get("call_id") or item.get("id") or ""
+            tool_calls.append({
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", ""),
+                },
+            })
+
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    if reasoning_parts:
+        message["reasoning_content"] = "\n".join(reasoning_parts)
+
+    finish_reason = "tool_calls" if tool_calls else "stop"
+    return {"message": message, "finish_reason": finish_reason}
+
+
 def execute_tool(tool_instances, tool_name, arguments):
     for t in tool_instances:
         if t.name == tool_name:
@@ -278,6 +482,9 @@ def _compress_history(messages: list, tool_calls_count: int, disable_all: bool =
 def _extract_usage(resp_json: dict) -> dict:
     """从 API 响应 json 中提取 usage 信息。
 
+    同时兼容 Chat Completions（prompt_tokens/completion_tokens）与
+    Responses API（input_tokens/output_tokens）两种字段命名。
+
     Returns:
         dict: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
         如果响应中无 usage 字段，返回空 dict。
@@ -286,8 +493,8 @@ def _extract_usage(resp_json: dict) -> dict:
     if not isinstance(usage, dict):
         return {}
     return {
-        "prompt_tokens": usage.get("prompt_tokens", 0),
-        "completion_tokens": usage.get("completion_tokens", 0),
+        "prompt_tokens": usage.get("prompt_tokens", usage.get("input_tokens", 0)),
+        "completion_tokens": usage.get("completion_tokens", usage.get("output_tokens", 0)),
         "total_tokens": usage.get("total_tokens", 0),
     }
 
@@ -418,15 +625,32 @@ def _save_conversation_log(messages, output_dir, q_title, initial_header, suffix
 
 # ---- C1: 抽取函数 ----
 
-def _post_chat(chat_url, payload, headers):
-    """发送一次 chat completion 请求，返回 (choice_dict, usage_dict)。
+def _post_chat(chat_url, payload, headers,
+               api_format: str = API_FORMAT_CHAT_COMPLETIONS):
+    """发送一次 API 请求，返回归一化的 (choice_dict, usage_dict)。
 
-    封装 requests.post + raise_for_status + usage 提取 + choice 提取的共用样板。
+    支持 Chat Completions 与 Responses API 两种格式：
+    - Chat Completions 直接发送 chat payload，解析 choices[0]
+    - Responses API 自动转换请求体，并把响应解析为 chat 风格 choice
     """
+    if _normalize_api_format(api_format) == API_FORMAT_RESPONSES:
+        resp = requests.post(
+            chat_url,
+            json=_chat_payload_to_responses(payload),
+            headers=headers,
+            timeout=TIME_OUT,
+        )
+        resp.raise_for_status()
+        resp_json = resp.json()
+        usage = _extract_usage(resp_json)
+        choice = _parse_responses_choice(resp_json)
+        return choice, usage
+
     resp = requests.post(chat_url, json=payload, headers=headers, timeout=TIME_OUT)
     resp.raise_for_status()
-    usage = _extract_usage(resp.json())
-    choice = resp.json()["choices"][0]
+    resp_json = resp.json()
+    usage = _extract_usage(resp_json)
+    choice = resp_json["choices"][0]
     return choice, usage
 
 
@@ -569,7 +793,8 @@ def _build_error_report(ctx, proof_err, err_msg, q_title, consecutive_errors, la
 
 def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                    tool_calls_log, initial_header, payload, chat_url, headers,
-                   reasoning_effort, total_usage):
+                   reasoning_effort, total_usage,
+                   api_format: str = API_FORMAT_CHAT_COMPLETIONS):
     """工具调用循环状态机。返回 LoopResult，4 条退出路径各走各的 stop_reason。"""
     loop = 0
     recent_results = []
@@ -613,12 +838,11 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
             openai_tools = None  # 关闭工具调用
             payload = {
                 "model": ctx.model, "messages": messages,
-                "temperature": 0.3,
                 "max_tokens": ctx.max_tokens,
             }
             if reasoning_effort:
                 payload["reasoning_effort"] = reasoning_effort
-            choice, usage = _post_chat(chat_url, payload, headers)
+            choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
             _accumulate_usage(total_usage, usage)
             reasoning = choice.get("message", {}).get("reasoning_content", "")
             content = choice["message"]["content"]
@@ -695,7 +919,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
                 openai_tools = [t for t in openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if openai_tools else None
                 payload["tools"] = openai_tools
                 payload["messages"] = messages
-                choice, usage = _post_chat(chat_url, payload, headers)
+                choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
                 _accumulate_usage(total_usage, usage)
                 reasoning = choice.get("message", {}).get("reasoning_content", "")
                 content = choice["message"]["content"]
@@ -728,7 +952,7 @@ def _run_tool_loop(ctx, choice, messages, tool_instances, openai_tools,
         else:
             loop += 1
 
-        choice, usage = _post_chat(chat_url, payload, headers)
+        choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
         _accumulate_usage(total_usage, usage)
 
     # while 循环自然结束 → END_TURN
@@ -777,9 +1001,8 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     # 连续相同类型错误计数（熔断器）
     consecutive_errors = 0
     last_error_type = None
-    chat_url = ctx.api_url.rstrip("/")
-    if not chat_url.endswith("/chat/completions"):
-        chat_url += "/chat/completions"
+    api_format = getattr(ctx, "api_format", API_FORMAT_CHAT_COMPLETIONS) or API_FORMAT_CHAT_COMPLETIONS
+    chat_url = build_api_url(ctx.api_url, api_format)
 
     headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
 
@@ -795,7 +1018,6 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             ]
             payload = {
                 "model": ctx.model, "messages": messages,
-                "temperature": 0.3,
                 "max_tokens": ctx.max_tokens,
             }
             if reasoning_effort:
@@ -813,14 +1035,14 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             initial_header = _dump_initial_payload(q_title, system_prompt, md_text, effective_images, openai_tools)
 
             # 首次请求
-            choice, usage = _post_chat(chat_url, payload, headers)
+            choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
             _accumulate_usage(total_usage, usage)
 
             # 工具循环
             result = _run_tool_loop(
                 ctx, choice, messages, tool_instances, openai_tools,
                 tool_calls_log, initial_header, payload, chat_url, headers,
-                reasoning_effort, total_usage,
+                reasoning_effort, total_usage, api_format=api_format,
             )
 
             # END_TURN 路径在 _run_tool_loop 内未保存日志，此处补存

@@ -344,3 +344,187 @@ class TestRunToolLoopRobustness:
         assert sleeps, "应有退避等待"
         assert sleeps[0] >= 12, f"退避 {sleeps[0]}s < Retry-After 12s"
         assert result["stop_reason"] == StopReason.ERROR
+
+
+class TestResponsesApiSupport:
+    """验证 Responses API（/responses）格式转换与请求发送。"""
+
+    def test_build_api_url(self):
+        from core.api_client import API_FORMAT_RESPONSES, build_api_url
+
+        assert build_api_url("https://api.example.com/v1") == "https://api.example.com/v1/chat/completions"
+        assert build_api_url("https://api.example.com/v1/") == "https://api.example.com/v1/chat/completions"
+        assert build_api_url("https://api.example.com/v1", API_FORMAT_RESPONSES) == "https://api.example.com/v1/responses"
+        assert build_api_url("https://api.example.com/v1/responses", API_FORMAT_RESPONSES) == "https://api.example.com/v1/responses"
+        assert build_api_url("https://api.example.com/v1/chat/completions") == "https://api.example.com/v1/chat/completions"
+        assert build_api_url("https://api.example.com/v1/chat/completions", API_FORMAT_RESPONSES) == "https://api.example.com/v1/responses"
+        assert build_api_url("https://api.example.com/v1/responses") == "https://api.example.com/v1/chat/completions"
+
+    def test_messages_to_responses_input(self):
+        from core.api_client import _messages_to_responses_input
+
+        messages = [
+            {"role": "system", "content": "系统提示"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "题目"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+            ]},
+            {"role": "assistant", "content": "思考内容", "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "web_search", "arguments": '{"q":"x"}'}}
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "搜索结果"},
+        ]
+
+        items = _messages_to_responses_input(messages)
+        assert items[0] == {"type": "message", "role": "system", "content": "系统提示"}
+        user_item = items[1]
+        assert user_item["type"] == "message"
+        assert user_item["role"] == "user"
+        assert user_item["content"][0] == {"type": "input_text", "text": "题目"}
+        assert user_item["content"][1] == {"type": "input_image", "image_url": "data:image/png;base64,AAA"}
+        assert any(
+            item.get("type") == "function_call"
+            and item["call_id"] == "call_1"
+            and item["name"] == "web_search"
+            for item in items
+        )
+        assert any(
+            item.get("type") == "function_call_output"
+            and item["call_id"] == "call_1"
+            and item["output"] == "搜索结果"
+            for item in items
+        )
+
+    def test_chat_payload_to_responses(self):
+        from core.api_client import _chat_payload_to_responses
+
+        payload = {
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.3,
+            "max_tokens": 1234,
+            "reasoning_effort": "high",
+            "tools": [
+                {"type": "function", "function": {"name": "f", "description": "d", "parameters": {"type": "object"}}}
+            ],
+        }
+
+        body = _chat_payload_to_responses(payload)
+        assert body["model"] == "gpt-5"
+        assert body["input"] == [{"type": "message", "role": "user", "content": "hi"}]
+        assert "temperature" not in body
+        assert body["max_output_tokens"] == 1234
+        assert body["reasoning"] == {"effort": "high"}
+        assert body["tools"] == [
+            {"type": "function", "name": "f", "description": "d", "parameters": {"type": "object"}}
+        ]
+        assert "messages" not in body
+        assert "max_tokens" not in body
+
+    def test_parse_responses_choice(self):
+        from core.api_client import _parse_responses_choice
+
+        resp_json = {
+            "output": [
+                {"type": "message", "role": "assistant", "content": [
+                    {"type": "output_text", "text": "先搜索一下"}
+                ]},
+                {"type": "function_call", "call_id": "fc_1", "name": "web_search", "arguments": '{"q":"x"}'},
+            ],
+            "status": "completed",
+        }
+
+        choice = _parse_responses_choice(resp_json)
+        assert choice["finish_reason"] == "tool_calls"
+        assert choice["message"]["content"] == "先搜索一下"
+        assert choice["message"]["tool_calls"][0]["id"] == "fc_1"
+        assert choice["message"]["tool_calls"][0]["function"]["name"] == "web_search"
+
+    def test_parse_responses_choice_reasoning(self):
+        from core.api_client import _parse_responses_choice
+
+        resp_json = {
+            "output": [
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "内部推理"}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "结论"}]},
+            ],
+            "status": "completed",
+        }
+
+        choice = _parse_responses_choice(resp_json)
+        assert choice["message"]["content"] == "结论"
+        assert choice["message"].get("reasoning_content") == "内部推理"
+        assert choice["finish_reason"] == "stop"
+
+    def test_post_chat_responses_format(self):
+        from unittest.mock import MagicMock, patch
+
+        from core import api_client
+        from core.api_client import API_FORMAT_RESPONSES
+
+        mock_post = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "ok"}]}],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "status": "completed",
+        }
+        mock_post.return_value = mock_resp
+
+        payload = {
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.3,
+            "max_tokens": 100,
+        }
+        with patch.object(api_client.requests, "post", mock_post):
+            choice, usage = api_client._post_chat(
+                "https://api.example.com/v1/responses",
+                payload,
+                {"Authorization": "Bearer k"},
+                api_format=API_FORMAT_RESPONSES,
+            )
+
+        call_kwargs = mock_post.call_args.kwargs
+        assert mock_post.call_args.args[0] == "https://api.example.com/v1/responses"
+        assert call_kwargs["json"]["input"] == [{"type": "message", "role": "user", "content": "hi"}]
+        assert call_kwargs["json"]["max_output_tokens"] == 100
+        assert "temperature" not in call_kwargs["json"]
+        assert "messages" not in call_kwargs["json"]
+        assert choice["message"]["content"] == "ok"
+        assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+
+    def test_call_api_responses_uses_responses_endpoint(self, tmp_path):
+        """call_api 在 api_format=responses 时请求 /responses 并能正常完成 END_TURN。"""
+        from unittest.mock import MagicMock, patch
+
+        from core import api_client
+        from core.api_client import StopReason, call_api
+        from core.session_context import SessionContext
+
+        ctx = SessionContext(
+            api_url="https://api.example.com/v1", api_key="k", model="gpt-5",
+            api_format="responses", max_loops=1, output_dir=str(tmp_path),
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "最终结果"}]}],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "status": "completed",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(api_client.requests, "post", return_value=mock_resp) as mock_post, \
+                patch.object(api_client, "_dump_initial_payload", return_value=""), \
+                patch.object(api_client, "_save_conversation_log"):
+            result = call_api(
+                ctx, "文本", [], "第1题", "提示", tools=None,
+            )
+            posted_url = mock_post.call_args_list[0].args[0]
+
+        assert result["stop_reason"] == StopReason.END_TURN
+        assert result["content"] == "最终结果"
+        assert result["usage"]["total_tokens"] == 2
+        assert posted_url == "https://api.example.com/v1/responses"

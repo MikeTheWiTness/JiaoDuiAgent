@@ -17,7 +17,7 @@ class ApiDialog:
     def __init__(self, parent, api_config, on_save):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("API 配置")
-        self.dialog.geometry("480x220")
+        self.dialog.geometry("520x260")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
@@ -42,15 +42,29 @@ class ApiDialog:
         self.e_model.grid(row=2, column=1, padx=6, pady=6)
         self.e_model.insert(0, api_config.get("model_name", ""))
 
-        ttk.Button(frame, text="保存", command=self._do_save).grid(row=3, column=0, columnspan=2, pady=12)
+        ttk.Label(frame, text="接口格式：").grid(row=3, column=0, sticky=tk.W, pady=6)
+        self.format_var = tk.StringVar(value=api_config.get("api_format", "chat/completions"))
+        fmt_frame = ttk.Frame(frame)
+        fmt_frame.grid(row=3, column=1, columnspan=2, sticky=tk.W, padx=6, pady=6)
+        ttk.Radiobutton(
+            fmt_frame, text="/chat/completions（默认）",
+            variable=self.format_var, value="chat/completions",
+        ).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Radiobutton(
+            fmt_frame, text="/responses",
+            variable=self.format_var, value="responses",
+        ).pack(side=tk.LEFT)
+
+        ttk.Button(frame, text="保存", command=self._do_save).grid(row=4, column=0, columnspan=3, pady=12)
 
     def _do_save(self):
         url = self.e_url.get().strip()
         key = self.e_key.get().strip()
         model = self.e_model.get().strip()
+        api_format = self.format_var.get()
         if not url or not key or not model:
             return
-        self.on_save(url, key, model)
+        self.on_save(url, key, model, api_format)
         self.dialog.destroy()
 
 

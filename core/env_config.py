@@ -5,7 +5,7 @@ from core.logging_utils import log
 
 
 def load_env_config(subject_dir):
-    cfg = {"api_url": "", "api_key": "", "model_name": ""}
+    cfg = {"api_url": "", "api_key": "", "model_name": "", "api_format": "chat/completions"}
     env_file = os.path.join(subject_dir, ".env")
     if not os.path.exists(env_file):
         return cfg
@@ -25,19 +25,26 @@ def load_env_config(subject_dir):
                         cfg['api_key'] = val
                     elif key == 'model_name':
                         cfg['model_name'] = val
+                    elif key == 'api_format':
+                        cfg['api_format'] = val or "chat/completions"
     except Exception:
         log(f"   ⚠️ 读取 .env 文件失败 ({env_file}):\n{traceback.format_exc()}")
     return cfg
 
 
-def save_env_config(subject_dir, api_url, api_key, model_name):
+def save_env_config(subject_dir, api_url, api_key, model_name, api_format="chat/completions"):
     """保存 API 凭证到 .env 文件，保留现有额外键与注释。
 
-    改为读改写策略：先读取现有 .env 的全部行，仅修改匹配的三键行；
+    改为读改写策略：先读取现有 .env 的全部行，仅修改匹配的四键行；
     不存在的键在原注释段后追加。不再覆写整个文件。
     """
     env_file = os.path.join(subject_dir, ".env")
-    key_map = {"api_url": api_url, "api_key": api_key, "model_name": model_name}
+    key_map = {
+        "api_url": api_url,
+        "api_key": api_key,
+        "model_name": model_name,
+        "api_format": api_format,
+    }
 
     if os.path.exists(env_file):
         lines = []
@@ -67,3 +74,4 @@ def save_env_config(subject_dir, api_url, api_key, model_name):
             f.write(f"API_URL={api_url}\n")
             f.write(f"API_KEY={api_key}\n")
             f.write(f"MODEL_NAME={model_name}\n")
+            f.write(f"API_FORMAT={api_format}\n")
