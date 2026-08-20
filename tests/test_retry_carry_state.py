@@ -6,6 +6,8 @@
 - 首次请求失败的重试仍从零开始（现状行为）
 - 不可重试错误（400）立即停止，不清空已积累的对话记录（快照保留首轮历史）
 """
+import json
+
 import requests
 
 from core.api_client import (
@@ -156,7 +158,6 @@ class TestMidLoopRetry:
         assert result["stop_reason"] == StopReason.ERROR
         assert sleeps == [], "不可重试错误不应退避/重试"
         # 已完成的首轮工具仍保留在快照（不清空已积累的对话记录）
-        data = __import__("json").loads(
-            (tmp_path / CHECKPOINT_FILENAME).read_text(encoding="utf-8"))
+        data = json.loads((tmp_path / CHECKPOINT_FILENAME).read_text(encoding="utf-8"))
         assert any(m.get("role") == "assistant" for m in data["messages"])
         assert data["tool_calls_log"][0]["tool"] == "round1"

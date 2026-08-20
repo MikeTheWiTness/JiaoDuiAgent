@@ -14,7 +14,6 @@ import threading
 from core.api_client import (
     CHECKPOINT_FILENAME,
     StopReason,
-    _stable_hash,
     call_api,
 )
 from core.session_context import SessionContext
@@ -189,7 +188,8 @@ class TestSnapshotContent:
         data = json.loads((tmp_path / CHECKPOINT_FILENAME).read_text(encoding="utf-8"))
         assert data["schema_version"] == 1
         assert data["q_title"] == "第1题"
-        assert data["prompt_hash"] == _stable_hash("提示")
+        # 已知样本（独立来源）：sha256("提示")，不用实现同款逻辑重算
+        assert data["prompt_hash"] == "f56c6c82203b33f632fb357d7fbea6dca86d5863f35a3b5a6f72ecfaacc0c396"
         assert data["md_hash"] == "hash-md"
         assert data["model"] == "m"
         assert data["image_paths"] == []
@@ -313,6 +313,6 @@ class TestDefaultProofreadOneMdHash:
         assert res["success"] is True
         # 传给 call_api 的是 hook 后文本
         assert captured["md_text"] == patched_md
-        # 但 md_hash 是 pre_hook 之前的原始文本哈希
-        assert captured["md_hash"] == _stable_hash(raw_md)
-        assert captured["md_hash"] != _stable_hash(patched_md)
+        # 但 md_hash 是 pre_hook 之前的原始文本哈希（已知样本：sha256(raw_md)）
+        assert captured["md_hash"] == "b7c40c6d00a49f22f39fe3b3891a36b8026a203aa542050cf6a75aef3db3f5a0"
+        assert captured["md_hash"] != "c6562e19ef1cf105507bc85c6e0c624239d180ce16e85382735c313ca0fd93dc"

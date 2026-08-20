@@ -10,6 +10,8 @@
 """
 import json
 
+import requests
+
 from core.api_client import (
     CHECKPOINT_CORRUPT_FILENAME,
     CHECKPOINT_FILENAME,
@@ -55,8 +57,6 @@ def _make_snapshot(tmp_path, *, title="第1题", prompt="提示", md_hash="hash-
     返回用于重跑的 ctx（与快照同 q_dir / 同参数）。
     """
     from unittest import mock
-
-    import requests
 
     from core import api_client
 
@@ -133,6 +133,55 @@ class TestRestoreSuccess:
         assert result["stop_reason"] == StopReason.END_TURN
         # 中断前 1 + 中断后两轮 10 + 5 = 16，不含重放
         assert result["usage"]["total_tokens"] == 16, result["usage"]
+
+    def test_restore_keeps_pre_interruption_reasoning(self, tmp_path):
+        """恢复后 _API对话记录.md 含中断前的 reasoning（reasonings 键须归一化为 int）。
+
+        回归：JSON 序列化把 int 轮次键转 str；load 若不做键归一化，
+        续跑后 _save_conversation_log 按 int turn 查询永远命中不了旧条目，
+        中断前的 reasoning_content 将整体丢失。
+        """
+        from unittest import mock
+
+        from core import api_client
+
+        ctx = _ctx(tmp_path)
+        # 制造中断快照：首轮带 reasoning_content 后网络波动
+        tool_choice = {
+            "message": {
+                "role": "assistant",
+                "content": "需要查询",
+                "reasoning_content": "第一轮推理：先查资料",
+                "tool_calls": [{"id": "c1", "type": "function",
+                                "function": {"name": "fake_tool", "arguments": "{}"}}],
+            },
+            "finish_reason": "tool_calls",
+        }
+        calls = {"n": 0}
+
+        def _fake_post(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return tool_choice, {"total_tokens": 1}
+            raise requests.exceptions.ConnectionError("波动")
+
+        with mock.patch.object(api_client, "execute_tool", return_value="第一轮结果"), \
+                mock.patch.object(api_client, "_post_chat", side_effect=_fake_post), \
+                mock.patch.object(api_client.time, "sleep"):
+            result = call_api(ctx, "文本", [], "第1题", "提示", tools=[],
+                              checkpoint_md_hash="hash-md", image_paths=[])
+        assert result["stop_reason"] == StopReason.ERROR
+        assert (tmp_path / CHECKPOINT_FILENAME).exists()
+
+        # 恢复续跑：首请求即 end_turn，但中断前第一轮的 reasoning 必须渲染进对话记录
+        with mock.patch.object(api_client, "execute_tool", return_value="有结果"), \
+                mock.patch.object(api_client, "_post_chat",
+                                  side_effect=[(_end_choice("最终结果"), {"total_tokens": 1})]):
+            result2 = call_api(ctx, "文本", [], "第1题", "提示", tools=[],
+                               checkpoint_md_hash="hash-md", image_paths=[])
+        assert result2["stop_reason"] == StopReason.END_TURN
+        log_text = (tmp_path / "_API对话记录.md").read_text(encoding="utf-8")
+        assert "第一轮推理：先查资料" in log_text, "恢复后中断前的 reasoning 必须渲染进对话记录"
 
 
 class TestValidationMismatch:

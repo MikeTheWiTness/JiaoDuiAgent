@@ -1,5 +1,9 @@
+import base64
+import copy
+import hashlib
 import json
 import os
+import re
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -297,7 +301,9 @@ class ProofreadState:
             empty_streak=int(data.get("empty_streak", 0)),
             recent_results=list(data.get("recent_results") or []),
             tool_calls_log=list(data.get("tool_calls_log") or []),
-            reasonings=dict(data.get("reasonings") or {}),
+            # JSON 序列化会把 int 轮次键转成 str，须归一化回 int，
+            # 否则续跑后 _save_conversation_log 按 int turn 查询永远命中不了旧条目
+            reasonings={int(k): v for k, v in (data.get("reasonings") or {}).items()},
             assistant_turn=int(data.get("assistant_turn", 0)),
             openai_tools=data.get("openai_tools"),
             reasoning_effort=data.get("reasoning_effort"),
@@ -619,7 +625,6 @@ def _accumulate_usage(total: dict, usage: dict) -> dict:
 
 def _stable_hash(text: str) -> str:
     """对文本做稳定哈希，用作快照校验字段（prompt_hash / md_hash）。"""
-    import hashlib
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
@@ -662,9 +667,10 @@ def _scrub_header_images(initial_header: str, image_paths) -> str:
 
     initial_header 由 _dump_initial_payload 生成，图片部分仅含 80 字符摘录，
     但仍是 base64 数据，须在快照中替换为 `checkpoint:<name>` 引用。
+    正则收紧为 `data:image/` 前缀：正文/系统提示词里的普通 `data:` 串
+    不得消耗文件名清单，避免真实图片错位。
     """
-    import re
-    if not image_paths or "data:" not in initial_header:
+    if not image_paths or "data:image/" not in initial_header:
         return initial_header
     paths_iter = iter(image_paths)
 
@@ -672,7 +678,7 @@ def _scrub_header_images(initial_header: str, image_paths) -> str:
         name = next(paths_iter, "")
         return f"checkpoint:{name}"
 
-    return re.sub(r"data:\S*", _repl, initial_header)
+    return re.sub(r"data:image/\S*", _repl, initial_header)
 
 
 def _is_empty_or_duplicate(result: str, recent_results: list) -> bool:
@@ -976,6 +982,14 @@ def _build_payload(ctx, state):
     return payload
 
 
+def _remove_search_tools(state) -> None:
+    """移除搜索/抓取工具，保留其他工具（read_file、write_file 等）。"""
+    state.openai_tools = (
+        [t for t in state.openai_tools if t["function"]["name"] not in _SEARCH_TOOLS]
+        if state.openai_tools else None
+    )
+
+
 # ---- 断点续传快照（ADR-0029，Issue 050 保存侧）----
 
 def _checkpoint_enabled(ctx) -> bool:
@@ -1024,9 +1038,9 @@ def _clear_checkpoint(ctx) -> None:
 def _image_file_to_data_url(img_dir: str, name: str) -> str | None:
     """按文件名从 images/ 目录重新编码图片为 data URL（复用校对入口编码逻辑：mime 判断 + 10MB 过滤）。
 
-    缺失 / 超限 / 解码失败 → 返回 None（上层 log 警告并降级缺失）。
+    缺失 / 超限 / 解码失败 → 返回 None（上层 log 警告并降级缺失）；
+    读取异常须记录完整上下文（权限/磁盘等真实原因可追溯）。
     """
-    import base64 as _b64
     img_path = os.path.join(img_dir, name)
     if not os.path.exists(img_path):
         return None
@@ -1037,12 +1051,13 @@ def _image_file_to_data_url(img_dir: str, name: str) -> str | None:
         if os.path.getsize(img_path) > MAX_FILE_SIZE:
             return None
         with open(img_path, "rb") as fi:
-            b64 = _b64.b64encode(fi.read()).decode()
+            b64 = base64.b64encode(fi.read()).decode()
         mime = ("image/png" if ext == "png"
                 else "image/jpeg" if ext in ("jpg", "jpeg")
                 else "image/gif")
         return f"data:{mime};base64,{b64}"
     except Exception:
+        log(f"   ⚠️ 快照恢复图片读取失败 ({img_path}):\n{traceback.format_exc()}")
         return None
 
 
@@ -1052,7 +1067,6 @@ def _reencode_checkpoint_images(messages: list, image_paths: list, output_dir: s
     图片从 `<output_dir>/images/` 按名重编码回填；文件缺失/超限/解码失败时
     log 警告该图降级缺失（保留消息结构，移除此 image part 的数据 URL）。
     """
-    import copy
     img_dir = os.path.join(output_dir, "images")
     missing = set()
     restored = [copy.deepcopy(m) for m in messages]
@@ -1077,12 +1091,13 @@ def _reencode_checkpoint_images(messages: list, image_paths: list, output_dir: s
 
 
 def _read_checkpoint_json(path: str) -> dict | None:
-    """读取快照 JSON；解析失败 → None（视为文件级损坏）。"""
+    """读取快照 JSON；解析失败 → None（视为文件级损坏），并记录完整异常上下文。"""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else None
     except Exception:
+        log(f"   ⚠️ 快照解析失败 ({path}):\n{traceback.format_exc()}")
         return None
 
 
@@ -1279,7 +1294,10 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
                 )
                 state.messages = _compress_history(state.messages, len(state.tool_calls_log), disable_all=False)
                 # 只移除搜索/抓取工具，保留其他工具（read_file、write_file 等）
-                state.openai_tools = [t for t in state.openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if state.openai_tools else None
+                _remove_search_tools(state)
+                # 压缩已重置会话上下文：清空空结果计数，避免「保存后、post 前」被杀 →
+                # 恢复后首轮工具再判空一次即基于残留的 ≥3 计数二次压缩、追加重复摘要
+                state.empty_streak = 0
                 # 压缩历史后同样保存（发下一轮请求之前）
                 _save_checkpoint(ctx, state)
                 state.choice, usage = _post_chat(chat_url, _build_payload(ctx, state), headers, api_format=api_format)
@@ -1309,7 +1327,7 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
             log(f"   🔍 搜索轮次: {state.search_count}/{_MAX_SEARCH}")
             if state.search_count >= _MAX_SEARCH:
                 log("   ⚠️ 搜索配额耗尽，移除搜索工具...")
-                state.openai_tools = [t for t in state.openai_tools if t["function"]["name"] not in _SEARCH_TOOLS] if state.openai_tools else None
+                _remove_search_tools(state)
                 state.messages.append({"role": "user", "content": "【系统提示】搜索次数已达上限，搜索/抓取工具已被禁用。请继续使用其他工具完成校对。"})
         else:
             state.loop += 1
@@ -1366,11 +1384,8 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     _set_nav_text(md_text)
     # 断点续传恢复（仅 enable_checkpoint=True 路径；四重校验通过才续跑）
     restored_state = _try_restore_checkpoint(ctx, q_title, system_prompt, checkpoint_md_hash)
-    # 累计整个 call_api 过程的所有 token 消耗
-    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    if restored_state is not None:
-        total_usage = restored_state.total_usage  # 恢复后不清零，继续累加
     # 跨重试携带的工具循环状态（Issue 052：重试不重建对话、不重放已完成工具）
+    # token 用量统一收在 state.total_usage 上（恢复后不清零，继续累加）
     state = None
     # 连续相同类型错误计数（熔断器）
     consecutive_errors = 0
@@ -1395,12 +1410,10 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                         *effective_images,
                     ]},
                 ]
-                # 工具循环状态唯一载体（重试时 openai_tools/total_usage 跨轮共享，与旧行为一致）
                 state = ProofreadState(
                     messages=messages,
                     openai_tools=openai_tools,
                     reasoning_effort=reasoning_effort,
-                    total_usage=total_usage,
                     q_title=q_title,
                     prompt_hash=_stable_hash(system_prompt),
                     md_hash=checkpoint_md_hash or "",
@@ -1423,7 +1436,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
 
             # 首次请求
             state.choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
-            _accumulate_usage(total_usage, usage)
+            _accumulate_usage(state.total_usage, usage)
 
             # 工具循环
             result = _run_tool_loop(ctx, state, tool_instances, chat_url, headers)
@@ -1498,7 +1511,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
         "reasoning": "",
         "messages": [],
         "stop_reason": StopReason.ERROR,
-        "usage": total_usage,
+        "usage": state.total_usage,
     }
 
 
