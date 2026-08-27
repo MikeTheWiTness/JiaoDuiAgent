@@ -51,7 +51,7 @@ class SubjectApp(BaseSubjectApp):
 
     def get_tool_instructions(self):
         sympy_tools = [t for t in self.tools if t.name not in ("web_search", "web_fetch",
-                         "plan_update", "locate_paragraph", "read_section")]
+                         "plan_update", "locate_paragraph", "read_section", "independent_solve")]
         web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
 
         lines = []

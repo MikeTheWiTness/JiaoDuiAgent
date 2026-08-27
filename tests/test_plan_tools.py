@@ -78,15 +78,19 @@ class TestPlanUpdateTool(unittest.TestCase):
         self.assertEqual(item.content, "校对答案")
         self.assertEqual(item.status, "pending")
 
-    def test_partial_complete_no_nudge(self):
+    def test_partial_complete_without_in_progress_rejected(self):
+        """有待开始项但无进行中项 → 计划停滞，拒绝提交（P5 修复）。
+
+        修复前：ok=True 且无 nudge，模型误以为计划已推进成功。
+        """
         todos = [
             {"content": "通读全文", "status": "completed", "activeForm": "通读全文"},
             {"content": "逐题校对", "status": "completed", "activeForm": "逐题校对"},
             {"content": "自检格式", "status": "pending", "activeForm": "自检格式"},
         ]
         result = self.tool._run(todos)
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["nudge"], "")
+        self.assertFalse(result["ok"])
+        self.assertIn("进行中", result["summary"])
 
 
 if __name__ == "__main__":

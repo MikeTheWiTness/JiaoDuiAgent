@@ -40,14 +40,12 @@ class SubjectApp(BaseSubjectApp):
             WebSearchTool(),
         ]
         if self.react_mode:
-            from shared.physics_tools import IndependentSolveTool
             from shared.plan_tools import PlanUpdateTool
             from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
             # 数学 nudge 置空：自检靠 prompt 第 8 步，不依赖工具 nudge（对齐物理 ADR-0006 决策 2）
             base.append(PlanUpdateTool(nudge_template=""))
             base.append(LocateParagraphTool())
             base.append(ReadSectionTool())
-            base.append(IndependentSolveTool())
         return base
 
     def get_max_tool_loops(self):
@@ -57,7 +55,7 @@ class SubjectApp(BaseSubjectApp):
     def get_tool_instructions(self):
         """生成工具使用指令。"""
         sympy_tools = [t for t in self.tools if t.name not in ("web_search", "web_fetch",
-                         "plan_update", "locate_paragraph", "read_section")]
+                         "plan_update", "locate_paragraph", "read_section", "independent_solve")]
         web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
 
         lines = []

@@ -94,12 +94,34 @@ class PlanUpdateTool(BaseTool):
                 ),
                 "nudge": "",
             }
+        # 非法状态检查
+        bad_status = sorted({i["status"] for i in items} - {"pending", "in_progress", "completed"})
+        if bad_status:
+            return {
+                "ok": False,
+                "summary": (
+                    f"错误：存在非法状态 {bad_status}，"
+                    "合法状态为 pending / in_progress / completed。请修正后再提交。"
+                ),
+                "nudge": "",
+            }
 
         # 生成状态摘要
         total = len(items)
         completed = sum(1 for i in items if i["status"] == "completed")
         pending = sum(1 for i in items if i["status"] == "pending")
         in_progress_items = [i["content"] for i in items if i["status"] == "in_progress"]
+
+        # 有待开始项但无进行中项 → 计划停滞，拒绝静默通过
+        if in_progress_count == 0 and pending > 0:
+            return {
+                "ok": False,
+                "summary": (
+                    "错误：计划中有待开始项但没有进行中项，"
+                    "应恰好 1 项 in_progress（上一步完成后请把下一项设为 in_progress）。"
+                ),
+                "nudge": "",
+            }
 
         summary_lines = [
             f"计划已更新：共 {total} 项 — {completed} 已完成，{pending} 待开始",
