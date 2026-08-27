@@ -7,14 +7,26 @@ from sympy import Symbol, symbols, expand, simplify, sqrt, pi, oo, I
 from sympy import sin, cos, tan, log, exp, factorial, Rational
 from sympy import Matrix, Piecewise, solveset, solve, Eq, limit, diff, integrate
 from sympy import factor, trigsimp, together, apart, S
+from sympy import Float, Integer, Max, Min, asin, acos, atan, cot, sinh, cosh, tanh, Abs, floor, ceiling
+from sympy.geometry import Point, Line, Circle, intersection
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication
 import sympy as _sp
 E = Symbol('E')
 _LOCALS = dict(locals())
+# local 语境优先于白名单，剔除会劫持物理符号的全局名（I 虚数单位、S 单例注册器）
+for _bad in ('I', 'S'):
+    _LOCALS.pop(_bad, None)
 _transforms = standard_transformations + (implicit_multiplication,)
 
+# 数学语境白名单：仅数学函数/常量可解析，防止 sympy 全局名（I 虚数单位、S、O、beta、gamma 等）劫持物理符号
+_MATH_GLOBALS = {n: v for n, v in globals().items() if n in (
+    'pi', 'oo', 'Rational', 'Float', 'Integer', 'Max', 'Min', 'sin', 'cos', 'tan', 'cot',
+    'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'log', 'exp', 'sqrt', 'Abs', 'floor',
+    'ceiling', 'factorial', 'E', 'Symbol', 'symbols', 'Matrix', 'Piecewise', 'Point', 'Line',
+    'Circle', 'intersection')}
+
 def _safe_sympify(expr_str, local_dict=None):
-    return parse_expr(expr_str, local_dict=local_dict, transformations=_transforms)
+    return parse_expr(expr_str, local_dict=local_dict, global_dict=_MATH_GLOBALS, transformations=_transforms)
 """
 
 _SERIALIZER = """
@@ -47,7 +59,18 @@ def _serialize(obj):
                 if abs(val - rounded) < 1e-10 * max(1, abs(val)):
                     return rounded
             return val
-        except (TypeError, ValueError, OverflowError):
+        except (TypeError, ValueError, OverflowError) as _e:
+            # 无穷（zoo/oo）与虚数结果不能静默降级为普通字符串（"zoo"/"I" 会让模型误读）
+            if obj.is_infinite:
+                return f"未定义（无穷大：{obj}）"
+            if hasattr(obj, 'has') and obj.has(_sp.I):
+                try:
+                    _c = complex(obj)
+                    if abs(_c.imag) > 1e-12:
+                        _sign = '+' if _c.imag >= 0 else '-'
+                        return f"{_c.real:g}{_sign}{abs(_c.imag):g}i"
+                except Exception:
+                    pass
             return str(obj)
     if isinstance(obj, _sp.MatrixBase):
         return [[_serialize(obj[i, j]) for j in range(obj.cols)] for i in range(obj.rows)]
@@ -62,6 +85,97 @@ def _serialize(obj):
 output = _serialize(result)
 print(json.dumps(output, ensure_ascii=False))
 """
+
+_DIM_BODY = (
+    _SAFE_IMPORTS
+    + "from sympy.physics.units import *\n"
+    + "from sympy.physics.units import convert_to\n"
+    + "from sympy.physics.units.quantities import Quantity, PhysicalConstant\n"
+    + "from sympy.physics.units.systems.si import dimsys_SI\n"
+    + "from sympy.physics.units.systems.si import dimsys_SI\n"
+    + "from itertools import product\n"
+    + "\n"
+    + "# 单位语境只用于解析单位字符串（单位名/缩写），绝不注入数学表达式\n"
+    + "units_ctx = {n: v for n, v in globals().items() if isinstance(v, (Quantity, PhysicalConstant))}\n"
+    + "\n"
+    + "def _unit_vec(q):\n"
+    + "    deps = dimsys_SI.get_dimensional_dependencies(q.dimension)\n"
+    + "    return {str(getattr(k, 'name', str(k))): int(v) for k, v in deps.items()}\n"
+    + "\n"
+    + "def _parse_unit(s):\n"
+    + "    e = parse_expr(s, local_dict=units_ctx, global_dict=_MATH_GLOBALS, transformations=_transforms)\n"
+    + "    bad = sorted(str(x) for x in e.free_symbols)\n"
+    + "    if bad:\n"
+    + "        raise ValueError('单位表达式 \"' + s + '\" 含未识别符号 ' + repr(bad) + '，请使用 sympy 单位名（如 meter、second、kilogram、ohm、tesla）')\n"
+    + "    return e\n"
+    + "\n"
+    + "def _vec_equal(a, b):\n"
+    + "    keys = set(a) | set(b)\n"
+    + "    return all(abs(a.get(k, 0.0) - b.get(k, 0.0)) <= 1e-6 for k in keys)\n"
+    + "\n"
+    + "def _vec_norm(v):\n"
+    + "    return {k: round(x, 6) for k, x in v.items() if abs(x) > 1e-9}\n"
+    + "\n"
+    + "_SUP_TABLE = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '-': '⁻', '.': '·'}\n"
+    + "\n"
+    + "def _vec_str(v):\n"
+    + "    order = [('mass', 'M'), ('length', 'L'), ('time', 'T'), ('current', 'I'), ('temperature', 'Θ'), ('amount_of_substance', 'N'), ('luminous_intensity', 'J')]\n"
+    + "    parts = []\n"
+    + "    for k, sym in order:\n"
+    + "        p = v.get(k)\n"
+    + "        if not p or abs(p) < 1e-9:\n"
+    + "            continue\n"
+    + "        p = round(p, 4)\n"
+    + "        if abs(p - round(p)) < 1e-9:\n"
+    + "            p = int(round(p))\n"
+    + "        sup = str(p).translate(str.maketrans(_SUP_TABLE))\n"
+    + "        parts.append(sym if p == 1 else sym + sup)\n"
+    + "    return '·'.join(parts) if parts else 'dimensionless'\n"
+    + "\n"
+    + "def _vec(e, sym_vec):\n"
+    + "    if isinstance(e, (Quantity, PhysicalConstant)):\n"
+    + "        return _unit_vec(e)\n"
+    + "    if e.is_Number or e.is_NumberSymbol:\n"
+    + "        return {}\n"
+    + "    if e.is_Symbol:\n"
+    + "        name = str(e)\n"
+    + "        if name not in sym_vec:\n"
+    + "            raise ValueError('符号 ' + name + ' 未声明单位')\n"
+    + "        return dict(sym_vec[name])\n"
+    + "    if e.is_Pow:\n"
+    + "        exp = e.exp\n"
+    + "        if not exp.is_Number:\n"
+    + "            raise ValueError('量纲指数必须为数值，得到: ' + str(exp))\n"
+    + "        f = float(exp)\n"
+    + "        bv = _vec(e.base, sym_vec)\n"
+    + "        return {k: x * f for k, x in bv.items()}\n"
+    + "    if e.is_Mul:\n"
+    + "        r = {}\n"
+    + "        for a in e.args:\n"
+    + "            for k, x in _vec(a, sym_vec).items():\n"
+    + "                r[k] = r.get(k, 0.0) + x\n"
+    + "        return r\n"
+    + "    if e.is_Add:\n"
+    + "        vs = [_vec(a, sym_vec) for a in e.args]\n"
+    + "        for v in vs[1:]:\n"
+    + "            if not _vec_equal(vs[0], v):\n"
+    + "                raise ValueError('加法项量纲不一致，无法合并')\n"
+    + "        return dict(vs[0])\n"
+    + "    if e.is_Function:\n"
+    + "        for a in e.args:\n"
+    + "            if not _vec_equal(_vec(a, sym_vec), {}):\n"
+    + "                raise ValueError('数学函数（如 sin/cos/exp）的参数必须无量纲')\n"
+    + "        return {}\n"
+    + "    raise ValueError('不支持的量纲表达式节点: ' + type(e).__name__ + '(' + str(e) + ')')\n"
+    + "\n"
+    + "def _decl_vec(u):\n"
+    + "    if str(u).strip().lower() == 'dimensionless':\n"
+    + "        return {}\n"
+    + "    return _vec(_parse_unit(str(u)), {})\n"
+    + "\n"
+    + "def _parse_symbol_defs(unit_defs):\n"
+    + "    return {s: (list(v) if isinstance(v, list) else [v]) for s, v in unit_defs.items()}\n"
+)
 
 _TEMPLATES: dict[str, Template] = {
     "evaluate": Template(
@@ -104,6 +218,11 @@ _TEMPLATES: dict[str, Template] = {
         + "        result = bool(a.equals(b))\n"
         + "    except Exception:\n"
         + "        pass\n"
+        + "if not result:\n"
+        + "    try:\n"
+        + "        result = abs(float(diff)) <= 1e-12\n"
+        + "    except Exception:\n"
+        + "        pass\n"
         + _SERIALIZER
     ),
     "differentiate": Template(
@@ -135,12 +254,7 @@ _TEMPLATES: dict[str, Template] = {
         + _SERIALIZER
     ),
     "dimensional": Template(
-        _SAFE_IMPORTS
-        + "from sympy.physics.units import *\n"
-        + "from sympy.physics.units import convert_to\n"
-        + "from sympy.physics.units.systems.si import dimsys_SI\n"
-        + "\n_LOCALS = dict(locals())\n"
-        + "$unit_definitions\n"
+        _DIM_BODY
         + "$operation_code\n"
         + _SERIALIZER
     ),
@@ -345,33 +459,95 @@ def build_code(operation: str, **params) -> str:
     operation = params.get("dim_operation", params.get("operation", "check_consistency"))
     target_units = params.get("target_units", "")
     unit_defs = params.get("unit_definitions", {}) or {}
-    unit_def_lines = []
-    for var_name, unit_str in unit_defs.items():
-        unit_def_lines.append(f"{var_name} = _safe_sympify({unit_str!r}, local_dict=_LOCALS)")
-    unit_definitions_code = "\n".join(unit_def_lines)
+    unit_defs_json = json_repr(unit_defs)
 
     expression_str = params.get("expression", "")
+    # get_dimensions / convert 只取等号右端（左端为目标量，量纲来源在右侧）
+    dim_expr_str = expression_str.rsplit("=", 1)[-1].strip() if "=" in expression_str else expression_str
+    
     if operation == "check_consistency":
         operation_code = (
-            f"\n_lr = {expression_str!r}.rsplit('=', 1)\n"
+            "_unit_defs = $unit_defs_json\n"
+            "_cands = _parse_symbol_defs(_unit_defs)\n"
+            "_lr = $expression_str.rsplit('=', 1)\n"
             "_left = _safe_sympify(_lr[0].strip(), local_dict=_LOCALS)\n"
             "_right = _safe_sympify(_lr[1].strip(), local_dict=_LOCALS) if len(_lr) > 1 else None\n"
-            "_left_q = [str(q.dimension) for q in _left.atoms(Quantity) if hasattr(q, 'dimension')]\n"
-            "_right_q = [str(q.dimension) for q in _right.atoms(Quantity) if hasattr(q, 'dimension')] if _right else []\n"
-            "result = {'consistent': sorted(_left_q) == sorted(_right_q), "
-            "'left_dimensions': _left_q, "
-            "'right_dimensions': _right_q}\n"
+            "_syms = set(str(s) for s in _left.free_symbols)\n"
+            "if _right is not None:\n"
+            "    _syms |= set(str(s) for s in _right.free_symbols)\n"
+            "_missing = sorted(s for s in _syms if s not in _unit_defs)\n"
+            "if _missing:\n"
+            "    raise ValueError('以下符号未声明单位，请在 unit_definitions 中补齐: ' + repr(_missing) + '（纯数学量请声明为 dimensionless）')\n"
+            "_keys = sorted(_cands.keys())\n"
+            "_n = 1\n"
+            "for s in _keys:\n"
+            "    _n *= len(_cands[s])\n"
+            "if _n > 128:\n"
+            "    raise ValueError('歧义候选组合过多 (' + str(_n) + ' > 128)，请减少候选单位')\n"
+            "_matched = None\n"
+            "_lv = _rv = None\n"
+            "_tried = 0\n"
+            "for _combo in product(*[_cands[s] for s in _keys]):\n"
+            "    _tried += 1\n"
+            "    _sym_vec = {}\n"
+            "    for s, u in zip(_keys, _combo):\n"
+            "        _sym_vec[s] = _decl_vec(u)\n"
+            "    _lv = _vec_norm(_vec(_left, _sym_vec))\n"
+            "    _rv = _vec_norm(_vec(_right, _sym_vec)) if _right is not None else {}\n"
+            "    if _vec_equal(_lv, _rv):\n"
+            "        _matched = {s: u for s, u in zip(_keys, _combo)}\n"
+            "        break\n"
+            "if _matched is not None:\n"
+            "    result = {'consistent': True, 'left_dimensions': _vec_str(_lv), 'right_dimensions': _vec_str(_rv), 'matched_combination': _matched, 'tried_combinations': _tried}\n"
+            "else:\n"
+            "    result = {'consistent': False, 'left_dimensions': _vec_str(_lv) if _lv is not None else '', 'right_dimensions': _vec_str(_rv) if _rv is not None else '', 'matched_combination': None, 'tried_combinations': _tried}\n"
         )
     elif operation == "get_dimensions":
         operation_code = (
-            f"\n_expr = _safe_sympify({expression_str!r}, local_dict=_LOCALS)\n"
-            "_quantities = [a for a in _expr.atoms(Quantity) if hasattr(a, 'dimension')]\n"
-            "result = {str(q): str(q.dimension) for q in _quantities}\n"
+            "_unit_defs = $unit_defs_json\n"
+            "_cands = _parse_symbol_defs(_unit_defs)\n"
+            "_lr = $expression_str.rsplit('=', 1)\n"
+            "_left_syms = []\n"
+            "if len(_lr) > 1:\n"
+            "    _le = _safe_sympify(_lr[0].strip(), local_dict=_LOCALS)\n"
+            "    _left_syms = sorted(str(s) for s in _le.free_symbols)\n"
+            "_expr = _safe_sympify(_lr[-1].strip(), local_dict=_LOCALS)\n"
+            "_syms = sorted(set(str(s) for s in _expr.free_symbols) | set(_left_syms))\n"
+            "_missing = [s for s in _syms if s not in _unit_defs]\n"
+            "if _missing:\n"
+            "    raise ValueError('以下符号未声明单位，请在 unit_definitions 中补齐: ' + repr(_missing) + '（纯数学量请声明为 dimensionless）')\n"
+            "_out = {}\n"
+            "_c = {}\n"
+            "for s in _syms:\n"
+            "    if s in _left_syms and s not in _expr.free_symbols:\n"
+            "        continue\n"
+            "    _vecs = [_vec_str(_vec_norm(_decl_vec(u))) for u in _cands[s]]\n"
+            "    _out[s] = _vecs if len(_vecs) > 1 else _vecs[0]\n"
+            "    _c[s] = _decl_vec(_cands[s][0])\n"
+            "_overall = _vec_str(_vec_norm(_vec(_expr, _c)))\n"
+            "for s in _left_syms:\n"
+            "    _out[s] = _overall\n"
+            "result = {'dimensions': _out, 'expression': _overall}\n"
         )
     elif operation == "convert":
         operation_code = (
-            f"\n_expr = _safe_sympify({expression_str!r}, local_dict=_LOCALS)\n"
-            f"_target = _safe_sympify({target_units!r}, local_dict=_LOCALS)\n"
+            "_unit_defs = $unit_defs_json\n"
+            "_expr = parse_expr($dim_expression_str, local_dict=units_ctx, transformations=_transforms)\n"
+            "_bad = sorted(str(x) for x in _expr.free_symbols)\n"
+            "if _bad:\n"
+            "    _missing = [s for s in _bad if s not in _unit_defs]\n"
+            "    if _missing:\n"
+            "        raise ValueError('以下符号未声明单位，请在 unit_definitions 中补齐: ' + repr(_missing))\n"
+            "    _src = {}\n"
+            "    for s in _bad:\n"
+            "        u = _unit_defs[s]\n"
+            "        u = u[0] if isinstance(u, list) else u\n"
+            "        _src[Symbol(s)] = _parse_unit(str(u))\n"
+            "    _expr = _expr.subs(_src)\n"
+            "_target = parse_expr($target_units, local_dict=units_ctx, transformations=_transforms)\n"
+            "_tb = sorted(str(x) for x in _target.free_symbols)\n"
+            "if _tb:\n"
+            "    raise ValueError('目标单位含未识别符号: ' + repr(_tb))\n"
             "_converted = convert_to(_expr, _target)\n"
             "result = float((_converted / _target).evalf())\n"
         )
@@ -404,11 +580,15 @@ def build_code(operation: str, **params) -> str:
         )
     elif op == "angle":
         op_code = (
+            "if _a.is_zero_matrix or _b.is_zero_matrix:\n"
+            "    raise ValueError('存在零向量，无法计算夹角')\n"
             "from sympy import acos\n"
             "result = float(acos(_a.dot(_b) / (sqrt(_a.dot(_a)) * sqrt(_b.dot(_b)))).evalf())"
         )
     elif op == "projection":
         op_code = (
+            "if _b.is_zero_matrix:\n"
+            "    raise ValueError('投影方向向量 B 为零向量，无法计算')\n"
             "result = [float(x) for x in (_a.dot(_b) / _b.dot(_b)) * _b]"
         )
     else:
@@ -427,6 +607,12 @@ def build_code(operation: str, **params) -> str:
         f"_v = Matrix([{velocity_direction[0]}, {velocity_direction[1]}])\n"
         f"_I = Point(_ix, _iy)\n"
         f"_n = Matrix([{impact_normal[0]}, {impact_normal[1]}])\n"
+        "if _v.is_zero_matrix:\n"
+        "    raise ValueError('入射点速度方向向量为零，无法确定切线')\n"
+        "if _n.is_zero_matrix:\n"
+        "    raise ValueError('撞击点法向量为零，无法确定约束')\n"
+        "if (_ix - _px)**2 + (_iy - _py)**2 <= 1e-12:\n"
+        "    raise ValueError('两个点重合，无法确定圆')\n"
     )
     solve_code = (
         "Cx, Cy = symbols('Cx Cy')\n"
@@ -479,7 +665,7 @@ def build_code(operation: str, **params) -> str:
         direction=json_repr(params.get("direction", "+-")),
         formula_str=formula_str,
         solve_for=solve_for,
-        unit_definitions=unit_definitions_code,
+        unit_defs_json=unit_defs_json,
         operation_code=operation_code,
         target_units=json_repr(target_units),
         vec_a=json_repr(vec_a),
@@ -496,6 +682,15 @@ def build_code(operation: str, **params) -> str:
         reactants_str=reactants_str,
         products_str=products_str,
         molar_masses=molar_masses_code,
+    ).replace(
+        # safe_substitute 不递归处理替换值内的占位符，这里二次替换 dimensional 分支的嵌入值
+        "$unit_defs_json", unit_defs_json,
+    ).replace(
+        "$expression_str", json_repr(params.get("expression", "")),
+    ).replace(
+        "$dim_expression_str", json_repr(dim_expr_str),
+    ).replace(
+        "$target_units", json_repr(target_units),
     )
 
 

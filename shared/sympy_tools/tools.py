@@ -165,15 +165,21 @@ class SolvePhysicsFormulaTool(BaseTool):
 
 class DimensionalAnalysisParams(BaseModel):
     expression: str = Field(
-        description="带单位的物理表达式, 如 'F = m * a' 或 'kilogram * meter / second**2'"
+        description="物理表达式, 如 'F = m * a' 或 'F = B**2*L**2*v/(R+r)'。表达式里出现的每个符号必须在 unit_definitions 中声明单位。"
     )
     operation: str = Field(
         default="check_consistency",
-        description="操作: 'check_consistency'（量纲一致性）, 'get_dimensions'（提取量纲）, 'convert'（单位转换）",
+        description="操作: 'check_consistency'（等号两侧量纲一致性）, 'get_dimensions'（提取量纲）, 'convert'（单位换算）",
     )
-    unit_definitions: dict[str, str] | None = Field(
-        default=None,
-        description="变量到单位的映射, 如 {'F': 'newton', 'm': 'kilogram', 'a': 'meter/second**2'}",
+    unit_definitions: dict[str, str | list[str]] = Field(
+        description=(
+            "必填。表达式里每个符号的单位声明，如 {'F': 'newton', 'B': 'tesla', 'L': 'meter', "
+            "'v': 'meter/second', 'R': 'ohm'}。纯数学/无量纲量声明为 'dimensionless'。"
+            "单位名用 sympy 单位名（meter、second、kilogram、newton、ohm、tesla 等），"
+            "也支持 m/s、kg*m/s**2 等常用缩写。"
+            "符号若有两种可能含义（如 V 可能是速度或体积），用候选列表 {'V': ['meter/second', 'meter**3']}，"
+            "工具会尝试所有候选组合，任一组合量纲一致即判定通过。"
+        )
     )
     target_units: str = Field(
         default="",
@@ -184,11 +190,19 @@ class DimensionalAnalysisParams(BaseModel):
 class DimensionalAnalysisTool(BaseTool):
     name: str = "dimensional_analysis"
     description: str = (
-        "对物理表达式进行量纲分析。支持三种操作："
-        "check_consistency — 检查等号两边的量纲是否一致；"
+        "对物理表达式进行量纲分析。三种操作："
+        "check_consistency — 检查等号两边的量纲是否一致（量纲不对则答案必然错误）；"
         "get_dimensions — 提取表达式的量纲；"
-        "convert — 单位换算（如 5*m/s 转为 km/h）。"
-        "用于快速验证物理答案的单位是否正确——量纲不对则答案必然错误。"
+        "convert — 单位换算（如 5*m/s 转为 km/h）。\n"
+        "【必填规则】必须在 unit_definitions 中声明表达式里出现的每一个符号的单位，"
+        "未声明的符号工具会拒绝执行并提示补齐。示例："
+        "{'F': 'newton', 'B': 'tesla', 'L': 'meter', 'v': 'meter/second', 'R': 'ohm', 'r': 'ohm'}。\n"
+        "纯数学/无量纲量（系数、角标常数等）声明为 'dimensionless'。\n"
+        "【符号歧义】某个符号有多种可能含义时（如 V 可能是速度也可能是体积），"
+        "用候选列表 {'V': ['meter/second', 'meter**3']}，工具会尝试所有候选组合，"
+        "只要一个组合理纲一致即判定通过，并返回 matched_combination 指明哪种解释成立。\n"
+        "单位名使用 sympy 单位名（meter、second、kilogram、newton、ohm、tesla、joule 等），"
+        "常用缩写 m/s、kg*m/s**2 也支持。"
     )
     args_schema: type[BaseModel] = DimensionalAnalysisParams
 
