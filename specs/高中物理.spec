@@ -20,9 +20,6 @@ a = Analysis(
         (os.path.join(subject_dir, 'agent_prompt.json'), '.'),
         (os.path.join(subject_dir, 'subject.py'), '.'),
         (os.path.join(subject_dir, 'app.py'), '.'),
-        (os.path.join(project_root, 'shared', 'templates'), 'templates'),
-        # macOS 用系统 TeX Live，bundled_texlive 仅 Windows 打包时需要
-        # (os.path.join(project_root, 'bundled_texlive'), 'texlive'),
     ],
     hiddenimports=[
         'core',
@@ -48,8 +45,6 @@ a = Analysis(
         'shared.sympy_tools.sandbox',
         'shared.sympy_tools.safety',
         'shared.web_tools',
-        'shared.latex_generator',
-        'shared.pdf_compiler',
         'shared.free_proofread',
         'shared.smart_split',
         'shared.review_mode',

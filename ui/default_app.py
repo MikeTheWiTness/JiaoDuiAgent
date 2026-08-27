@@ -25,7 +25,6 @@ from core.logging_utils import log, set_log_func
 from core.pandoc_utils import check_pandoc
 from core.session_context import SessionContext
 from core.unit_detect import is_unit_dir
-from shared.latex_generator import generate_combined_pdf
 from shared.session import SessionManager
 from ui.pipeline import PipelineBar, setup_pipeline_styles
 from ui.widgets import ApiDialog, LogPanel
@@ -51,7 +50,6 @@ class DefaultApp:
         self.intent_clean_enabled = tk.BooleanVar(value=True)
         self.knowledge_enabled = tk.BooleanVar(value=True)
 
-        self.generate_pdf = tk.BooleanVar(value=True)
         self.generate_docx = tk.BooleanVar(value=True)
 
         self.parallel_enabled = tk.BooleanVar(value=True)
@@ -98,10 +96,8 @@ class DefaultApp:
         default_features = {
             "show_clean_table_option": True,
             "show_knowledge_option": False,  # 统一模型下 LLM 自判类型，无需物理分离
-            "show_pdf_option": True,
             "show_parallel_option": True,
             "show_source_modes": ["讲义", "试卷"],
-            "show_exec_modes": ["完整流程", "仅转换", "仅拆分", "仅校对", "仅生成PDF"],
             "add_file_title": "添加文件",
             "add_folder_title": "添加文件夹",
         }
@@ -179,11 +175,8 @@ class DefaultApp:
 
         # ===== 排版选项 =====
         self.frame_typeset = ttk.LabelFrame(self.root, text="📄 排版选项", padding=10)
-        if features.get("show_pdf_option", True):
-            ttk.Checkbutton(self.frame_typeset, text="生成 LaTeX PDF 校对报告",
-                            variable=self.generate_pdf).pack(side=tk.LEFT, padx=4)
-            ttk.Checkbutton(self.frame_typeset, text="生成 Word 批注报告",
-                            variable=self.generate_docx).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(self.frame_typeset, text="生成 Word 批注报告",
+                        variable=self.generate_docx).pack(side=tk.LEFT, padx=4)
 
         # ===== 文件区域 =====
         self.frame_file_area = ttk.Frame(self.root, padding=(10, 4))
@@ -200,8 +193,8 @@ class DefaultApp:
                                             command=self.select_single_paper)
         self.btn_select_root = ttk.Button(self.frame_file_area, text="📂 选择根目录",
                                           command=self.select_root_for_proofread)
-        self.btn_select_pdf_folders = ttk.Button(self.frame_file_area, text="📂 选择拆分文件夹",
-                                                  command=self.select_pdf_folders)
+        self.btn_select_typeset_folders = ttk.Button(self.frame_file_area, text="📂 选择拆分文件夹",
+                                                  command=self.select_typeset_folders)
 
         self.frame_list = ttk.Frame(self.root, padding=(10, 0, 10, 0))
         self.frame_list.pack(fill=tk.BOTH, expand=True)
@@ -361,7 +354,7 @@ class DefaultApp:
                 self.btn_select_papers.pack(side=tk.LEFT, padx=4)
                 self.btn_select_root.pack(side=tk.LEFT, padx=4)
             elif typeset_active:
-                self.btn_select_pdf_folders.pack(side=tk.LEFT, padx=4)
+                self.btn_select_typeset_folders.pack(side=tk.LEFT, padx=4)
                 self.btn_clear.pack(side=tk.LEFT, padx=4)
         elif is_free:
             self.btn_clear.pack(side=tk.LEFT, padx=4)
@@ -375,7 +368,7 @@ class DefaultApp:
 
     def _hide_all_file_buttons(self):
         for btn in [self.btn_add_files, self.btn_add_folder, self.btn_clear,
-                     self.btn_select_papers, self.btn_select_root, self.btn_select_pdf_folders]:
+                     self.btn_select_papers, self.btn_select_root, self.btn_select_typeset_folders]:
             btn.pack_forget()
 
     def _on_action(self):
@@ -392,7 +385,7 @@ class DefaultApp:
         if imp and prf and not spl:
             errors.append("「校对」需要先「拆分」——校对器按拆分后的题目目录工作，不能直接校对原始文档。请同时勾选「拆分」。")
         if typ and not prf and not (not imp and not spl):
-            errors.append("「排版」需要校对结果——PDF 报告由校对报告生成。请同时勾选「校对」，或关闭「导入」「拆分」后选择已有校对目录。")
+            errors.append("「排版」需要校对结果——Word 报告由校对报告生成。请同时勾选「校对」，或关闭「导入」「拆分」后选择已有校对目录。")
         if not imp and not spl and not prf and not typ:
             errors.append("至少需要勾选一个阶段。")
 
@@ -405,7 +398,7 @@ class DefaultApp:
             if prf:
                 self.start_proofread()
             elif typ:
-                self.start_generate_pdf()
+                self.start_generate_docx()
         elif spl and not prf:
             self.start_conversion()  # 仅拆分
         else:
@@ -708,7 +701,7 @@ class DefaultApp:
         self.refresh_listbox()
         log(f"📂 已从根目录加载 {added} 套试卷到清单")
 
-    def select_pdf_folders(self):
+    def select_typeset_folders(self):
         paths = filedialog.askdirectory(title="选择拆分文件夹（含 单元N/第N题/板块N + _校对数据.json）")
         if not paths:
             return
@@ -725,7 +718,7 @@ class DefaultApp:
         self.refresh_listbox()
         log(f"📂 已添加拆分文件夹到清单：{name}")
 
-    def start_generate_pdf(self):
+    def start_generate_docx(self):
         if not self.proofread_list:
             messagebox.showwarning("提示", "请先选择拆分文件夹（含 单元N/第N题/板块N + _校对数据.json）")
             return
@@ -736,40 +729,30 @@ class DefaultApp:
         self.proofread_result = {}
         # 主线程快照 Tk 变量，工作线程不再读 Tk
         output_dir = self.output_dir.get()
-        generate_pdf = self.generate_pdf.get()
         generate_docx = self.generate_docx.get()
-        typeset_enabled = self.pipeline.typeset_enabled
 
         def _run():
             try:
-                pdf_dir = os.path.join(output_dir, "校对PDF")
                 total = len(self.proofread_list)
                 success = 0
                 for i, (dir_path, paper_name) in enumerate(self.proofread_list):
                     if self.task_interrupt:
                         log("\n===== 任务已中断 =====")
                         break
-                    log(f"\n📄 [{i+1}/{total}] 正在生成 PDF：{paper_name}")
-                    if generate_pdf:
-                        try:
-                            pdf_path = generate_combined_pdf(dir_path, pdf_dir)
-                            if pdf_path:
-                                log(f"   ✅ PDF 已生成：{pdf_path}")
-                                success += 1
-                            else:
-                                log("   ⚠️ PDF 生成失败：未找到可用的校对数据")
-                        except Exception as e:
-                            log(f"   ❌ PDF 生成异常：{e}")
-                    if typeset_enabled and generate_docx:
+                    log(f"\n📄 [{i+1}/{total}] 正在生成 Word 报告：{paper_name}")
+                    if generate_docx:
                         try:
                             docx_dir = os.path.join(output_dir, "校对Word")
                             docx_path = generate_combined_docx(dir_path, docx_dir)
                             if docx_path:
                                 log(f"   ✅ Word 批注报告已生成：{docx_path}")
+                                success += 1
+                            else:
+                                log("   ⚠️ Word 生成失败：未找到可用的校对数据")
                         except Exception as e:
                             log(f"   ❌ Word 生成异常：{e}")
                 if not self.task_interrupt:
-                    log(f"\n===== PDF 生成完成：{success}/{total} =====")
+                    log(f"\n===== Word 报告生成完成：{success}/{total} =====")
             finally:
                 self._reset_task_state()
 
@@ -1114,14 +1097,13 @@ class DefaultApp:
         # 主线程快照 Tk 变量，工作线程不再读 Tk
         content = self.content_type.get()
         out_root = self.output_dir.get().strip()
-        generate_pdf = self.generate_pdf.get()
         use_parallel = self.parallel_enabled.get()
         parallel_count = self.parallel_count.get()
         typeset_enabled = self.pipeline.typeset_enabled
         generate_docx = self.generate_docx.get()
         t = threading.Thread(
             target=self._proofread_thread,
-            args=(content, out_root, generate_pdf, use_parallel, parallel_count, typeset_enabled, generate_docx),
+            args=(content, out_root, use_parallel, parallel_count, typeset_enabled, generate_docx),
             daemon=True)
         t.start()
 
@@ -1138,7 +1120,7 @@ class DefaultApp:
         self.root.after(0, lambda: self.btn_action.config(state=tk.NORMAL))
         self.root.after(0, lambda: self.btn_stop.config(state=tk.DISABLED))
 
-    def _proofread_thread(self, content, out_root, generate_pdf, use_parallel, parallel_count, typeset_enabled, generate_docx):
+    def _proofread_thread(self, content, out_root, use_parallel, parallel_count, typeset_enabled, generate_docx):
         api_url = self.api_config.get("api_url", "")
         api_key = self.api_config.get("api_key", "")
         model = self.api_config.get("model_name", "")
@@ -1239,7 +1221,7 @@ class DefaultApp:
                                 unit_ctx = dataclasses.replace(ctx, output_dir=q_dir)
                                 future = executor.submit(
                                     self.subject_app.proofread_one,
-                                    unit_ctx, q_dir, q_name, generate_pdf, content,
+                                    unit_ctx, q_dir, q_name, content,
                                     archive_root=out_root,
                                     enable_format_fix=True,
                                 )
@@ -1280,7 +1262,7 @@ class DefaultApp:
                         log(f"校对单元：{q_name}")
                         unit_ctx = dataclasses.replace(ctx, output_dir=q_dir)
                         data = self.subject_app.proofread_one(
-                            unit_ctx, q_dir, q_name, generate_pdf, content,
+                            unit_ctx, q_dir, q_name, content,
                             archive_root=out_root,
                             enable_format_fix=True,
                         )
@@ -1299,17 +1281,6 @@ class DefaultApp:
 
                 if not self.task_interrupt and paper_results:
                     self._export_paper_report(paper_name, paper_results, report_root)
-
-                if typeset_enabled and generate_pdf and not self.task_interrupt and paper_results:
-                    try:
-                        pdf_dir = os.path.join(out_root, "校对PDF")
-                        pdf_path = generate_combined_pdf(paper_path, pdf_dir)
-                        if pdf_path:
-                            log(f"   📄 汇总 PDF：{pdf_path}")
-                        else:
-                            log("   ⚠️ 汇总 PDF 生成失败（无可用的校对数据）")
-                    except Exception as e:
-                        log(f"   ⚠️ 汇总 PDF 生成异常：{e}")
 
                 if typeset_enabled and generate_docx and not self.task_interrupt and paper_results:
                     try:

@@ -100,10 +100,8 @@ class BaseSubjectApp:
         return {
             "show_clean_table_option": True,
             "show_knowledge_option": self._show_knowledge_option,
-            "show_pdf_option": True,
             "show_parallel_option": True,
             "show_source_modes": ["讲义", "试卷", "自由校对", "批注评审"],
-            "show_exec_modes": ["完整流程", "仅转换", "仅拆分", "仅校对", "仅生成PDF"],
             "show_split_mode_option": True,
             "add_file_title": "添加文件",
             "add_folder_title": "添加文件夹",
@@ -126,14 +124,14 @@ class BaseSubjectApp:
     # ---- proofread_one（模板方法，语文覆盖 _build_pre_hook） ----
 
     def proofread_one(self, ctx, q_dir, q_name,
-                      generate_pdf, source_mode="试卷", archive_root=None,
+                      source_mode="试卷", archive_root=None,
                       enable_format_fix=None):
         """校对入口 —— 所有学科共用骨架。高中语文覆盖 _build_pre_hook 注入文言文搜索。
 
         ADR-0017 决策6：移除 is_knowledge 参数。
         ReAct 模式下 LLM 通过 agent_prompt 第0步自行判定内容类型，
         程序侧不再按目录名决定校对策略。
-        enable_format_fix 与排版勾选解耦：None 时兼容旧行为（跟随 generate_pdf）。
+        enable_format_fix 显式控制格式修正（UI 侧传 True），与排版输出解耦。
         """
         if source_mode == "批注评审":
             prompt = self.get_review_prompt()
@@ -144,7 +142,7 @@ class BaseSubjectApp:
 
         return default_proofread_one(
             ctx, q_dir, q_name,
-            prompt, self.tools, generate_pdf,
+            prompt, self.tools,
             pre_hook=pre_hook,
             react_mode=self.react_mode,
             archive_root=archive_root,

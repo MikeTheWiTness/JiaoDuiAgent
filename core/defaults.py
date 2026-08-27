@@ -782,7 +782,7 @@ def read_md_for_unit(q_dir: str, q_name: str) -> str | None:
     return None
 
 
-def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
+def default_proofread_one(ctx, q_dir, q_name, prompt, tools,
                           pre_hook=None, react_mode=False, archive_root=None,
                           enable_format_fix=None):
     md_content = read_md_for_unit(q_dir, q_name)
@@ -888,12 +888,17 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
         return {"success": False, "result": "", "error": "校对已中断", "tool_calls": []}
 
     if result.get("stop_reason") != StopReason.ERROR:
-        # ---- 格式审查 + bash 直接编辑文件修正 ----
-        format_ok, format_issues = _enforce_format(res)
-        # 格式修正开关与“生成 LaTeX PDF”彻底解耦：
-        # 默认兼容旧调用（未显式传 enable_format_fix 时沿用 generate_pdf），
-        # UI 侧显式传 True，取消 PDF 勾选不再禁用 LLM 格式修正。
-        should_fix_format = generate_pdf if enable_format_fix is None else enable_format_fix
+        # ---- 空输出处理：模型未产出标记，跳过格式修正并在报告注入告警 ----
+        if not res.strip():
+            log("   ⚠️ 模型未产出校对标记（空输出），已跳过格式修正，请人工检查")
+            res = "> ⚠️ **模型本次未产出校对标记（空输出），请人工检查本单元。**\n"
+            format_ok, format_issues = True, ""
+        else:
+            # ---- 格式审查 + bash 直接编辑文件修正 ----
+            format_ok, format_issues = _enforce_format(res)
+        # 格式修正由 enable_format_fix 显式控制（UI 侧传 True），
+        # 与排版输出解耦；默认 False 关闭 LLM 修正（仅记录不合规）。
+        should_fix_format = bool(enable_format_fix)
         if not format_ok and should_fix_format:
             # 先把原始输出写入文件（不含头部元信息），供 LLM 用 bash 直接编辑
             md_path = os.path.join(q_dir, "_校对报告.md")
@@ -911,7 +916,7 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
 
-        # 单题报告落盘（校对核心产物，与 generate_pdf 勾选解耦：总是执行）
+        # 单题报告落盘（校对核心产物，总是执行）
 
         md_path = os.path.join(q_dir, "_校对报告.md")
         try:
@@ -957,6 +962,9 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools, generate_pdf,
             src_api_log = os.path.join(q_dir, "_API对话记录.md")
             if os.path.exists(src_api_log):
                 shutil.copy2(src_api_log, artifact_dir / "_API对话记录.md")
+            src_fmt_log = os.path.join(q_dir, "_API对话记录_格式修正.md")
+            if os.path.exists(src_fmt_log):
+                shutil.copy2(src_fmt_log, artifact_dir / "_API对话记录_格式修正.md")
         except Exception:
             import traceback
             log(f"   ⚠️ 中间产物存档失败 ({q_dir} → {artifact_dir}):\n{traceback.format_exc()}")

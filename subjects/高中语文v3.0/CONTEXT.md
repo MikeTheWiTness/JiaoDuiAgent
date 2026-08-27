@@ -29,7 +29,7 @@ _Alias_: 搜韵
 
 ## 校对数据流
 
-整个校对管线有两条主要路径——**普通校对**（讲义/试卷/自由校对）和**批注评审**——它们在 LLM 输出格式和 PDF 渲染时有差异，但共享同一套解析和渲染基础设施。
+整个校对管线有两条主要路径——**普通校对**（讲义/试卷/自由校对）和**批注评审**——它们在 LLM 输出格式和报告渲染时有差异，但共享同一套解析和报告生成基础设施。
 
 ### 阶段一：转换（.docx → .md）
 
@@ -93,40 +93,14 @@ raw.md 按标题或题号拆分为子目录，每题目录含：
 
 两者结果合并存入同一 JSON。普通校对只有 `corrections`，批注评审两者都有。
 
-### 阶段五：PDF 渲染
+### 阶段五：排版（Word 批注报告）
 
-`generate_combined_pdf()` → `build_paracol_content()` 生成 paracol 双栏 .tex：
+LaTeX/PDF 排版已下线（ADR-0030），排版输出仅剩 Word 批注报告：
 
-```
-┌──────────────────────┬─────────────────────────┐
-│ 左栏：原文            │ 右栏                    │
-│                      │                         │
-│ 正文文字正文文字      │ 📝 原有批注             │
-│ \corrmark{错误}{①}  │  \textcircled{1} 内容1  │
-│ 正文文字\textsuper-  │  \textcircled{2} 内容2  │
-│   script{\textcir-   │                         │
-│   cled{1}}正文文字    │ 🔍 批注评审（仅评审模式）│
-│                      │  \textcircled{1} ✅正确  │
-│                      │  理由：...              │
-│                      │                         │
-│                      │ 🔴 补充发现（仅评审模式）│
-│                      │  \redcircled{1} 发现... │
-│                      │                         │
-│                      │ 🔴 修改意见             │
-│                      │  \redcircled{①} 改为：  │
-│                      │  修改原因：...          │
-└──────────────────────┴─────────────────────────┘
-```
+`generate_combined_docx()`（`core/docx_report.py`）合并各题 `_校对报告.md` → pandoc 转 docx（`$...$` 数学记法经 texmath 转 Word 原生公式）→ zipfile 级注入批注（`comments.xml`）：
 
-格式标记在 LaTeX 中的映射（`_convert_format_markers`, `latex_generator.py:246`）：
-
-| MD 标记 | LaTeX 命令 | 宏包 |
-|---|---|---|
-| `【着重】...【/着重】` | `\CJKunderdot{...}` | xeCJKfntef |
-| `【下划线】...【/下划线】` | `\underline{...}` | LaTeX 内置 |
-| `【波浪线】...【/波浪线】` | `\uwave{...}` | ulem |
-| `【删除线】...【/删除线】` | `\sout{...}` | ulem |
-| `【双删除线】...【/双删除线】` | `\dout{...}` | 模板自定义 |
+- 正文公式 → Word 原生公式（OMML）；批注内公式 → `shared/formula_render.py`（matplotlib）渲染 PNG 嵌入，失败降级为文本
+- 批注注入：`shared/docx_comments.py` 解析 `【N|原|改】` 标记 → `w:commentRangeStart/End` + `w:comment`，格式标记（着重/下划线等）由 `shared/docx_format_enhancer.py` 处理
 
 ### 关键文件索引
 
@@ -135,7 +109,8 @@ raw.md 按标题或题号拆分为子目录，每题目录含：
 | `core/parsing.py` | LLM 输出解析，双格式回退 |
 | `core/defaults.py` | 默认校对流程 + 转换后格式增强 |
 | `shared/review_mode.py` | 批注提取、评审 prompt、评审结果解析 |
-| `shared/latex_generator.py` | paracol 双栏 .tex 生成，含批注评审渲染 |
+| `core/docx_report.py` | 合并各题报告 → Word 批注版 docx |
+| `shared/docx_comments.py` | Word 批注提取与注入 |
 | `shared/docx_format_enhancer.py` | Word 特殊格式提取与注入 |
-| `shared/templates/proofread_template.tex` | LaTeX 模板（字体、宏包、页面布局） |
-| `ui/default_app.py` | 主调度器：转换→拆分→校对→PDF |
+| `shared/formula_render.py` | 批注内公式渲染（matplotlib → PNG） |
+| `ui/default_app.py` | 主调度器：转换→拆分→校对→Word |

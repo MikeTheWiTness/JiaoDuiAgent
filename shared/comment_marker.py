@@ -12,7 +12,7 @@ import re
 COMMENT_END_TOKEN_RE = re.compile(r'CMTEND(\d+)Z')
 """匹配 Word 批注占位符 CMTEND{N}Z，用于精确还原批注到原文。"""
 
-# ---- 2. XML 批注标记（latex_generator.py 使用） ----
+# ---- 2. XML 批注标记（docx_report.py 使用） ----
 
 XML_ANNOTATION_RE = re.compile(
     r'<批注\s+id=(\d+)><原>(.*?)</原><改>(.*?)</改></批注>'
@@ -25,7 +25,7 @@ INLINE_MARKER_CAPTURE_RE = re.compile(
     r'【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】', re.DOTALL)
 """提取内联校对标记的三个字段（编号、原文、改为）。
 
-parsing.py / docx_report.py / latex_generator.py 共用单一源。
+parsing.py / docx_report.py 共用单一源。
 编号为阿拉伯数字；原文字段支持 LaTeX 转义竖线；re.DOTALL 支持跨行标记。
 """
 
