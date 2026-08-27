@@ -42,6 +42,14 @@ def _enforce_format(res: str):
         issues.append("缺少 ### 修改原因 段落")
     # 确定标记所在的文本区域（优先用 marker_match，其次全文）
     marker_text = marker_match.group(1) if marker_match else (res if has_inline_markers else "")
+    # LLM 逐字引文本能：用 ``` / ~~~ 围栏包住标记原文（提示词已禁止但模型不稳定）。
+    # 围栏会被 pandoc 当代码块渲染，公式不转 Word 公式、批注锚点失效。
+    if marker_text:
+        nonempty = [ln for ln in marker_text.splitlines() if ln.strip()]
+        if nonempty and re.match(r'^\s*(```|~~~)[A-Za-z0-9_\-]*\s*$', nonempty[0]) \
+                and re.match(r'^\s*(```|~~~)[A-Za-z0-9_\-]*\s*$', nonempty[-1]):
+            issues.append("标记原文段落被整段代码围栏包裹"
+                          "（请删除首尾的围栏行；否则公式无法转为 Word 公式、批注会丢失）")
     if marker_text and reason_match:
         markers = re.findall(r'【(\d+)\|', marker_text)
         marker_nums = set(int(m) for m in markers)

@@ -131,6 +131,7 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
                         or l.strip().startswith("编号：")
                         or l.strip().startswith("内容："))
             ).strip()
+            body = _strip_wrapping_fence(body)
             body = _rewrite_images(body, paper_path / qid, img_root)
             body = _convert_multiline_tables(body)
             body = _preprocess_latex(body)
@@ -321,6 +322,23 @@ def _convert_multiline_tables(text: str) -> str:
     return "\n".join(out)
 
 
+def _strip_wrapping_fence(text: str) -> str:
+    """剥除包裹整段标记原文的首尾代码围栏（``` / ~~~ 行）。
+
+    LLM 为「逐字抄写」的原文本能习惯用围栏包住原文（提示词已禁止，
+    但模型不稳定）。围栏会让 pandoc 按代码块渲染：$...$ 不转微软公式、
+    图片引用与批注锚点全部变字面文本。只剥首尾的孤立围栏行，正文中间
+    的围栏不动（处理 ` ```markdown` 这类带语言标签的围栏）。
+    """
+    fence = re.compile(r'^\s*(```|~~~)[A-Za-z0-9_\-]*\s*$')
+    lines = text.splitlines()
+    if lines and fence.match(lines[0]):
+        lines = lines[1:]
+    if lines and fence.match(lines[-1]):
+        lines = lines[:-1]
+    return "\n".join(lines)
+
+
 def _preprocess_latex(body: str) -> str:
     """LaTeX 定界符还原：\\[...\\] / \\[...\\] → 美元行内公式；转义美元还原；公式内部双反斜杠命令还原。"""
     body = re.sub(r"\\\\\[(.*?)\\\\]",
@@ -332,6 +350,10 @@ def _preprocess_latex(body: str) -> str:
     body = re.sub(r"\$(.+?)\$",
                   lambda m: "$" + m.group(1).replace("\\\\", "\\") + "$",
                   body, flags=re.DOTALL)
+    # texmath 不支持 \rm 切换命令（{\rm m} / \rm{A} 报 unexpected control
+    # sequence），pandoc 放弃转换、公式以 TeX 文本显示；统一改写成 \mathrm{X}
+    body = re.sub(r"\\rm\s*\{([A-Za-z/]+)\}", r"\\mathrm{\1}", body)
+    body = re.sub(r"\{\\rm\s*([A-Za-z/]+)\}", r"\\mathrm{\1}", body)
     body = _normalize_math_dollars(body)
     return body
 

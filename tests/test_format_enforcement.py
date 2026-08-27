@@ -113,6 +113,32 @@ class TestEnforceFormat(unittest.TestCase):
     def test_empty_input(self):
         ok, issues = _enforce_format("")
         self.assertFalse(ok)
+    def test_fence_wrapped_marker_section_rejected(self):
+        """标记原文被整段 ``` 围栏包裹（LLM 逐字引文本能）→ 不合规。
+
+        修复前：围栏被漏检，pandoc 按代码块渲染，公式不转 Word 公式、
+        批注锚点丢失。
+        """
+        report = ("### 标记原文\n```\n编号：第1题\n内容：\n1．题目公式$v$运动\n"
+                  "```\n\n### 修改原因\n1. 原因。")
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("代码围栏", issues)
+
+    def test_fence_wrapped_marker_section_latex_lang_rejected(self):
+        """带语言标签的围栏（```markdown）同样判为不合规。"""
+        report = ("### 标记原文\n```markdown\n题目内容\n"
+                  "```\n\n### 修改原因\n1. 原因。")
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("代码围栏", issues)
+
+    def test_fence_inside_marker_section_passes(self):
+        """正文中间的围栏行（非整段包裹）不误报。"""
+        report = ("### 标记原文\n代码 ` ``` ` 包裹【1|题目内容|原内容】\n\n"
+                  "### 修改原因\n1. 原因。")
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok, f"正文围栏不应误报: {issues}")
 
 
 class TestEnforceAndFix(unittest.TestCase):

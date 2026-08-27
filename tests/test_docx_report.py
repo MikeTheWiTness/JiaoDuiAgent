@@ -769,5 +769,123 @@ class TestAnchorHeadingComments(unittest.TestCase):
         self.assertTrue(any("未在 Heading1 段落匹配" in c.args[0] for c in mlog.call_args_list))
 
 
+REPORT_FENCED_MARKER_SECTION = """# 第1题 校对报告
+
+轻微问题
+
+### 标记原文
+
+```
+编号：第1题
+内容：
+1．导体棒以速度【1|速度|速率】运动，感应电动势为 $E=BLv$，间距$d=0.2{\\rm m}$。
+
+![@@@testuuid00000000000000000000000001](./images/img1.png){width="1.0in" height="0.8in"}
+```
+
+### 修改原因
+1. "速度"应改为"速率"，速度有方向。
+"""
+
+
+class TestFencedMarkerSection(unittest.TestCase):
+    """回归：LLM 用 ``` 围栏包住标记原文 → 生成器应剥除围栏。
+
+    修复前：围栏使 pandoc 按代码块渲染，公式不转 OMML、图片与批注锚点
+    全部变成字面文本。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not find_pandoc():
+            raise unittest.SkipTest("pandoc 不可用，跳过 docx 报告测试")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="_docx_fence_test_")
+        self.paper = os.path.join(self.tmp, "测试试卷")
+        os.makedirs(os.path.join(self.paper, "第1题", "images"))
+        with open(os.path.join(self.paper, "第1题", "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(REPORT_FENCED_MARKER_SECTION)
+        with open(os.path.join(self.paper, "第1题", "images", "img1.png"), "wb") as f:
+            f.write(_1PX_PNG)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_fence_stripped_math_converted(self):
+        out_dir = os.path.join(self.tmp, "out")
+        docx_path = generate_combined_docx(self.paper, out_dir)
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        doc = z.read("word/document.xml").decode("utf-8")
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        # 公式转为 OMML，不残留字面 $...$（含 {{\\rm}} 形态）
+        self.assertIn("<m:oMath", doc)
+        self.assertNotIn("$E=BLv$", doc)
+        self.assertNotIn("$d=0.2", doc)
+        # 图片真实嵌入（不再是字面 ![](...) 文本）
+        self.assertIn("<w:drawing>", doc)
+        # 批注锚点完整：start/end/reference/comment 数量一致
+        self.assertEqual(doc.count("<w:commentRangeStart"), 1)
+        self.assertEqual(doc.count("<w:commentRangeEnd"), 1)
+        self.assertEqual(doc.count("<w:commentReference"), 1)
+        self.assertEqual(cmt.count("<w:comment w:id="), 1)
+
+
+class TestPreprocessLatexRm(unittest.TestCase):
+    """_preprocess_latex：{\\rm X} / \\rm{X} 归一化为 \\mathrm{X}。
+
+    texmath 不支持 \\rm 切换命令，不定式时 pandoc 放弃转换、公式以 TeX
+    文本原样显示。
+    """
+
+    def test_brace_rm_converted(self):
+        from core.docx_report import _preprocess_latex
+        self.assertEqual(_preprocess_latex("间距$d=0.2{\\rm m}$"),
+                         "间距$d=0.2\\mathrm{m}$")
+
+    def test_rm_brace_converted(self):
+        from core.docx_report import _preprocess_latex
+        self.assertEqual(_preprocess_latex("故$\\rm{A}$正确"),
+                         "故$\\mathrm{A}$正确")
+
+    def test_rm_slash_unit_converted(self):
+        from core.docx_report import _preprocess_latex
+        self.assertEqual(_preprocess_latex("初速度$v_{0}=0.2{\\rm m/s}$"),
+                         "初速度$v_{0}=0.2\\mathrm{m/s}$")
+
+    def test_mathrm_untouched(self):
+        from core.docx_report import _preprocess_latex
+        text = "电压为$4.0\\times {10}^{-2}\\mathrm{V}$"
+        self.assertEqual(_preprocess_latex(text), text)
+
+    def test_prose_untouched(self):
+        from core.docx_report import _preprocess_latex
+        plain = "**例1**（2024·月考）（多选）"
+        self.assertEqual(_preprocess_latex(plain), plain)
+
+
+class TestStripWrappingFence(unittest.TestCase):
+    """_strip_wrapping_fence：只剥首尾孤立围栏行，正文中间与普通文本不动。"""
+
+    def test_strips_wrapping_fence(self):
+        from core.docx_report import _strip_wrapping_fence
+        self.assertEqual(_strip_wrapping_fence("```\nabc\n```"), "abc")
+        self.assertEqual(_strip_wrapping_fence("~~~\nabc\n~~~"), "abc")
+
+    def test_strips_fence_with_language_tag(self):
+        from core.docx_report import _strip_wrapping_fence
+        self.assertEqual(_strip_wrapping_fence("```markdown\nabc\n```"), "abc")
+
+    def test_keeps_inner_fence(self):
+        from core.docx_report import _strip_wrapping_fence
+        self.assertEqual(_strip_wrapping_fence("a\n```\nb```"), "a\n```\nb```")
+
+    def test_plain_text_unchanged(self):
+        from core.docx_report import _strip_wrapping_fence
+        plain = "**例1** 公式$v$与图片引用"
+        self.assertEqual(_strip_wrapping_fence(plain), plain)
+
+
 if __name__ == "__main__":
     unittest.main()
