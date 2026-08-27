@@ -30,7 +30,7 @@
 | 0023 | 物理/化学跨模块凭证设置去重 | 已实现（commit 72ada63） |
 | 0024 | latex_generator pipeline 化 + 内部去重 | 已废弃（LaTeX 排版下线，ADR-0030） |
 | 0025 | pdf_compiler 拆四函数 | 已废弃（LaTeX 排版下线，ADR-0030） |
-| 0030 | LaTeX/PDF 排版下线，仅保留 Word 排版 | 已接受（ADR 见 docs/adr/0030） |
+| 0030 | LaTeX/PDF 排版下线，仅保留 Word 排版 | 已实现（commit 5180242） |
 | 0026 | 化学式解析双源同步测试锁 | 已实现（commit 7346cf4） |
 | 0027 | 工程化基线 + 集成测试复位 | 已实现（commit 298498a） |
 | 0028 | 工具循环搜索独立配额 + 选择性熔断 | 已实现（commit faa4d6d，ADR-0021 中保留的既有功能） |

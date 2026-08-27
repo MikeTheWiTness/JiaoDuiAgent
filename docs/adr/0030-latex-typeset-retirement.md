@@ -1,6 +1,6 @@
 # ADR 0030：LaTeX/PDF 排版下线，仅保留 Word 排版
 
-**状态**：已接受（实现随本批次 commit 落地）
+**状态**：已实现（commit 5180242）
 **日期**：2026-08-27
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0024 latex_generator pipeline 重构]](0024-latex-generator-pipeline-refactor.md)、[[ADR 0025 pdf_compiler 拆分]](0025-pdf-compiler-split.md)、[[ADR 0020 斜体/上下标分离]](0020-math-italics-separation.md)
