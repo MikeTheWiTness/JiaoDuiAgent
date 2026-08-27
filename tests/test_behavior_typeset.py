@@ -1,14 +1,14 @@
-"""行为测试：排版模式的真实用户场景（真实 pandoc / xelatex 执行）。
+"""行为测试：排版模式的真实用户场景（真实 pandoc 执行）。
 
 覆盖两个已修复的行为缺陷，从用户操作出发断言真实落盘产物：
-1. 仅排版模式取消「生成 LaTeX PDF 校对报告」→ 不得执行 LaTeX 排版
-   （修复前 start_generate_pdf 无条件生成 PDF，不尊重勾选状态）
+1. 仅排版模式勾选「生成 Word 批注报告」→ 生成 Word 报告
+   （LaTeX/PDF 排版已下线（ADR-0030），仅排版入口只做 Word）
 2. 输出目录为相对路径 → docx 必须真实落在相对 CWD 的目录且结构健全
    （修复前 pandoc 以临时目录为 cwd，docx 被写进临时目录，批注注入打开失败）
 
 与单元测试（tests/test_default_app_typeset.py、tests/test_docx_report.py）的区别：
-不 mock generate_combined_pdf / generate_combined_docx，走完整生成链路
-（pandoc/xelatex 真实编译），断言目录、文件与 XML 结构。
+不 mock generate_combined_docx，走完整生成链路（pandoc 真实转换），
+断言目录、文件与 XML 结构。
 """
 import base64
 import json
@@ -62,7 +62,7 @@ REPORT_2 = """无问题
 
 共调用 1 次
 
-## 📋 模型思考过程（仅核查用，不出现在 PDF 中）
+## 📋 模型思考过程（仅核查用，不出现在报告中）
 
 题目与解答均无错误。
 """
@@ -127,7 +127,7 @@ class _SyncThread:
 
 @unittest.skipIf(default_app is None, "tkinter 不可用")
 class TestTypesetOnlyModeBehavior(unittest.TestCase):
-    """真实用户场景：勾选状态 → start_generate_pdf → 断言落盘产物。"""
+    """真实用户场景：勾选状态 → start_generate_docx → 断言落盘产物。"""
 
     @classmethod
     def setUpClass(cls):
@@ -164,14 +164,13 @@ class TestTypesetOnlyModeBehavior(unittest.TestCase):
         os.chdir(self._old_cwd)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _make_app(self, pdf, docx, output_dir=None):
+    def _make_app(self, docx, output_dir=None):
         app = object.__new__(default_app.DefaultApp)
         app.proofread_list = [(self.paper, "测试试卷")]
         app.task_running = False
         app.task_interrupt = False
         app.proofread_result = {}
         app.output_dir = FakeVar(output_dir or self.out_root)
-        app.generate_pdf = FakeVar(pdf)
         app.generate_docx = FakeVar(docx)
         app.pipeline = FakePipeline()
         app.btn_action = FakeBtn()
@@ -179,34 +178,19 @@ class TestTypesetOnlyModeBehavior(unittest.TestCase):
         app.root = FakeRoot()
         return app
 
-    def test_uncheck_pdf_generates_word_only(self):
-        """用户行为：仅排版模式，取消 LaTeX PDF、只勾 Word → 只出 Word。
+    def test_docx_checked_generates_word(self):
+        """用户行为：仅排版模式，勾选 Word → 生成 Word 批注报告（不产生校对PDF 目录）。"""
+        app = self._make_app(docx=True)
+        app.start_generate_docx()
 
-        修复前：PDF 无条件生成（校对PDF 目录会被创建）；修复后不得出现。
-        """
-        app = self._make_app(pdf=False, docx=True)
-        app.start_generate_pdf()
-
-        pdf_dir = os.path.join(self.out_root, "校对PDF")
-        self.assertFalse(os.path.exists(pdf_dir), "取消勾选后仍执行了 LaTeX 排版")
+        self.assertFalse(
+            os.path.exists(os.path.join(self.out_root, "校对PDF")),
+            "LaTeX 排版已下线，不得出现校对PDF 目录",
+        )
 
         docx_path = os.path.join(self.out_root, "校对Word", "测试试卷_校对批注版.docx")
         self.assertTrue(os.path.exists(docx_path), f"Word 报告未生成：{docx_path}")
         self._assert_docx_sound(docx_path, n_comments=3)
-
-    @unittest.skipIf(shutil.which("xelatex") is None, "xelatex 不可用")
-    def test_uncheck_word_generates_pdf_only(self):
-        """对称行为：取消 Word、只勾 LaTeX PDF → 只出 PDF。"""
-        app = self._make_app(pdf=True, docx=False)
-        app.start_generate_pdf()
-
-        pdf_path = os.path.join(self.out_root, "校对PDF", "测试试卷.pdf")
-        self.assertTrue(os.path.exists(pdf_path), f"PDF 未生成：{pdf_path}")
-        with open(pdf_path, "rb") as f:
-            self.assertTrue(f.read(4).startswith(b"%PDF"), "产物不是合法 PDF")
-
-        word_dir = os.path.join(self.out_root, "校对Word")
-        self.assertFalse(os.path.exists(word_dir), "取消勾选后仍生成了 Word 报告")
 
     def test_relative_output_dir_real_artifacts(self):
         """用户行为：输出目录填相对路径 → docx 真实落在相对 CWD 的目录且结构健全。
@@ -215,8 +199,8 @@ class TestTypesetOnlyModeBehavior(unittest.TestCase):
         批注注入打开相对路径抛 FileNotFoundError，最终无任何产物。
         """
         os.chdir(self.tmp)
-        app = self._make_app(pdf=False, docx=True, output_dir="输出")
-        app.start_generate_pdf()
+        app = self._make_app(docx=True, output_dir="输出")
+        app.start_generate_docx()
 
         rel_docx = os.path.join("输出", "校对Word", "测试试卷_校对批注版.docx")
         self.assertTrue(os.path.exists(rel_docx), f"docx 未落在 CWD 相对目录：{rel_docx}")

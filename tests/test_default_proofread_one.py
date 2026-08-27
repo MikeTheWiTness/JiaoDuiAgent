@@ -119,8 +119,8 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestProofreadPersistenceDecoupled(unittest.TestCase):
-    """单题报告落盘与 generate_pdf 勾选解耦——generate_pdf=False 时仍落盘。"""
+class TestProofreadPersistenceAlways(unittest.TestCase):
+    """单题报告落盘与排版输出解耦——校对核心产物总是落盘。"""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="tdd_persist_")
@@ -133,7 +133,7 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def _run_proofread(self, generate_pdf, content=None, reasoning="思考"):
+    def _run_proofread(self, content=None, reasoning="思考"):
         from unittest import mock
 
         from core import defaults
@@ -154,7 +154,7 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
         with mock.patch.object(defaults, "call_api", return_value=fake_result), \
                 mock.patch.object(defaults, "_enforce_format", return_value=(True, [])):
             return defaults.default_proofread_one(
-                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=generate_pdf,
+                ctx, self.q_dir, "第1题", "prompt", [],
                 archive_root=self.tmpdir)
 
     def test_no_issue_report_excludes_reasoning(self):
@@ -163,7 +163,7 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
         修复前：「无问题」时 reasoning 被追加为「模型思考过程」段；
         修复后：思考内容归属 _API对话记录.md，报告只保留校对相关内容。
         """
-        r = self._run_proofread(generate_pdf=False, content="无问题",
+        r = self._run_proofread(content="无问题",
                                 reasoning="这是模型思考内容XYZ")
         self.assertTrue(r["success"])
         archive = os.path.join(self.tmpdir, "中间产物",
@@ -176,21 +176,15 @@ class TestProofreadPersistenceDecoupled(unittest.TestCase):
             self.assertNotIn("这是模型思考内容XYZ", text)
             self.assertIn("完整 API 对话记录请见", text)
 
-    def test_report_persists_when_generate_pdf_false(self):
-        r = self._run_proofread(generate_pdf=False)
-        self.assertTrue(r["success"])
-        self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对报告.md")))
-        self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对数据.json")))
-
-    def test_report_persists_when_generate_pdf_true(self):
-        r = self._run_proofread(generate_pdf=True)
+    def test_report_always_persists(self):
+        r = self._run_proofread()
         self.assertTrue(r["success"])
         self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对报告.md")))
         self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对数据.json")))
 
 
-class TestFormatFixDecoupledFromPdf(unittest.TestCase):
-    """M2 回归：LLM 格式修正开关必须与“生成 LaTeX PDF”勾选解耦。"""
+class TestFormatFixControlledByFlag(unittest.TestCase):
+    """回归：格式修正由 enable_format_fix 显式控制（默认关闭），与排版输出解耦。"""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="tdd_format_fix_")
@@ -203,7 +197,7 @@ class TestFormatFixDecoupledFromPdf(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def _run(self, generate_pdf, enable_format_fix=None):
+    def _run(self, enable_format_fix=None):
         from unittest import mock
 
         from core import defaults
@@ -225,31 +219,78 @@ class TestFormatFixDecoupledFromPdf(unittest.TestCase):
                                   return_value=("修正后的内容", True, "")) as fix:
             result = defaults.default_proofread_one(
                 ctx, self.q_dir, "第1题", "prompt", [],
-                generate_pdf=generate_pdf,
                 archive_root=self.tmpdir,
                 enable_format_fix=enable_format_fix,
             )
         return result, fix
 
-    def test_format_fix_enabled_when_pdf_unchecked(self):
-        """取消 PDF 勾选后仍应执行格式修正"""
-        result, fix = self._run(generate_pdf=False, enable_format_fix=True)
+    def test_format_fix_runs_when_flag_true(self):
+        """enable_format_fix=True 时执行 LLM 格式修正"""
+        result, fix = self._run(enable_format_fix=True)
         self.assertTrue(result["success"])
         self.assertEqual(result["result"], "修正后的内容")
         fix.assert_called_once()
 
-    def test_format_fix_legacy_follows_pdf_when_not_explicit(self):
-        """未显式传 enable_format_fix 时保持旧行为（跟随 generate_pdf）"""
-        _, fix = self._run(generate_pdf=False, enable_format_fix=None)
+    def test_format_fix_off_by_default(self):
+        """未显式传 enable_format_fix 时默认不执行修正"""
+        _, fix = self._run(enable_format_fix=None)
         fix.assert_not_called()
 
-        _, fix = self._run(generate_pdf=True, enable_format_fix=None)
-        fix.assert_called_once()
-
-    def test_format_fix_can_be_disabled_even_with_pdf(self):
-        """显式 enable_format_fix=False 时即使勾选 PDF 也不执行格式修正"""
-        _, fix = self._run(generate_pdf=True, enable_format_fix=False)
+    def test_format_fix_explicit_false(self):
+        """显式 enable_format_fix=False 时不执行修正"""
+        _, fix = self._run(enable_format_fix=False)
         fix.assert_not_called()
+
+
+class TestEmptyOutputProofread(unittest.TestCase):
+    """回归：模型空输出（res=""）时跳过格式修正，报告注入人工检查告警。
+
+    修复前：空 res 被当作格式不合规，启动 LLM 格式修正去修一个 0 字节文件。
+    """
+
+    def setUp(self):
+        import shutil
+        self.tmpdir = tempfile.mkdtemp(prefix="tdd_empty_out_")
+        self.q_dir = os.path.join(self.tmpdir, "第1题")
+        os.makedirs(self.q_dir, exist_ok=True)
+        with open(os.path.join(self.q_dir, "第1题.md"), "w", encoding="utf-8") as f:
+            f.write("1．题目\n\n【1|错误|正确】\n")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_empty_output_skips_format_fix_and_warns(self):
+        from unittest import mock
+
+        from core import defaults
+        from core.api_client import StopReason
+        from core.session_context import SessionContext
+
+        ctx = SessionContext(api_url="http://x", api_key="k", model="m",
+                             max_loops=1, output_dir=self.tmpdir)
+        fake_result = {
+            "content": "",
+            "tool_calls_log": [],
+            "reasoning": "",
+            "usage": {"total_tokens": 0},
+            "stop_reason": StopReason.END_TURN,
+        }
+        with mock.patch.object(defaults, "call_api", return_value=fake_result), \
+                mock.patch.object(defaults, "enforce_and_fix") as fix, \
+                mock.patch.object(defaults, "log") as log_mock:
+            r = defaults.default_proofread_one(
+                ctx, self.q_dir, "第1题", "prompt", [],
+                archive_root=self.tmpdir,
+            )
+        self.assertTrue(r["success"])
+        fix.assert_not_called()
+        warned = any("空输出" in str(c) for c in log_mock.call_args_list)
+        self.assertTrue(warned, "应记录空输出告警日志")
+        rep = os.path.join(self.q_dir, "_校对报告.md")
+        self.assertTrue(os.path.exists(rep))
+        text = open(rep, encoding="utf-8").read()
+        self.assertIn("空输出", text)
 
 
 class TestInterruptedProofread(unittest.TestCase):
@@ -289,7 +330,7 @@ class TestInterruptedProofread(unittest.TestCase):
                 mock.patch.object(defaults, "_enforce_format",
                                   side_effect=AssertionError("中断后不应做格式修正")):
             return defaults.default_proofread_one(
-                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=True)
+                ctx, self.q_dir, "第1题", "prompt", [])
 
     def test_interrupted_returns_failure(self):
         """中断必须返回 success=False"""
@@ -331,7 +372,7 @@ class TestInterruptedProofread(unittest.TestCase):
         with mock.patch.object(defaults, "call_api", return_value=fake_result), \
                 mock.patch.object(defaults, "_enforce_format", return_value=(True, [])):
             r = defaults.default_proofread_one(
-                ctx, self.q_dir, "第1题", "prompt", [], generate_pdf=False,
+                ctx, self.q_dir, "第1题", "prompt", [],
                 archive_root=self.tmpdir)
         self.assertTrue(r["success"])
         self.assertTrue(os.path.exists(os.path.join(self.q_dir, "_校对报告.md")))

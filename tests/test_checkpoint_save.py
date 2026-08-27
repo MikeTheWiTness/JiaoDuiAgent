@@ -306,7 +306,7 @@ class TestDefaultProofreadOneMdHash:
                 mock.patch.object(defaults, "_format_tool_calls_summary", return_value=""):
             res = defaults.default_proofread_one(
                 _ctx(tmp_path, enable_checkpoint=False), str(q_dir), "第1题",
-                prompt="提示", tools=[], generate_pdf=False,
+                prompt="提示", tools=[],
                 pre_hook=_pre_hook, archive_root=str(tmp_path),
             )
 

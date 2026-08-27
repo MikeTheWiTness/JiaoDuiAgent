@@ -1,7 +1,7 @@
-"""回归：start_generate_pdf（仅排版入口）必须受「生成 LaTeX PDF 校对报告」勾选控制。
+"""回归：start_generate_docx（仅排版入口）必须受「生成 Word 批注报告」勾选控制。
 
-修复前：PDF 生成无条件执行，用户取消勾选后仍生成 LaTeX PDF；
-完整流程入口 start_full_pipeline 有 generate_pdf.get() 检查，两入口行为不一致。
+LaTeX/PDF 排版已下线（ADR-0030），仅排版入口只生成 Word 批注报告；
+取消勾选后不再生成任何报告。
 """
 import os
 import sys
@@ -51,14 +51,13 @@ class _SyncThread:
         self._target()
 
 
-def _make_app(generate_pdf, generate_docx):
+def _make_app(generate_docx):
     app = object.__new__(default_app.DefaultApp)
     app.proofread_list = [("/假/目录", "测试试卷")]
     app.task_running = False
     app.task_interrupt = False
     app.proofread_result = {}
     app.output_dir = FakeVar("/假/输出")
-    app.generate_pdf = FakeVar(generate_pdf)
     app.generate_docx = FakeVar(generate_docx)
     app.pipeline = FakePipeline()
     app.btn_action = FakeBtn()
@@ -68,10 +67,9 @@ def _make_app(generate_pdf, generate_docx):
 
 
 @unittest.skipIf(default_app is None, "tkinter 不可用")
-class TestStartGeneratePdfRespectsCheckboxes(unittest.TestCase):
+class TestStartGenerateDocxRespectsCheckbox(unittest.TestCase):
     def setUp(self):
         self.patches = [
-            mock.patch.object(default_app, "generate_combined_pdf", return_value="/out/1.pdf"),
             mock.patch.object(default_app, "generate_combined_docx", return_value="/out/1.docx"),
             mock.patch.object(default_app.threading, "Thread", _SyncThread),
         ]
@@ -82,26 +80,17 @@ class TestStartGeneratePdfRespectsCheckboxes(unittest.TestCase):
         for p in self.patches:
             p.stop()
 
-    def test_pdf_unchecked_only_docx(self):
-        """回归：取消「生成 LaTeX PDF 校对报告」后不得生成 PDF，只生成 Word"""
-        app = _make_app(generate_pdf=False, generate_docx=True)
-        app.start_generate_pdf()
-        default_app.generate_combined_pdf.assert_not_called()
+    def test_docx_checked_generates_word(self):
+        """勾选「生成 Word 批注报告」时生成 Word"""
+        app = _make_app(generate_docx=True)
+        app.start_generate_docx()
         default_app.generate_combined_docx.assert_called_once()
 
-    def test_docx_unchecked_only_pdf(self):
-        """对称：取消 Word 勾选后只生成 PDF"""
-        app = _make_app(generate_pdf=True, generate_docx=False)
-        app.start_generate_pdf()
-        default_app.generate_combined_pdf.assert_called_once()
+    def test_docx_unchecked_skips(self):
+        """取消勾选后不生成任何报告"""
+        app = _make_app(generate_docx=False)
+        app.start_generate_docx()
         default_app.generate_combined_docx.assert_not_called()
-
-    def test_both_checked(self):
-        """两者都勾选时都生成"""
-        app = _make_app(generate_pdf=True, generate_docx=True)
-        app.start_generate_pdf()
-        default_app.generate_combined_pdf.assert_called_once()
-        default_app.generate_combined_docx.assert_called_once()
 
 
 if __name__ == "__main__":

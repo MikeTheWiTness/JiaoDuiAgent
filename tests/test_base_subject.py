@@ -97,8 +97,9 @@ class TestBaseSubject:
         app = _MinimalSubject(subject_dir)
         features = app.get_ui_features()
         assert features["show_knowledge_option"] is False  # 统一模型下默认隐藏
-        assert features["show_pdf_option"] is True
         assert features["show_parallel_option"] is True
+        # LaTeX/PDF 排版已下线（ADR-0030），不再有 show_pdf_option 键
+        assert "show_pdf_option" not in features
         assert "试卷" in features["show_source_modes"]
 
     def test_get_ui_features_show_knowledge_override(self, subject_dir):

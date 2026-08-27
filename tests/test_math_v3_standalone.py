@@ -107,7 +107,7 @@ class TestToolBuilding(unittest.TestCase):
     def test_react_tool_count(self):
         self.app.react_mode = True
         self.app.tools = self.app.build_tools()
-        self.assertEqual(len(self.app.tools), 10, f"React 工具应为 10 个，实际 {len(self.app.tools)}")
+        self.assertEqual(len(self.app.tools), 9, f"React 工具应为 9 个，实际 {len(self.app.tools)}")
 
     def test_react_tool_names(self):
         self.app.react_mode = True
@@ -118,10 +118,11 @@ class TestToolBuilding(unittest.TestCase):
             "simplify_expression", "geometry", "web_search",
         }
         expected_react = {
-            "plan_update", "locate_paragraph", "read_section", "independent_solve",
+            "plan_update", "locate_paragraph", "read_section",
         }
         self.assertTrue(expected_base.issubset(names), f"缺少基础工具: {expected_base - names}")
         self.assertTrue(expected_react.issubset(names), f"缺少 React 工具: {expected_react - names}")
+        self.assertNotIn("independent_solve", names, "数学不应挂载物理独立解题工具（P4 修复）")
 
     def test_plan_update_nudge_empty(self):
         """验证数学 PlanUpdateTool nudge 置空（对齐物理 ADR-0006 决策 2）"""
@@ -324,7 +325,6 @@ class TestPromptGeneration(unittest.TestCase):
             ("反思机制", "反思"),
             ("格式自检", "格式自检"),
             ("强制返回格式", "强制返回格式"),
-            ("independent_solve", "independent_solve"),
             ("geometry 工具", "geometry"),
             ("web_search", "web_search"),
             ("单位符号", "单位"),
@@ -400,13 +400,9 @@ class TestProofreadPipeline(unittest.TestCase):
                 self.fail(f"工具 {tool.name} 序列化失败: {e}")
 
     def test_independent_solve_tool_schema(self):
-        """验证 independent_solve 工具参数 schema 正确"""
-        tool = next(t for t in self.app.tools if t.name == "independent_solve")
-        schema = tool.args_schema.model_json_schema()
-        props = schema["properties"]
-        self.assertIn("question_without_answer", props)
-        self.assertIn("solve_prompt", props)
-        self.assertIn("original_answer", props)
+        """P4 锁定：数学不该套物理独立解题工具（描述/提示/落盘均为物理版）。"""
+        names = {t.name for t in self.app.tools}
+        self.assertNotIn("independent_solve", names)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -522,7 +518,8 @@ class TestUIFeatures(unittest.TestCase):
         app = SubjectApp(MATH_DIR)
         features = app.get_ui_features()
         self.assertFalse(features["show_knowledge_option"])
-        self.assertTrue(features["show_pdf_option"])
+        # LaTeX/PDF 排版已下线（ADR-0030），不再有 show_pdf_option 键
+        self.assertNotIn("show_pdf_option", features)
         self.assertTrue(features["show_parallel_option"])
         self.assertIn("试卷", features["show_source_modes"])
         self.assertIn("自由校对", features["show_source_modes"])

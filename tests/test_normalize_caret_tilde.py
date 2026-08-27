@@ -4,8 +4,6 @@
 1. normalize_caret_tilde 四步正则 — 上下标转换 + 转义号还原 + 顺序正确性
 2. inject_format_markers 跳过 subscript/superscript — 避免双重标记
 3. strip_format_markers 仍可清洗 <上标>/<下标> — _FMT_MARKERS 未删除
-4. _convert_sup_sub_inner — 斜体/粗体内部的 XML 标记转换
-5. _MATH_ONLY_RE — sim 命令防御性包裹
 """
 
 import os
@@ -199,81 +197,6 @@ class TestStripMarkersSupSub:
 
 
 # ═══════════════════════════════════════════════════════════════
-# _convert_sup_sub_inner — 斜体/粗体内部 XML 转换
-# ═══════════════════════════════════════════════════════════════
-
-class TestConvertSupSubInner:
-    """_convert_sup_sub_inner 将 <上标>/<下标> 就地转为 LaTeX 命令"""
-
-    def test_subscript_inner(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        result = _convert_sup_sub_inner("v<下标>0</下标>")
-        assert result == r"v\textsubscript{0}"
-
-    def test_superscript_inner(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        result = _convert_sup_sub_inner("v<上标>2</上标>")
-        assert result == r"v\textsuperscript{2}"
-
-    def test_both_sup_and_sub(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        result = _convert_sup_sub_inner("a<上标>2</上标><下标>i</下标>")
-        assert result == r"a\textsuperscript{2}\textsubscript{i}"
-
-    def test_no_markers_passthrough(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        assert _convert_sup_sub_inner("plain text") == "plain text"
-
-
-# ═══════════════════════════════════════════════════════════════
-# _MATH_ONLY_RE — sim 命令防御
-# ═══════════════════════════════════════════════════════════════
-
-class TestMathOnlyReSim:
-    r"""_MATH_ONLY_RE 追加 |sim 后，\sim 在文本模式中被 $...$ 包裹"""
-
-    def test_sim_in_text_wrapped(self):
-        from shared.latex_generator import _MATH_ONLY_RE
-        text = r"范围 0\sim2s"
-        result = _MATH_ONLY_RE.sub(r'$\\\1$', text)
-        assert r"0$\sim$2s" in result
-
-    def test_sim_in_text_only_context(self):
-        r"""_MATH_ONLY_RE 仅在文本模式参数中使用，不处理 $...$ 内命令。
-
-        实际调用链：corrmark 的 text_safe 路径对已剥离 $ 的纯文本应用此正则，
-        因此 \sim 在文本中出现时才被包裹。数学模式内的 \sim 不经过此路径。
-        """
-        from shared.latex_generator import _MATH_ONLY_RE
-        # 模拟文本模式中的 corrmark 参数：纯文本含 \sim
-        text = r"范围 0\sim2s 内的值"
-        result = _MATH_ONLY_RE.sub(r'$\\\1$', text)
-        assert r"0$\sim$2s" in result
-        # 其余文本不受影响
-        assert "范围" in result
-        assert "内的值" in result
-
-    def test_sim_followed_by_letters_not_wrapped(self):
-        r"""\similar 不应被匹配（(?![a-zA-Z]) 保护）"""
-        from shared.latex_generator import _MATH_ONLY_RE
-        text = r"\similar is not sim alone"
-        result = _MATH_ONLY_RE.sub(r'$\\\1$', text)
-        # \similar 不以 sim 结尾 → 不匹配整个词 → 不包裹
-        # 但 regex 中 |sim 会匹配 \sim 子串... 等等，
-        # 实际上 r'\similar' 中 regex 看到的是 \similar，
-        # 匹配 sim 但 (?![a-zA-Z]) 要求 sim 后不能是字母，
-        # "ilar" 的 'i' 是字母 → 不匹配 → 原样保留
-        assert r"\similar" in result
-
-    def test_multiple_sim_in_text(self):
-        r"""多个 \sim 都各自包裹"""
-        from shared.latex_generator import _MATH_ONLY_RE
-        text = r"A\sim B\sim C"
-        result = _MATH_ONLY_RE.sub(r'$\\\1$', text)
-        assert result == r"A$\sim$ B$\sim$ C"
-
-
-# ═══════════════════════════════════════════════════════════════
 # 健壮性边界测试
 # ═══════════════════════════════════════════════════════════════
 
@@ -374,29 +297,6 @@ class TestNormalizeCaretTildeRobustness:
         assert result == "**v<上标>2</上标>**"
 
 
-class TestConvertSupSubInnerRobustness:
-    """_convert_sup_sub_inner 畸形输入"""
-
-    def test_empty_inner(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        assert _convert_sup_sub_inner("") == ""
-
-    def test_only_opening_tag(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        result = _convert_sup_sub_inner("text <上标> no close")
-        assert result == r"text \textsuperscript{ no close"
-
-    def test_only_closing_tag(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        result = _convert_sup_sub_inner("text </上标> no open")
-        assert result == "text } no open"
-
-    def test_multiple_same_type(self):
-        from shared.latex_generator import _convert_sup_sub_inner
-        result = _convert_sup_sub_inner("a<上标>2</上标>b<上标>3</上标>")
-        assert result == r"a\textsuperscript{2}b\textsuperscript{3}"
-
-
 class TestStripMarkersRobustness:
     """strip_format_markers 畸形输入"""
 
@@ -416,26 +316,6 @@ class TestStripMarkersRobustness:
         from shared.docx_format_enhancer import strip_format_markers
         result = strip_format_markers("<上标>1</上标><上标>2</上标>")
         assert result == "12"
-
-
-class TestMathOnlyReRobustness:
-    """_MATH_ONLY_RE 边界输入"""
-
-    def test_sim_at_string_start(self):
-        from shared.latex_generator import _MATH_ONLY_RE
-        result = _MATH_ONLY_RE.sub(r'$\\\1$', r"\sim x")
-        assert result == r"$\sim$ x"
-
-    def test_sim_at_string_end(self):
-        from shared.latex_generator import _MATH_ONLY_RE
-        result = _MATH_ONLY_RE.sub(r'$\\\1$', r"x \sim")
-        assert result == r"x $\sim$"
-
-    def test_sim_followed_by_digit_not_wrapped_extra(self):
-        """数字后的 sim 仍被包裹（regex 仅拒绝字母后缀）"""
-        from shared.latex_generator import _MATH_ONLY_RE
-        result = _MATH_ONLY_RE.sub(r'$\\\1$', r"\sim2")
-        assert result == r"$\sim$2"
 
 
 # ═══════════════════════════════════════════════════════════════
