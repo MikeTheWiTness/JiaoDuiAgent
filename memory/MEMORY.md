@@ -28,8 +28,9 @@
 | 0021 | call_api 重构 + BashTool 安全 + 测试退化修复 | 已实现（commit faa4d6d） |
 | 0022 | UI 编排下沉到 core | 已落地（部分）（commit 552fe9a） |
 | 0023 | 物理/化学跨模块凭证设置去重 | 已实现（commit 72ada63） |
-| 0024 | latex_generator pipeline 化 + 内部去重 | 已实现（commit 16d7fcf） |
-| 0025 | pdf_compiler 拆四函数 | 已实现（commit daf84dd） |
+| 0024 | latex_generator pipeline 化 + 内部去重 | 已废弃（LaTeX 排版下线，ADR-0030） |
+| 0025 | pdf_compiler 拆四函数 | 已废弃（LaTeX 排版下线，ADR-0030） |
+| 0030 | LaTeX/PDF 排版下线，仅保留 Word 排版 | 已接受（ADR 见 docs/adr/0030） |
 | 0026 | 化学式解析双源同步测试锁 | 已实现（commit 7346cf4） |
 | 0027 | 工程化基线 + 集成测试复位 | 已实现（commit 298498a） |
 | 0028 | 工具循环搜索独立配额 + 选择性熔断 | 已实现（commit faa4d6d，ADR-0021 中保留的既有功能） |
@@ -38,9 +39,10 @@
 
 - **M1（清理 + 工程化）**：Issue 048 + ADR-0027
 - **M2（核心重构）**：ADR-0021
-- **M3（PDF/LaTeX）**：ADR-0025 + ADR-0024
+- **M3（PDF/LaTeX，已下线）**：ADR-0025 + ADR-0024（随 LaTeX 排版下线废弃，ADR-0030）
 - **M4（UI 下沉 + 配置优化）**：ADR-0022 + ADR-0023
 - **M5（去重收尾）**：ADR-0026
+- **M6（排版下线）**：ADR-0030
 
 ---
 

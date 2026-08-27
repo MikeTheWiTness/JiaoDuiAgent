@@ -41,9 +41,7 @@ JiaoDuiAgent/
 │   ├── docx_comments.py      # Word 批注提取
 │   ├── docx_format_enhancer.py    # Word 格式标记增强
 │   ├── review_mode.py        # 批注评审模式
-│   ├── latex_generator.py    # Markdown → LaTeX
-│   ├── pdf_compiler.py       # XeLaTeX PDF 编译
-│   └── templates/
+│   └── formula_render.py     # 公式渲染（matplotlib → PNG，Word 批注用）
 ├── ui/                       # UI 组件库 + 默认模板
 │   ├── widgets.py            # 可复用组件
 │   └── default_app.py        # DefaultApp — 默认 GUI 模板

@@ -1,6 +1,6 @@
 # ADR 0025：pdf_compiler 拆四函数 + 诊断去重
 
-**状态**：已实现（commit daf84dd）
+**状态**：已废弃（LaTeX/PDF 排版下线，见 [[ADR 0030 LaTeX 排版下线]](0030-latex-typeset-retirement.md)；pdf_compiler 随功能下线整体删除）
 **日期**：2026-07-23（2026-07-24 修订）
 **实现日期**：2026-07-24
 **决策者**：MikeTheWiTness

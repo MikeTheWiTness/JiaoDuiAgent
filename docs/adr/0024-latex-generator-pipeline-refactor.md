@@ -1,6 +1,6 @@
 # ADR 0024：latex_generator 大函数 pipeline 化 + 内部重复去重
 
-**状态**：已实现（commit 16d7fcf）
+**状态**：已废弃（LaTeX/PDF 排版下线，见 [[ADR 0030 LaTeX 排版下线]](0030-latex-typeset-retirement.md)；latex_generator 随功能下线整体删除）
 **日期**：2026-07-23（2026-07-24 修订：增"严格保留原差异 / log 输出逐字不变"两条原则；C2 删除"顺手补兜底"的修复构思——它是行为变更不是 refactor）
 **决策者**：MikeTheWiTness
 **关联**：[[ADR 0020 斜体/上下标分离修复]](0020-math-italics-separation.md)

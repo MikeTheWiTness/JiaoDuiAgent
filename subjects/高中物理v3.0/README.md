@@ -17,12 +17,12 @@ ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校
 
 ## 功能特点
 
-- **格式转换**：Word `.docx` → Markdown（Pandoc，保留 LaTeX 数学公式）
+- **格式转换**：Word `.docx` → Markdown（Pandoc，保留数学公式）
 - **智能拆分**：支持普通规则 / 不拆分 / 智能分割 / 人工标记 四种拆分方式
 - **ReAct AI 校对**：LLM 自主规划校对步骤，支持符号计算工具实算验证
 - **符号计算工具**：表达式求值、方程求解、物理公式求解、量纲分析、向量运算、圆的方程
 - **联网搜索**：支持联网检索补充信息
-- **PDF 报告**：LaTeX 双栏对照排版（左栏原题 + 红色圈号标记，右栏修改建议）
+- **Word 批注报告**：合并各题校对结果，公式转为 Word 原生公式，修改意见以 Word 批注呈现
 - **批量处理**：支持多文件批量转换 + 多题并行校对
 - **中断恢复**：已校对题目自动跳过，支持中断后继续
 
@@ -32,8 +32,7 @@ ReAct 模式通过 GUI 开关一键切换，关闭时回退到传统一次性校
 
 - Windows 10+
 - Python 3.12
-- Pandoc（用于 Word 转换）
-- TeX Live（可选，用于生成 PDF 报告）
+- Pandoc（用于 Word 转换与 Word 批注报告生成）
 
 ### 安装依赖
 
@@ -69,7 +68,7 @@ python subjects/高中物理v3.0/main.py
 | `evaluate_expression` | 符号计算 | 数值表达式求值（含三角函数、对数等） |
 | `solve_equation` | 符号计算 | 方程/方程组求解 |
 | `solve_physics_formula` | 符号计算 | 物理公式代入求值 |
-| `dimensional_analysis` | 符号计算 | 量纲分析 |
+| `dimensional_analysis` | 符号计算 | 量纲分析（调用须为单位声明 unit_definitions） |
 | `vector_operations` | 符号计算 | 向量运算（加减、点乘、叉乘、模） |
 | `circle_from_two_points` | 符号计算 | 由两点求圆的方程（磁场偏转题用） |
 | `web_search` | 联网 | 联网搜索补充信息 |
@@ -121,12 +120,12 @@ MODEL_NAME=doubao-seed-2-0-pro-260215
 ```
 .docx 文件
   → Pandoc → 原始 .md（+ images/）
-  → LaTeX 转义修复 / 后处理
+  → 转义修复 / 后处理
   → 拆分：规则/不拆分/智能/人工 → 第N题/第N题.md + 第N题_clean.md + images/
   → 前置处理 hook（文言文/诗歌搜索）
   → ReAct AI 校对（plan → locate → verify → mark）
   → _校对报告.md + _校对数据.json + _API对话记录.md
-  → LaTeX 双栏 PDF（可选）
+  → Word 批注报告（pandoc 转换 + 批注注入）
 ```
 
 ## 打包为 EXE
@@ -134,6 +133,5 @@ MODEL_NAME=doubao-seed-2-0-pro-260215
 详见 [docs/packaging.md](../../docs/packaging.md)。
 
 ```bash
-python tools/build_minimal_texlive.py    # 1. 提取便携 TeX
-pyinstaller specs/高中物理.spec          # 2. 打包
+pyinstaller specs/高中物理.spec          # 打包
 ```
