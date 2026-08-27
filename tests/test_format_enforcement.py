@@ -17,7 +17,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.format_enforcement import _enforce_format, enforce_and_fix
+from core.format_enforcement import _enforce_format, enforce_and_fix, _bash_format_fix
 
 OK_REPORT = """轻微问题
 
@@ -113,6 +113,39 @@ class TestEnforceFormat(unittest.TestCase):
     def test_empty_input(self):
         ok, issues = _enforce_format("")
         self.assertFalse(ok)
+
+    def test_empty_skeleton_rejected(self):
+        """空骨架（### 标记原文 与 ### 修改原因 均无内容）不得视为合规。
+
+        修复前：段落正则的 (.*?) 匹配到换行即算存在，19 字符骨架被判通过。
+        """
+        report = "### 标记原文\n\n### 修改原因\n"
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("标记原文段落为空", issues)
+        self.assertIn("修改原因段落为空", issues)
+
+    def test_empty_marker_section_with_reasons_rejected(self):
+        """标记原文段落为空但有原因编号 → 仍不合规。"""
+        report = "### 标记原文\n\n### 修改原因\n1. 理由。"
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("标记原文段落为空", issues)
+
+    def test_reason_no_issue_phrase_passes(self):
+        """「无问题」形态（修改原因段落写「无」）不误伤。"""
+        report = ("### 标记原文\n编号：第1题\n内容：\n1．题目\n\n"
+                  "### 修改原因\n无")
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok, f"「无问题」形态不应误报: {issues}")
+
+    def test_reason_section_without_numbers_rejected(self):
+        """修改原因段落写了解释但无编号条目 → 不合规。"""
+        report = "### 标记原文\n题目内容\n\n### 修改原因\n错误一处"
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("缺少编号条目", issues)
+
     def test_fence_wrapped_marker_section_rejected(self):
         """标记原文被整段 ``` 围栏包裹（LLM 逐字引文本能）→ 不合规。
 
@@ -281,6 +314,32 @@ class TestMarkerInsideFormula(unittest.TestCase):
         # $ 偶数不报未配对；标记在公式外（字段内公式屏蔽后）也不报公式内部
         self.assertNotIn("美元符号未配对", issues)
         self.assertNotIn("公式内部", issues)
+
+
+class TestBashFormatFixConfig(unittest.TestCase):
+    """_bash_format_fix 的调用配置：4 轮余量与对话记录后缀。"""
+
+    def test_uses_four_loops_and_log_suffix(self):
+        from unittest import mock
+
+        import core.format_enforcement as fe
+
+        fd, path = tempfile.mkstemp(suffix=".md")
+        os.close(fd)
+        try:
+            with mock.patch("core.session_context.SessionContext") as sc_mock, \
+                    mock.patch("core.api_client.call_api") as call_mock:
+                sc_mock.from_credentials.return_value = mock.MagicMock()
+                fe._bash_format_fix(path, "缺少段落", "http://x", "k", "m")
+            sc_kwargs = sc_mock.from_credentials.call_args.kwargs
+            self.assertEqual(sc_kwargs["max_loops"], 4)
+            call_kwargs = call_mock.call_args.kwargs
+            self.assertEqual(call_kwargs["log_suffix"], "_格式修正")
+            prompt = call_kwargs["system_prompt"]
+            self.assertIn("4 轮", prompt)
+            self.assertNotIn("3 轮", prompt)
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,18 @@ def _enforce_format(res: str):
         issues.append("缺少 ### 修改原因 段落")
     # 确定标记所在的文本区域（优先用 marker_match，其次全文）
     marker_text = marker_match.group(1) if marker_match else (res if has_inline_markers else "")
+    reason_text = reason_match.group(1) if reason_match else ""
+    # 空段落检查：空骨架（如「### 标记原文\n\n### 修改原因\n」）不得视为合规
+    if marker_text.strip() == "":
+        if not has_inline_markers:
+            issues.append("标记原文段落为空（无标记且无原文）")
+    if reason_match:
+        rstripped = reason_text.strip()
+        if rstripped == "":
+            issues.append("修改原因段落为空")
+        elif rstripped != "无" and not (rstripped.startswith("无问题") and len(rstripped) <= 10):
+            if not re.search(r'^\s*\d+\.\s', reason_text, re.MULTILINE):
+                issues.append("修改原因段落缺少编号条目")
     # LLM 逐字引文本能：用 ``` / ~~~ 围栏包住标记原文（提示词已禁止但模型不稳定）。
     # 围栏会被 pandoc 当代码块渲染，公式不转 Word 公式、批注锚点失效。
     if marker_text:
@@ -138,7 +150,7 @@ def _bash_format_fix(file_path: str, issues_desc: str,
 - 如果原文有总结行（如"一般问题"），保留它，在其后加入 `### 标记原文` 段落
 - 如果没有 `### 标记原文` 标题，在正文内容前加上它
 - **标记不得插入 `$...$` 公式内部**；若标记位于公式内部，将标记移到公式外，或让标记包裹整个公式
-- **完成后直接停止，不要继续调用工具！** 只需：read → 修改 → write → read 验证 → 停止。总共不超过 3 轮工具调用。
+- **完成后直接停止，不要继续调用工具！** 只需：read → 修改 → write → read 验证 → 停止。总共不超过 4 轮工具调用。
 """
 
     user_message = (
@@ -158,8 +170,8 @@ def _bash_format_fix(file_path: str, issues_desc: str,
         ctx = SessionContext.from_credentials(
             api_url, api_key, model,
             output_dir=file_dir,
-            max_loops=3,
-            max_tokens=16384,
+            max_loops=4,
+            max_tokens=100000,
             api_format=api_format,
         )
         call_api(
@@ -169,6 +181,7 @@ def _bash_format_fix(file_path: str, issues_desc: str,
             q_title="格式修正",
             system_prompt=system_prompt,
             tools=[read_tool, write_tool, bash_tool],
+            log_suffix="_格式修正",
         )
     except Exception as e:
         log(f"   ❌ [bash修正] API 调用异常: {e}\n{traceback.format_exc()}")

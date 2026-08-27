@@ -29,7 +29,7 @@ SMART_SPLIT_PROMPT = """你是专业的语文试卷结构分析专家。请在�
 ```"""
 
 
-SMART_SPLIT_MAX_TOKENS = 16384
+SMART_SPLIT_MAX_TOKENS = 100000
 
 
 def parse_problem_tags(text):

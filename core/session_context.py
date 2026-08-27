@@ -11,7 +11,7 @@ class SessionContext:
     api_key: str
     model: str
     max_loops: int = 20
-    max_tokens: int = 16384
+    max_tokens: int = 100000
     reasoning_effort: str = "high"
     api_format: str = "chat/completions"
     enable_checkpoint: bool = False  # 断点续传门控：仅校对主流程开启（ADR-0029）
@@ -26,7 +26,7 @@ class SessionContext:
         model: str,
         output_dir: str | None = None,
         max_loops: int = 20,
-        max_tokens: int = 16384,
+        max_tokens: int = 100000,
         reasoning_effort: str = "high",
         api_format: str = "chat/completions",
     ) -> "SessionContext":
