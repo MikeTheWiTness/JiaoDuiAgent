@@ -42,7 +42,7 @@ K-12 多学科 AI 校对工具集 —— **每个学科是独立程序**，拥�
 - 所有 LLM 返回的原始内容（含 reasoning/thinking）、工具调用请求与返回内容、解析中间结果，**必须写入文件保留**，不得仅在日志中输出。用于后期排查问题时回溯完整调用链。
 - 关键中间产物的保存路径：
   - 智能分割原始输出 → `_smart_split_raw.md`（`shared/smart_split.py:_dump_smart_split_raw`）
-  - 校对 LLM 原始返回 + 工具调用日志 → `_校对报告.md`（`core/defaults.py:default_proofread_one`）；LLM 思考内容（reasoning_content）逐轮写入 `_API对话记录.md`（`core/api_client.py:_save_conversation_log`），不得写入校对报告
+  - 校对 LLM 原始返回 + 工具调用日志 → `_校对报告.md`（`core/defaults.py:default_proofread_one`）；LLM 思考内容（reasoning_content）逐轮写入 `_API对话记录.md`（`core/api_client.py:_save_conversation_log`），不得写入校对报告；多阶段调用（如格式修正）用约定后缀区分：`_API对话记录_格式修正.md`（`core/format_enforcement.py:_bash_format_fix` 经 `call_api(log_suffix=...)` 写入），工具循环超限压缩前的完整对话为 `_API对话记录_full.md`
   - 校对结构化解析结果 → `_校对数据.json`（`core/parsing.py:save_proofread_json`）
   - 校对断点续传快照 → `_校对续传.json`（`core/api_client.py`，轮次边界原子写；正常完成删除、中断/出错保留；命名约束：禁用自由命名副本文件，损坏重命名 `_校对续传.corrupt.json` 见 ADR-0029）
   - API 调用日志 → 通过 `core/logging_utils.py` 的 `log()` 函数输出到日志面板

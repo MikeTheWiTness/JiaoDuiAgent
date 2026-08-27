@@ -167,30 +167,6 @@ def _model_supports_reasoning_effort(model: str) -> bool:
     return True
 
 
-def _model_supports_images(model: str) -> bool:
-    """判断模型是否支持图片输入（vision / multimodal）。
-
-    纯文本模型不支持 `image_url` 类型的消息内容，发送图片会导致 HTTP 400：
-    `unknown variant 'image_url', expected 'text'`
-
-    已知纯文本模型：
-    - deepseek-reasoner（R1 推理模型）
-    - deepseek-v4-pro（V4 推理模型）
-    - deepseek-v* 系列
-    """
-    TEXT_ONLY_PREFIXES = [
-        "deepseek-reasoner",   # R1 推理模型，纯文本
-    ]
-    for prefix in TEXT_ONLY_PREFIXES:
-        if model.startswith(prefix):
-            return False
-    # deepseek-v 系列（v4-pro 等）是纯文本推理模型
-    if model.startswith("deepseek-v"):
-        return False
-    # 其他模型（deepseek-chat、doubao、gpt-4o 等）默认支持图片
-    return True
-
-
 # ---- StopReason ----
 
 class StopReason:
@@ -552,6 +528,14 @@ def _parse_responses_choice(resp_json: dict) -> dict:
 def execute_tool(tool_instances, tool_name, arguments):
     for t in tool_instances:
         if t.name == tool_name:
+            # 参数校验：pydantic 校验失败给出统一中文提示（含字段信息），
+            # 避免模型收到无工具名的英文 traceback 后重复重试同一坏参数
+            try:
+                if t.args_schema is not None:
+                    t.args_schema.model_validate(arguments)
+            except Exception as e:
+                log(f"   ⚠️ 工具 {tool_name} 参数校验失败: {e}")
+                return f"工具 {tool_name} 参数错误: {e}"
             try:
                 result = t._run(**arguments)
                 # 如果工具返回 dict，序列化为 JSON 字符串，避免后续切片报错
@@ -560,7 +544,7 @@ def execute_tool(tool_instances, tool_name, arguments):
                 return result
             except Exception as e:
                 log(f"   ⚠️ 工具 {tool_name} 执行异常: {e}\n{traceback.format_exc()}")
-                return f"工具执行错误: {e}"
+                return f"工具 {tool_name} 执行错误: {e}"
     return f"未知工具: {tool_name}"
 
 
@@ -887,7 +871,7 @@ def _build_error_report(ctx, proof_err, err_msg, q_title, consecutive_errors, la
                 resp_hint = (
                     "\n> ⚠️ 响应体提示：**模型不支持图片输入**（`unknown variant 'image_url', expected 'text'`）。\n"
                     "> `deepseek-reasoner`、`deepseek-v4-pro` 等推理模型是纯文本模型，不能发送图片。\n"
-                    "> 程序已自动跳过不兼容模型的图片，如仍出现此错误请检查模型名配置。\n"
+                    "> 程序默认发送图片；如出现此错误说明所用模型不支持图片，请更换支持视觉的模型。\n"
                 )
             elif "reasoning_effort" in err_msg.lower():
                 resp_hint = (
@@ -899,7 +883,7 @@ def _build_error_report(ctx, proof_err, err_msg, q_title, consecutive_errors, la
                 f"## 请求格式错误（HTTP 400）\n\n"
                 f"API 拒绝了本次请求——请求内容不符合 API 规范。\n\n"
                 f"### 常见原因\n"
-                f"1. **模型不支持图片**：`deepseek-reasoner`、`deepseek-v4-pro` 等推理模型是纯文本模型，不能发送 `image_url`\n"
+                f"1. **模型不支持图片**：`deepseek-reasoner`、`deepseek-v4-pro` 等推理模型是纯文本模型，不能发送 `image_url`，请更换支持视觉的模型\n"
                 f"2. **模型不支持 `reasoning_effort`**：chat 模型（如 `deepseek-chat`）不支持该参数\n"
                 f"3. **模型名称无效**：检查 `.env` 中 `MODEL_NAME` 是否正确\n"
                 f"4. **请求体过大**：文本+工具定义超出了模型上下文窗口\n"
@@ -1265,12 +1249,12 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
             state.tool_calls_log.append({
                 "tool": tool_name,
                 "args": args,
-                "result": result[:2000],
+                "result": result[:2000] + (f"\n[已截断，原文共 {len(result)} 字符]" if len(result) > 2000 else ""),
             })
             state.messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
-                "content": result[:8000],
+                "content": result[:8000] + (f"\n[已截断，原文共 {len(result)} 字符]" if len(result) > 8000 else ""),
             })
             # 实时输出调用参数 + 返回摘要，方便排查搜索质量
             summary = result[:120].replace('\n', ' ').strip()
@@ -1357,12 +1341,14 @@ def _run_tool_loop(ctx, state, tool_instances, chat_url, headers):
 # ---- call_api（重构后的编排主函数）----
 
 def call_api(ctx, md_text, images, q_title, system_prompt,
-             tools=None, checkpoint_md_hash=None, image_paths=None):
+             tools=None, checkpoint_md_hash=None, image_paths=None, log_suffix=""):
     """校对 API 调用入口。ctx 为 SessionContext 实例。
 
     checkpoint_md_hash/image_paths 仅在校对主流程开启快照时使用：
     - checkpoint_md_hash：pre_hook 之前的原始单元 md 哈希（ADR-0029 四重校验基准）
     - image_paths：图片文件名清单（与 images 同序），快照内以文件名引用而非 base64
+
+    log_suffix：对话记录文件后缀（如 "_格式修正"），避免多阶段调用相互覆盖同名的 _API对话记录.md
     """
     err_msg = ""
     proof_err = None
@@ -1373,12 +1359,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     if reasoning_effort and not _model_supports_reasoning_effort(ctx.model):
         log(f"   ⚠️ 模型 {ctx.model} 不支持 reasoning_effort 参数，已自动跳过")
         reasoning_effort = None
-    # 自动检测模型是否支持图片（纯文本模型发送 image_url 会触发 400）
-    if images and not _model_supports_images(ctx.model):
-        log(f"   ⚠️ 模型 {ctx.model} 是纯文本模型，不支持图片输入，已自动跳过 {len(images)} 张图片")
-        effective_images = []
-    else:
-        effective_images = images
+    # 图片一律随请求发送（不预判模型是否支持，不支持时由 API 返回 400 兜底）
     # 注入当前校对文本，供 text_nav_tools（locate_paragraph/read_section）使用
     from shared.text_nav_tools import set_current_text as _set_nav_text
     _set_nav_text(md_text)
@@ -1407,7 +1388,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": [
                         {"type": "text", "text": f"编号：{q_title}\n内容：\n{md_text}"},
-                        *effective_images,
+                        *images,
                     ]},
                 ]
                 state = ProofreadState(
@@ -1427,12 +1408,12 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             # 记录 payload 大小日志
             _payload_size = len(json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8'))
             log(f"   📤 发送请求 → 模型: {ctx.model}, 系统提示词: {len(system_prompt)}字符, "
-                f"文本: {len(md_text)}字符, 图片: {len(effective_images)}张, "
+                f"文本: {len(md_text)}字符, 图片: {len(images)}张, "
                 f"工具: {len(state.openai_tools) if state.openai_tools else 0}个, "
                 f"payload: {_payload_size // 1024}KB")
 
             if not state.initial_header:
-                state.initial_header = _dump_initial_payload(q_title, system_prompt, md_text, effective_images, openai_tools)
+                state.initial_header = _dump_initial_payload(q_title, system_prompt, md_text, images, openai_tools)
 
             # 首次请求
             state.choice, usage = _post_chat(chat_url, payload, headers, api_format=api_format)
@@ -1445,7 +1426,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
             if result.stop_reason == StopReason.END_TURN:
                 _save_conversation_log(
                     result.messages, ctx.output_dir, q_title, state.initial_header,
-                    reasonings=result.reasonings,
+                    suffix=log_suffix, reasonings=result.reasonings,
                 )
 
             # 正常完成（END_TURN / MAX_TURNS / TOOL_LOOP）→ 清除快照；ERROR/中断保留
@@ -1504,6 +1485,7 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
         f"# API 请求记录 — {q_title}\n\n"
         f"## 上下文\n- 模型：`{ctx.model}`\n- API 端点：`{ctx.api_url.rstrip('/')}`\n- 题目：{q_title}\n\n"
         f"## 错误报告\n{error_summary}\n",
+        suffix=log_suffix,
     )
     return {
         "content": error_summary,

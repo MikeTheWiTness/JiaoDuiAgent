@@ -216,6 +216,40 @@ class TestRunToolLoopRobustness:
         assert "第二轮推理：确认无错误" in text
         assert "推理内容（reasoning_content）" in text
 
+    def test_call_api_log_suffix_does_not_overwrite_main_log(self, tmp_path):
+        """回归：格式修正阶段（log_suffix="_格式修正"）不得覆盖主校对对话记录。
+
+        修复前：两阶段同名写 _API对话记录.md，主对话链丢失。
+        """
+        from unittest import mock
+
+        from core import api_client
+
+        ctx = self._make_ctx(tmp_path)
+        end_choice = {
+            "message": {"role": "assistant", "content": "无问题"},
+            "finish_reason": "stop",
+        }
+        # 第一次：主校对（无后缀）
+        with mock.patch.object(
+                api_client, "_post_chat",
+                return_value=(end_choice, {"total_tokens": 1})):
+            api_client.call_api(ctx, "题目内容", [], "第1题", "系统提示", tools=[])
+        main_log = tmp_path / "_API对话记录.md"
+        assert main_log.exists()
+        main_text = main_log.read_text(encoding="utf-8")
+
+        # 第二次：格式修正（带后缀），不应覆盖主记录
+        with mock.patch.object(
+                api_client, "_post_chat",
+                return_value=(end_choice, {"total_tokens": 1})):
+            api_client.call_api(ctx, "题目内容", [], "格式修正", "系统提示",
+                                tools=[], log_suffix="_格式修正")
+        suffix_log = tmp_path / "_API对话记录_格式修正.md"
+        assert suffix_log.exists()
+        assert main_log.read_text(encoding="utf-8") == main_text
+        assert "格式修正" in suffix_log.read_text(encoding="utf-8")
+
     def test_interrupted_saves_conversation_log(self, tmp_path):
         """M7：工具循环中断路径必须补存主 _API对话记录.md"""
         import dataclasses
@@ -317,6 +351,52 @@ class TestRunToolLoopRobustness:
         text = (tmp_path / "_API对话记录.md").read_text(encoding="utf-8")
         assert long_text in text
         assert "[截断]" not in text
+
+    def test_tool_result_truncation_has_marker(self, tmp_path):
+        """长工具结果截断必须带标记，避免模型误以为读到了完整内容。
+
+        回归：格式修正链路 read_file 读超 8000 字符的报告时，模型看到无标记截断
+        会以为读完整文件，write_file 重建导致尾部静默丢失。
+        """
+        from unittest import mock
+
+        from core import api_client
+
+        ctx = self._make_ctx(tmp_path)
+        tool_choice = {
+            "message": {
+                "role": "assistant",
+                "content": "读取文件",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "fake_tool", "arguments": "{}"}}
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+        end_choice = {
+            "message": {"role": "assistant", "content": "完成"},
+            "finish_reason": "stop",
+        }
+        long_result = "A" * 9000
+        with mock.patch.object(api_client, "execute_tool", return_value=long_result), \
+                mock.patch.object(api_client, "_post_chat",
+                                  return_value=(end_choice, {"total_tokens": 1})):
+            state = api_client.ProofreadState(
+                messages=[{"role": "user", "content": "题目"}],
+                openai_tools=[],
+                reasoning_effort=None,
+                initial_header="# HEADER",
+                choice=tool_choice,
+            )
+            result = api_client._run_tool_loop(
+                ctx, state,
+                tool_instances=[], chat_url="http://x", headers={},
+            )
+
+        tool_msg = [m for m in result.messages if m.get("role") == "tool"][0]
+        assert "已截断，原文共 9000 字符" in tool_msg["content"]
+        assert len(tool_msg["content"]) <= 8000 + 40
+        assert "已截断" in result.tool_calls_log[0]["result"]
 
     def test_429_retry_after_respected(self, tmp_path):
         """回归：429 响应的 Retry-After 必须影响退避时长"""

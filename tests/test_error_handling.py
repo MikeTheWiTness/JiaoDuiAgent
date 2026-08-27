@@ -20,7 +20,6 @@ from core.api_client import (
     ToolExecutionError,
     _backoff_delay,
     _classify_error,
-    _model_supports_images,
     _model_supports_reasoning_effort,
     _should_retry,
     call_api,
@@ -321,27 +320,3 @@ class TestModelReasoningEffortSupport:
         """未知模型默认发送（绝大多数 API 忽略未知参数）。"""
         assert _model_supports_reasoning_effort("gpt-4o") is True
         assert _model_supports_reasoning_effort("claude-3-opus") is True
-
-
-class TestModelImageSupport:
-    """验证 _model_supports_images 的图片兼容性判断。"""
-
-    def test_deepseek_v4_pro_text_only(self):
-        """deepseek-v4-pro 是纯文本模型，不支持图片。"""
-        assert _model_supports_images("deepseek-v4-pro") is False
-
-    def test_deepseek_reasoner_text_only(self):
-        """deepseek-reasoner (R1) 是纯文本推理模型。"""
-        assert _model_supports_images("deepseek-reasoner") is False
-
-    def test_deepseek_chat_supports_images(self):
-        """deepseek-chat (V3) 支持多模态/图片。"""
-        assert _model_supports_images("deepseek-chat") is True
-
-    def test_doubao_supports_images(self):
-        """豆包模型默认支持图片。"""
-        assert _model_supports_images("doubao-seed-2-0-pro-260215") is True
-
-    def test_unknown_model_defaults_true(self):
-        """未知模型默认支持图片。"""
-        assert _model_supports_images("gpt-4o") is True
