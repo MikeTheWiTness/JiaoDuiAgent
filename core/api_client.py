@@ -586,24 +586,46 @@ def _extract_usage(resp_json: dict) -> dict:
     同时兼容 Chat Completions（prompt_tokens/completion_tokens）与
     Responses API（input_tokens/output_tokens）两种字段命名。
 
+    缓存命中字段兼容主流厂商的两种命名：
+    - DeepSeek：顶层 prompt_cache_hit_tokens / prompt_cache_miss_tokens
+    - 智谱 GLM / OpenAI / vLLM：嵌套 prompt_tokens_details.cached_tokens
+      （Responses API 为 input_tokens_details.cached_tokens）
+    未命中数缺失时由 prompt_tokens - hit 推导（以上厂商的 prompt_tokens
+    均为总输入口径）；响应完全不带缓存字段时则不产生缓存键，避免误报。
+
     Returns:
-        dict: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
+        dict: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int,
+               "prompt_cache_hit_tokens"?: int, "prompt_cache_miss_tokens"?: int}
         如果响应中无 usage 字段，返回空 dict。
     """
     usage = resp_json.get("usage", {})
     if not isinstance(usage, dict):
         return {}
-    return {
+    result = {
         "prompt_tokens": usage.get("prompt_tokens", usage.get("input_tokens", 0)),
         "completion_tokens": usage.get("completion_tokens", usage.get("output_tokens", 0)),
         "total_tokens": usage.get("total_tokens", 0),
     }
+    hit = usage.get("prompt_cache_hit_tokens")
+    if hit is None:
+        hit = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+    if hit is None:
+        hit = (usage.get("input_tokens_details") or {}).get("cached_tokens")
+    if hit is not None and hit >= 0:
+        miss = usage.get("prompt_cache_miss_tokens")
+        if miss is None:
+            miss = max(result["prompt_tokens"] - hit, 0)
+        result["prompt_cache_hit_tokens"] = hit
+        result["prompt_cache_miss_tokens"] = miss
+    return result
 
 
 def _accumulate_usage(total: dict, usage: dict) -> dict:
-    """累加 usage 到 total 中。"""
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-        total[key] = total.get(key, 0) + usage.get(key, 0)
+    """累加 usage 到 total 中。只累加响应中真实存在的键，缓存字段缺失时不在 total 中留下 0 值。"""
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens",
+                "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+        if key in usage:
+            total[key] = total.get(key, 0) + usage[key]
     return total
 
 

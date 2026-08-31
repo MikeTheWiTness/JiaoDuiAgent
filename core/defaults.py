@@ -758,6 +758,8 @@ def _format_usage_summary(usage: dict) -> str:
     prompt = usage.get("prompt_tokens", 0)
     completion = usage.get("completion_tokens", 0)
     total = usage.get("total_tokens", 0)
+    hit = usage.get("prompt_cache_hit_tokens", 0)
+    miss = usage.get("prompt_cache_miss_tokens", 0)
     if total == 0:
         return ""
     lines = ["\n\n---\n", "## 📊 Token 用量统计\n\n"]
@@ -765,6 +767,9 @@ def _format_usage_summary(usage: dict) -> str:
     lines.append("|------|----------|\n")
     lines.append(f"| 提示词 (prompt) | {prompt:,} |\n")
     lines.append(f"| 生成 (completion) | {completion:,} |\n")
+    if hit + miss > 0:
+        lines.append(f"| 输入·缓存命中 | {hit:,}（{hit / (hit + miss) * 100:.1f}%） |\n")
+        lines.append(f"| 输入·缓存未命中 | {miss:,} |\n")
     lines.append(f"| **总计** | **{total:,}** |\n")
     return "".join(lines)
 

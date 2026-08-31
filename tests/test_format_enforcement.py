@@ -139,12 +139,39 @@ class TestEnforceFormat(unittest.TestCase):
         ok, issues = _enforce_format(report)
         self.assertTrue(ok, f"「无问题」形态不应误报: {issues}")
 
+    def test_no_issue_report_with_verification_notes_passes(self):
+        """「无问题」报告修改原因段为「无 + 校验说明」（无编号列表）→ 合规。
+
+        回归：glm 校对「无问题」单元时在修改原因段追加校验说明，
+        修复前被误报「缺少编号条目」→ 格式修正 LLM 给校验说明编号 →
+        又踩「编号没有对应标记」→ 修正失败使用原始输出。
+        """
+        report = ("**总结行：无问题**\n\n### 标记原文\n"
+                  "题目内容，无任何标记。\n\n"
+                  "### 修改原因\n无\n\n"
+                  "**校验说明**：\n"
+                  "- 公式经量纲分析实算验证。\n"
+                  "- 方向判断正确：由右手定则感应电流，安培力向左。\n")
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok, f"无问题报告带校验说明不应误报: {issues}")
+        self.assertNotIn("缺少编号条目", issues)
+
     def test_reason_section_without_numbers_rejected(self):
         """修改原因段落写了解释但无编号条目 → 不合规。"""
         report = "### 标记原文\n题目内容\n\n### 修改原因\n错误一处"
         ok, issues = _enforce_format(report)
         self.assertFalse(ok)
         self.assertIn("缺少编号条目", issues)
+
+    def test_marker_present_requires_numbered_reasons(self):
+        """标记存在时，修改原因段无编号条目由「编号缺少对应条目」兜底拦下。"""
+        report = ("**一般问题**\n\n### 标记原文\n"
+                  "内容【1|电流|感应电流】。\n\n"
+                  "### 修改原因\n无\n\n"
+                  "**校验说明**：\n- 实算验证通过。\n")
+        ok, issues = _enforce_format(report)
+        self.assertFalse(ok)
+        self.assertIn("缺少对应条目", issues)
 
     def test_fence_wrapped_marker_section_rejected(self):
         """标记原文被整段 ``` 围栏包裹（LLM 逐字引文本能）→ 不合规。

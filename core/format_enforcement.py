@@ -51,7 +51,9 @@ def _enforce_format(res: str):
         rstripped = reason_text.strip()
         if rstripped == "":
             issues.append("修改原因段落为空")
-        elif rstripped != "无" and not (rstripped.startswith("无问题") and len(rstripped) <= 10):
+        # 修改原因段以「无」开头（无问题报告，可能附加校验说明）时不要求编号条目；
+        # 无标记报告强求编号会让格式修正无从下手（编号没有对应标记，怎么改都失败）
+        elif not rstripped.startswith("无"):
             if not re.search(r'^\s*\d+\.\s', reason_text, re.MULTILINE):
                 issues.append("修改原因段落缺少编号条目")
     # LLM 逐字引文本能：用 ``` / ~~~ 围栏包住标记原文（提示词已禁止但模型不稳定）。
