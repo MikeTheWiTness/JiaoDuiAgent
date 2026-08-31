@@ -91,31 +91,37 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
         for qid, part in questions:
             marker_idx = part.find("### 标记原文")
             reason_idx = part.find("### 修改原因")
-            if marker_idx == -1 or reason_idx == -1 or reason_idx < marker_idx:
-                # 无分段不一定是异常：LLM 判定「无问题」时报告只有
-                # 「无问题 + 工具日志 + 思考过程」，无批注分段属正常形态。
-                # 含批注标记（【N|原|改】）却缺分段才可疑——批注可能丢失。
-                if _PAT.search(part):
+            has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
+
+            # 无标记（【N|原|改】）即视为「无问题」单元：
+            # - 无分段形态：LLM 判定无问题时只输出「无问题 + 工具日志 + 思考过程」；
+            # - 有分段形态：LLM 按完整分段输出（标记原文 = 无标记全文，修改原因 = 无）。
+            # 两种形态都插入单元原文 + 「无问题」批注（锚定标题）。
+            # 含标记却缺分段才可疑（批注可能丢失），单独警示。
+            mark_seg = part[marker_idx:reason_idx] if has_sections else part
+            if _PAT.search(mark_seg):
+                if not has_sections:
                     skipped_broken += 1
                     log(f"   ⚠️ Word 报告：{qid} 含批注标记但缺少「标记原文/修改原因」分段，跳过（批注无法生成）")
+                    continue
+            else:
+                skipped_clean += 1
+                log(f"   ℹ️ Word 报告：{qid} 无批注，插入单元原文 + 「无问题」批注（锚定标题）")
+                unit_md = paper_path / qid / f"{qid}.md"
+                if unit_md.exists():
+                    content = unit_md.read_text(encoding="utf-8").strip()
+                    content = _rewrite_images(content, paper_path / qid, img_root)
+                    content = _preprocess_latex(content)
+                    gid = next(gid_iter)
+                    if gid in used_ids:
+                        gid = max(used_ids) + 1
+                    used_ids.add(gid)
+                    comments[gid] = ("无问题", None)
+                    # 锚点后处理落在标题「qid」文本上（Heading1 段落内）
+                    heading_anchors[gid] = qid
+                    all_bodies.append(f"# {qid}\n\n{content}\n\n{_PAGE_BREAK}")
                 else:
-                    skipped_clean += 1
-                    log(f"   ℹ️ Word 报告：{qid} 无批注，插入单元原文 + 「无问题」批注（锚定标题）")
-                    unit_md = paper_path / qid / f"{qid}.md"
-                    if unit_md.exists():
-                        content = unit_md.read_text(encoding="utf-8").strip()
-                        content = _rewrite_images(content, paper_path / qid, img_root)
-                        content = _preprocess_latex(content)
-                        gid = next(gid_iter)
-                        if gid in used_ids:
-                            gid = max(used_ids) + 1
-                        used_ids.add(gid)
-                        comments[gid] = ("无问题", None)
-                        # 锚点后处理落在标题「qid」文本上（Heading1 段落内）
-                        heading_anchors[gid] = qid
-                        all_bodies.append(f"# {qid}\n\n{content}\n\n{_PAGE_BREAK}")
-                    else:
-                        all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
+                    all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
                 continue
             reasons = _parse_reasons(part[reason_idx:])
             body = part[marker_idx:reason_idx]

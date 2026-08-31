@@ -201,6 +201,60 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
 题目与解答均无错误。
 """
 
+    WITH_SECTIONS_NO_MARKS = """单元N 校对报告
+
+**总结行：无问题**（题干严谨、解析推导与实算一致、答案正确）
+
+### 标记原文
+**教师版**（2022·模拟）（多选）
+如图所示，金属棒从$h$高处释放，不计空气阻力。
+
+### 修改原因
+
+无
+
+---
+
+## 📋 工具调用日志
+
+共调用 11 次
+
+## 📊 Token 用量统计
+"""
+
+    def test_with_sections_zero_marks_gets_no_issue_comment(self):
+        """回归：带完整分段但零标记的报告（总结行=无问题）必须生成「无问题」批注。
+
+        修复前：LLM 按完整分段格式输出时走批注解析分支，零标记 → 零批注，
+        「无问题」单元在 Word 报告里没有任何标注。与无分段形态同等对待。
+        """
+        from core import docx_report
+        paper = self._make_paper({
+            "第1题": REPORT_WITH_MARKS,
+            "单元7": self.WITH_SECTIONS_NO_MARKS,
+        })
+        with open(os.path.join(paper, "单元7", "单元7.md"), "w", encoding="utf-8") as f:
+            f.write("**教师版**（2022·模拟）（多选）\n如图所示，金属棒从$h$高处释放，不计空气阻力。\n")
+        with mock.patch.object(docx_report, "log") as mlog:
+            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out_seg"))
+        self.assertIsNotNone(docx_path)
+        messages = [c.args[0] for c in mlog.call_args_list]
+        self.assertTrue(any("单元7 无批注" in m for m in messages))
+        z = zipfile.ZipFile(docx_path)
+        doc = z.read("word/document.xml").decode("utf-8")
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        # 单元原文正文已插入（锚点落在标题，正文保持完整）
+        self.assertIn("2022·模拟", doc)
+        # 第1题 2 条批注 + 单元7「无问题」批注
+        self.assertEqual(cmt.count("<w:comment w:id="), 3)
+        self.assertIn("无问题", cmt)
+        self.assertEqual(cmt.count("无问题"), 1)
+        # 「无问题」批注锚定在 Heading1 标题段内（gid 3 = 第1题 1、2 之后的第一个空闲号）
+        heading_pat = re.compile(
+            r'<w:p>\s*<w:pPr>\s*<w:pStyle w:val="Heading1"[^>]*/>\s*</w:pPr>'
+            r'\s*<w:commentRangeStart w:id="3"/>', re.DOTALL)
+        self.assertIsNotNone(heading_pat.search(doc))
+
     def test_no_issue_unit_listed_as_no_issue(self):
         """「无问题」报告（无分段、无批注标记）必须列入报告并标注，不得记 ⚠️ 异常"""
         from core import docx_report
