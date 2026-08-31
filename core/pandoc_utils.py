@@ -45,10 +45,20 @@ def find_pandoc():
         return PANDOC_PATH
     import sys
     if getattr(sys, 'frozen', False):
-        local = os.path.join(os.path.dirname(sys.executable), "pandoc.exe")
-        if os.path.exists(local):
-            PANDOC_PATH = local
-            return PANDOC_PATH
+        if os.name == 'nt':
+            # Windows 打包：pandoc.exe 放在 exe 同级
+            local = os.path.join(os.path.dirname(sys.executable), "pandoc.exe")
+            if os.path.exists(local):
+                PANDOC_PATH = local
+                return PANDOC_PATH
+        else:
+            # macOS/Linux 打包：pandoc 作为 datas 内置在 _MEIPASS/bin
+            meipass = getattr(sys, '_MEIPASS', None)
+            if meipass:
+                local = os.path.join(meipass, "bin", "pandoc")
+                if os.path.exists(local):
+                    PANDOC_PATH = local
+                    return PANDOC_PATH
     PANDOC_PATH = "pandoc"
     return PANDOC_PATH
 

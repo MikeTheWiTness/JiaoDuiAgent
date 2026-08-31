@@ -1,30 +1,59 @@
 # 打包指南
 
-> LaTeX/PDF 排版已于 ADR-0030 下线，打包不再需要便携 TeX 发行版（xelatex / texlive / pandoc 的 PDF 侧依赖）。排版输出仅剩 Word 批注报告（`core/docx_report.py`，依赖外部 pandoc 做 docx 转换）。
+> LaTeX/PDF 排版已于 ADR-0030 下线，打包不再需要便携 TeX 发行版（xelatex / texlive 及 PDF 侧依赖）。
+> 排版输出仅剩 Word 批注报告（`core/docx_report.py`），其依赖的 pandoc 二进制**随包内置**，目标机器无需安装。
 
-## 环境要求
+## 环境要求（打包机）
 
-- Windows 10+
+- Windows 10+（仅支持在 Windows 上打包 exe；PyInstaller 不支持交叉编译）
 - Python 3.12
 - PyInstaller 6.x
+- pandoc Windows 版二进制（`pandoc.exe`）
 
-## 打包 EXE
+## 打包 EXE（Windows）
 
 打包指定学科（以高中物理为例）：
 
-```bash
-pyinstaller specs/高中物理.spec
-```
+1. **获取 pandoc.exe**：从 <https://github.com/jgm/pandoc/releases> 下载 `pandoc-x.x.x-windows-x86_64.zip`（当前 3.x），解压得到 `pandoc.exe`。
+   也可用 chocolatey：`choco install pandoc -y`（安装后 `where pandoc` 可找到路径）。
 
-输出在 `dist/高中物理/`。
+2. **执行打包**：
+
+   ```bash
+   pyinstaller specs/高中物理.spec
+   ```
+
+   输出在 `dist/高中物理/`。
+
+3. **将 pandoc.exe 复制到 exe 同级**：
+
+   ```bash
+   copy pandoc.exe dist\高中物理\
+   ```
+
+   `find_pandoc()`（`core/pandoc_utils.py`）在打包后优先查找 exe 同级的 `pandoc.exe`；找到后目标机器上即使没有安装 pandoc，Word 导入与批注报告也能正常工作。
+   若省略此步，exe 会回退到系统 PATH 查找 pandoc，目标机器需自行安装。
 
 如需打包多个学科，为每个学科单独准备 `.spec` 文件，分别执行。
+
+## 打包 .app（macOS，可选）
+
+macOS 使用 `specs/高中物理_mac.spec`（在 Windows spec 基础上增加 BUNDLE 并内置 pandoc）：
+
+```bash
+pyinstaller specs/高中物理_mac.spec
+```
+
+- 产物为 `dist/高中物理.app`（Apple Silicon arm64），pandoc 已内置（`Contents/Frameworks/bin/pandoc`），目标机器无需安装 pandoc 或 TeX
+- 只支持 Apple Silicon（M 系列）Mac；Intel Mac 需在 Intel 机器上另行打包
+- 分发时只发 `高中物理.app` 单个文件；发送工具拦截 .app 时先右键压缩为 zip
 
 ## 输出结构
 
 ```
 dist/高中物理/
   高中物理.exe              # 主程序（GUI）
+  pandoc.exe                # 内置 pandoc（Word 转换，见上方打包步骤 3）
   config.json              # 学科配置（exe 同级，方便手动编辑）
   _internal/
     core/                  # 通用工具层
@@ -199,7 +228,9 @@ def _get_subject_dir():
 
 6. **hiddenimports**：必须列出 `core/`、`shared/`、`ui/` 的所有子模块，因为它们是动态导入的，PyInstaller 无法自动检测。如果新增了模块（如 `free_proofread`、`smart_split`、`review_mode` 等），记得同步更新。
 
-7. **Pandoc 依赖**：Word 批注报告与 Word 文档导入依赖外部 pandoc 二进制（`core/pandoc_utils.py` 定位）。目标机器需安装 pandoc，或将 pandoc.exe 放在 exe 同级目录（打包时 `find_pandoc` 优先查找 exe 同级）。
+7. **Pandoc 依赖**：Word 批注报告与 Word 文档导入依赖 pandoc 二进制（`core/pandoc_utils.py` 定位，已内置查找逻辑）。
+   - Windows：打包后把 `pandoc.exe` 复制到 exe 同级（`find_pandoc` 优先查 exe 同级 `pandoc.exe`），目标机器无需安装
+   - macOS：`specs/高中物理_mac.spec` 已通过 datas 内置 pandoc（`_MEIPASS/bin/pandoc`），无需额外步骤
 
 ## 多学科打包
 
@@ -234,7 +265,7 @@ dist/
 约 120 MB/学科。如果学科数量多且体积敏感，可后续优化为：共享库放公共目录，各学科 exe 只放差异部分。当前优先保证独立性和简单性。
 
 **Q: 生成 Word 批注报告需要装什么？**
-需要 pandoc（用于 Markdown → docx 转换）。未安装时，Word 报告生成会提示失败，但校对与拆分流程不受影响。
+不需要额外安装。pandoc 已随包内置：Windows 打包时 exe 同级放置 `pandoc.exe`，macOS 打包时内置 `_MEIPASS/bin/pandoc`。若内置缺失，会回退到系统 PATH 查找，此时未安装 pandoc 会提示失败，但校对与拆分流程不受影响。
 
 ## 打包常见问题与解决办法
 
