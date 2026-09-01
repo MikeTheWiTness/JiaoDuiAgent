@@ -15,7 +15,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from core.api_client import _post_chat, build_api_url
+from core.api_client import _post_chat, _normalize_api_format, API_FORMAT_ANTHROPIC, build_api_url
 
 # ---- 模块级 API 配置（线程安全：threading.local()，跨模块共享） ----
 from shared._subject_api_config import get_subject_api_config, set_subject_api_config
@@ -126,7 +126,15 @@ class IndependentSolveTool(BaseTool):
         }
 
         try:
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            # Anthropic Messages 端点用 x-api-key（与 call_api 主流程对齐），否则 Bearer
+            if _normalize_api_format(api_format) == API_FORMAT_ANTHROPIC:
+                headers = {
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                }
+            else:
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             choice, _ = _post_chat(chat_url, payload, headers, api_format=api_format)
             content = choice["message"].get("content", "")
             reasoning = choice["message"].get("reasoning_content", "")

@@ -627,8 +627,9 @@ def _parse_anthropic_choice(resp_json: dict) -> dict:
 
     - content 块：text → message.content；tool_use → tool_calls（arguments 为 JSON 字符串）
     - stop_reason：end_turn→stop；tool_use→tool_calls；max_tokens→length
+    - 无 text 块时 content 兜底为空串，避免 None 流出导致上层崩溃
     """
-    message = {"role": "assistant", "content": None}
+    message = {"role": "assistant", "content": ""}
     text_parts = []
     tool_calls = []
     for block in resp_json.get("content") or []:
@@ -665,7 +666,7 @@ def _parse_responses_choice(resp_json: dict) -> dict:
     转换结果包含 message / finish_reason，供现有工具循环透明复用。
     """
     output = resp_json.get("output", [])
-    message = {"role": "assistant", "content": None}
+    message = {"role": "assistant", "content": ""}
     tool_calls = []
     reasoning_parts = []
 
@@ -710,6 +711,79 @@ def _parse_responses_choice(resp_json: dict) -> dict:
     return {"message": message, "finish_reason": finish_reason}
 
 
+def _parse_loose_dict(s: str):
+    """把形如 {"B": 1, "x": m*v0*(R+r)/(B**2*L**2)} 的 Python dict 字面量转为 JSON 安全结构。
+
+    qwen 系模型常把 substitutions 写成不带引号的符号表达式值（漏引号、非合法 JSON）。
+    用 AST 解析（只解析不执行，无注入风险），把非字面量表达式节点转成字符串
+    （EvaluateParams.substitutions 的字符串值会经 sympify 再解析，语义不变）；
+    含附件占位符（[Attached ...]）等非法语法时返回 None。
+    """
+    import ast as _ast
+
+    try:
+        tree = _ast.parse(s, mode="eval")
+        expr = tree.body
+        if not isinstance(expr, _ast.Dict):
+            return None
+
+        def _convert(node):
+            if isinstance(node, _ast.Constant) and isinstance(
+                    node.value, (str, int, float, bool)):
+                return node.value
+            if node is None or isinstance(node, (list, tuple)):
+                return [_convert(e) for e in node]
+            if isinstance(node, _ast.List):
+                return [_convert(e) for e in node.elts]
+            if isinstance(node, _ast.Tuple):
+                return [_convert(e) for e in node.elts]
+            if isinstance(node, _ast.Dict):
+                return {_convert(k): _convert(v)
+                        for k, v in zip(node.keys, node.values)}
+            # 符号表达式等任意表达式节点 → 原样字符串（sympify 可解析）
+            return _ast.unparse(node)
+
+        result = {_convert(k): _convert(v)
+                  for k, v in zip(expr.keys, expr.values)}
+        return result if all(k is not None for k in result) else None
+    except Exception:
+        return None
+
+
+def _coerce_stringified_args(arguments) -> dict | None:
+    """把参数值中字符串化的 dict/list 还原为对应类型（qwen 系模型常见坏参数）。
+
+    三级尝试：
+    1. 合法 JSON 字符串（substitutions='{"B": 1, "R": 2}'）→ json.loads 还原
+    2. 伪 dict 字面量（substitutions='{"B": 1, "x": m*v0*(R+r)/...}'，值漏引号）
+       → AST 解析，表达式值转字符串（sympify 可再解析）
+    3. 两者皆失败（如 [Attached text/plain: ...] 附件占位符）→ 返回 None 保持拒绝
+
+    解析成功且确有变化时返回修复副本，否则返回 None。
+    """
+    if not isinstance(arguments, dict):
+        return None
+    fixed = {}
+    changed = False
+    for key, value in arguments.items():
+        if isinstance(value, str):
+            s = value.strip()
+            if s and s[0] in "{[\"":
+                try:
+                    fixed[key] = json.loads(s)
+                    changed = True
+                    continue
+                except json.JSONDecodeError:
+                    pass
+                loose = _parse_loose_dict(s)
+                if loose is not None:
+                    fixed[key] = loose
+                    changed = True
+                    continue
+        fixed[key] = value
+    return fixed if changed else None
+
+
 def execute_tool(tool_instances, tool_name, arguments):
     for t in tool_instances:
         if t.name == tool_name:
@@ -719,8 +793,27 @@ def execute_tool(tool_instances, tool_name, arguments):
                 if t.args_schema is not None:
                     t.args_schema.model_validate(arguments)
             except Exception as e:
-                log(f"   ⚠️ 工具 {tool_name} 参数校验失败: {e}")
-                return f"工具 {tool_name} 参数错误: {e}"
+                # qwen/zen 系模型常把 dict/list 参数序列化成 JSON 字符串（dict_type
+                # 校验失败），解析还原后重试一次；仍失败才拒绝，减少无效重试
+                fixed = _coerce_stringified_args(arguments)
+                if fixed is not None:
+                    try:
+                        t.args_schema.model_validate(fixed)
+                    except Exception:
+                        fixed = None
+                if fixed is None:
+                    # 附件占位符（qwen 客户端把附加文件/文件夹渲染成 [Attached text/plain: ...]
+                    # 注入上下文，模型会误把它抄进参数）：给模型明确提示，避免反复重试
+                    if isinstance(arguments, dict) and any(
+                            isinstance(v, str) and "[Attached" in v
+                            for v in arguments.values()):
+                        log(f"   ⚠️ 工具 {tool_name} 收到对话附件占位符参数，已拒绝")
+                        return (f"工具 {tool_name} 参数错误: 参数中包含对话附件占位符 "
+                                f"（[Attached ...]），附件内容不能作为工具参数。"
+                                f"请勿引用附件，直接用工具期望的字段格式重新调用。")
+                    log(f"   ⚠️ 工具 {tool_name} 参数校验失败: {e}")
+                    return f"工具 {tool_name} 参数错误: {e}"
+                arguments = fixed
             try:
                 result = t._run(**arguments)
                 # 如果工具返回 dict，序列化为 JSON 字符串，避免后续切片报错

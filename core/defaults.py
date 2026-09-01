@@ -869,7 +869,8 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools,
         result = call_api(ctx, md_content, images_b64,
                           q_name, prompt, tools=tools,
                           checkpoint_md_hash=md_hash, image_paths=image_filenames)
-        res = result["content"]
+        # content 兜底为空串：Anthropic 端点可能返回无文本块的响应，None 会导致下方切片崩溃
+        res = result.get("content") or ""
         tool_calls = result["tool_calls_log"]
         reasoning = result.get("reasoning", "")
         usage = result.get("usage", {})
@@ -920,6 +921,15 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools,
                 )
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")
+
+        # ---- 防「假合规」：报告无任何内联标记且无总结行 → 模型未产出有效校对内容 ----
+        # 典型形态：格式修正把缺失的原文段替换成提示词说明文字（如「若需补录原文，
+        # 请按 1、2、3……编号在错误处内联标记」），结构合法但内容为空，须注入告警
+        if (not re.search(r'【\d+\|', res)
+                and not re.search(r'(无问题|轻微问题|一般问题|严重错误)', res)):
+            res = (f"> ⚠️ **模型未产出有效校对标记（无内联标记、无总结行），请人工检查本单元。**\n\n"
+                   f"{res}")
+            log("   ⚠️ 模型报告无有效校对内容（无标记、无总结行），已注入告警")
 
         # 单题报告落盘（校对核心产物，总是执行）
 

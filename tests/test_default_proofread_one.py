@@ -216,7 +216,9 @@ class TestFormatFixControlledByFlag(unittest.TestCase):
         with mock.patch.object(defaults, "call_api", return_value=fake_result), \
                 mock.patch.object(defaults, "_enforce_format", return_value=(False, ["格式问题"])), \
                 mock.patch.object(defaults, "enforce_and_fix",
-                                  return_value=("修正后的内容", True, "")) as fix:
+                                  return_value=(
+                                      "轻微问题\n\n### 标记原文\n【1|原文|改为】修正内容\n\n"
+                                      "### 修改原因\n1. 修正错误。", True, "")) as fix:
             result = defaults.default_proofread_one(
                 ctx, self.q_dir, "第1题", "prompt", [],
                 archive_root=self.tmpdir,
@@ -228,7 +230,9 @@ class TestFormatFixControlledByFlag(unittest.TestCase):
         """enable_format_fix=True 时执行 LLM 格式修正"""
         result, fix = self._run(enable_format_fix=True)
         self.assertTrue(result["success"])
-        self.assertEqual(result["result"], "修正后的内容")
+        self.assertEqual(
+            result["result"],
+            "轻微问题\n\n### 标记原文\n【1|原文|改为】修正内容\n\n### 修改原因\n1. 修正错误。")
         fix.assert_called_once()
 
     def test_format_fix_off_by_default(self):

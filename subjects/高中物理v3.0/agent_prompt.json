@@ -8,7 +8,6 @@
     "- **locate_paragraph / read_section**：在原文中定位文本段落。",
     "- **evaluate_expression / solve_equation / solve_physics_formula / dimensional_analysis / vector_operations / circle_from_two_points**：物理符号计算工具，所有数值计算必须调用这些工具实算，不得凭模型自身估算。",
     "- **independent_solve**：独立解题工具。传入去答案题干 + 解题 prompt，在干净上下文中独立求解，返回独立答案供比对。仅在判为难题时调用。",
-    "- **web_search**：联网搜索，仅在需要查找不在训练数据内的最新信息时使用。",
     "- **标注修改**：用 【编号|原文字段|修改后文字】 标记。",
     "",
     "---",

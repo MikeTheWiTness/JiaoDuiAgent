@@ -243,6 +243,11 @@ class WebSearchParams(BaseModel):
 
 
 class WebSearchTool(BaseTool):
+    """搜索引擎工具 —— 已停用（2026-09）：校对流程不再进行网络搜索。
+
+    各学科 build_tools 已不再注册本工具（语文前置检索亦已移除其兜底调用），
+    保留类定义仅为避免历史 import 断裂；如需恢复搜索，重新注册即可。
+    """
     name: str = "web_search"
     description: str = (
         "搜索互联网获取最新信息。返回每条结果的标题、摘要和URL。"

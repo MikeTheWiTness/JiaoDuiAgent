@@ -7,7 +7,6 @@
     "- **plan_update**：声明校对计划（todolist），逐步标记 completed。",
     "- **locate_paragraph / read_section**：在原文中定位文本段落。",
     "- **evaluate_expression / solve_equation / check_equality / simplify_expression / geometry**：数学符号计算工具，所有数值计算必须调用这些工具实算，不得凭模型自身估算。",
-    "- **web_search**：联网搜索，仅在需要查证不在训练数据内的信息时使用。",
     "- **标注修改**：用 【编号|原文字段|修改后文字】 标记。",
     "",
     "---",

@@ -17,9 +17,6 @@ from shared.sympy_tools.tools import (
     SolveEquationTool,
     StoichiometryCalcTool,
 )
-from shared.web_tools import WebSearchTool
-
-
 class SubjectApp(BaseSubjectApp):
     LEVEL = "高中"
     SUBJECT = "化学"
@@ -39,7 +36,6 @@ class SubjectApp(BaseSubjectApp):
             SimplifyExpressionTool(),
             BalanceChemicalEquationTool(),
             StoichiometryCalcTool(),
-            WebSearchTool(),
         ]
         if self.react_mode:
             from shared.chemistry_tools import ChemistryIndependentSolveTool

@@ -741,10 +741,9 @@ def search_original_text(text_type, sample_text):
     try:
         import urllib.parse
 
-        from shared.web_tools import WebFetchTool, WebSearchTool
+        from shared.web_tools import WebFetchTool
 
         fetcher = WebFetchTool()
-        searcher = WebSearchTool()
 
         # 第1优先：识典古籍（文言文，Playwright 可用时）
         if text_type == "classical":
@@ -773,49 +772,8 @@ def search_original_text(text_type, sample_text):
                 return _extract_first_poem(result)
             log("   ⚠️ 搜韵网未找到，尝试百度搜索...")
 
-        # 第3优先：DuckDuckGo/Baidu 搜索 + 抓取
-        search_query = f"{sample} 原文"
-        log(f"   🌐 搜索: {search_query[:40]}...")
-        # 先尝试 ddgs（返回直接 URL），失败回退百度
-        search_result = None
-        for backend in ["ddgs", "baidu"]:
-            try:
-                search_result = searcher._run(search_query, backend=backend)
-                if search_result and not search_result.startswith("[E"):
-                    break
-            except Exception:
-                continue
-
-        if search_result:
-            try:
-                items = json.loads(search_result)
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    url = item.get("url", "")
-                    if not url:
-                        continue
-                    # 跳过百度文库（403 反爬）
-                    if "wenku.baidu.com" in url:
-                        continue
-
-                    log(f"   📄 尝试抓取: {item.get('title', '')[:50]}")
-                    page = fetcher._run(url)
-                    if page and len(page) > 200 and not page.startswith("["):
-                        # 提取页面中的文言文/诗歌部分
-                        if text_type == "poetry":
-                            extracted = _extract_first_poem(page)
-                        else:
-                            extracted = _extract_first_classical(page)
-                        if extracted and len(extracted) > 30:
-                            log(f"   ✅ 搜索→抓取成功 ({len(extracted)} 字)")
-                            return extracted
-                        else:
-                            log(f"   ⚠️ 页面未提取到足够文本（{len(extracted) if extracted else 0} 字）")
-            except (json.JSONDecodeError, Exception) as e:
-                log(f"   ⚠️ 搜索结果解析失败: {e}")
-
-        log("   ⚠️ 搜索未找到可用原文")
+        # 第3优先：搜索引擎兜底（DuckDuckGo/Baidu + 抓取）已停用（2026-09），
+        # 校对流程不再使用 web_search；直达站点未命中即放弃，返回 None
 
     except Exception as e:
         log(f"   ⚠️ 前置搜索异常: {e}")

@@ -12,9 +12,6 @@ from shared.sympy_tools.tools import (
     SolvePhysicsFormulaTool,
     VectorOperationsTool,
 )
-from shared.web_tools import WebSearchTool
-
-
 class SubjectApp(BaseSubjectApp):
     LEVEL = "高中"
     SUBJECT = "物理"
@@ -33,7 +30,6 @@ class SubjectApp(BaseSubjectApp):
             DimensionalAnalysisTool(),
             VectorOperationsTool(),
             CircleFromTwoPointsTool(),
-            WebSearchTool(),
         ]
         if self.react_mode:
             from shared.physics_tools import IndependentSolveTool

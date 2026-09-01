@@ -86,13 +86,13 @@ class TestToolBuilding(unittest.TestCase):
 
     def test_base_tool_count(self):
         tools = self.app.tools
-        self.assertEqual(len(tools), 6, f"基础工具应为 6 个，实际 {len(tools)}")
+        self.assertEqual(len(tools), 5, f"基础工具应为 5 个，实际 {len(tools)}")
 
     def test_base_tool_names(self):
         names = {t.name for t in self.app.tools}
         expected = {
             "evaluate_expression", "solve_equation", "check_equality",
-            "simplify_expression", "geometry", "web_search",
+            "simplify_expression", "geometry",
         }
         self.assertEqual(names, expected)
 
@@ -107,7 +107,7 @@ class TestToolBuilding(unittest.TestCase):
     def test_react_tool_count(self):
         self.app.react_mode = True
         self.app.tools = self.app.build_tools()
-        self.assertEqual(len(self.app.tools), 9, f"React 工具应为 9 个，实际 {len(self.app.tools)}")
+        self.assertEqual(len(self.app.tools), 8, f"React 工具应为 8 个，实际 {len(self.app.tools)}")
 
     def test_react_tool_names(self):
         self.app.react_mode = True
@@ -115,7 +115,7 @@ class TestToolBuilding(unittest.TestCase):
         names = {t.name for t in self.app.tools}
         expected_base = {
             "evaluate_expression", "solve_equation", "check_equality",
-            "simplify_expression", "geometry", "web_search",
+            "simplify_expression", "geometry",
         }
         expected_react = {
             "plan_update", "locate_paragraph", "read_section",
@@ -326,18 +326,20 @@ class TestPromptGeneration(unittest.TestCase):
             ("格式自检", "格式自检"),
             ("强制返回格式", "强制返回格式"),
             ("geometry 工具", "geometry"),
-            ("web_search", "web_search"),
             ("单位符号", "单位"),
         ]
         for label, keyword in checks:
             self.assertIn(keyword, prompt, f"React prompt 缺少: {label}")
+        # web_search 已停用（2026-09）：校对不再进行网络搜索
+        self.assertNotIn("web_search", prompt, "React prompt 不应再声明 web_search")
 
     def test_tool_instructions_contains_sympy_section(self):
         self.app.react_mode = True
         self.app.tools = self.app.build_tools()
         instructions = self.app.get_tool_instructions()
         self.assertIn("符号计算与几何工具", instructions)
-        self.assertIn("联网搜索工具", instructions)
+        # 联网搜索段随 web_search 停用一并消失
+        self.assertNotIn("联网搜索工具", instructions)
         # 不应包含导航工具
         self.assertNotIn("plan_update", instructions)
         self.assertNotIn("locate_paragraph", instructions)

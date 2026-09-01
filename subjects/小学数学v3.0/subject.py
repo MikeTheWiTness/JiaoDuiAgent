@@ -16,9 +16,6 @@ from shared.sympy_tools.tools import (
     SimplifyExpressionTool,
     SolveEquationTool,
 )
-from shared.web_tools import WebSearchTool
-
-
 class SubjectApp(BaseSubjectApp):
     LEVEL = "小学"
     SUBJECT = "数学"
@@ -37,7 +34,6 @@ class SubjectApp(BaseSubjectApp):
             CheckEqualityTool(),
             SimplifyExpressionTool(),
             GeometryTool(),
-            WebSearchTool(),
         ]
         if self.react_mode:
             from shared.plan_tools import PlanUpdateTool

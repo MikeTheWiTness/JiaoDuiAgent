@@ -1246,9 +1246,11 @@ class DefaultApp:
                                         log(f"   ✅ {q_name} 校对完成")
                                     else:
                                         session_mgr.mark_failed(q_name, data.get('error', ''))
+                                        paper_results[q_dir] = self._failure_block(data.get('error', '未知错误'))
                                         log(f"   ❌ {q_name} 校对失败：{data['error']}")
                                 except Exception as e:
                                     session_mgr.mark_failed(q_name, str(e))
+                                    paper_results[q_dir] = self._failure_block(str(e))
                                     log(f"   ❌ {q_name} 异常：{e}")
 
                             remaining = len(all_dirs) - (batch_start + len(batch))
@@ -1269,6 +1271,7 @@ class DefaultApp:
                         if data is None:
                             log(f"   ❌ {q_name} 校对失败：proofread_one 返回了 None")
                             session_mgr.mark_failed(q_name, "proofread_one 返回了 None")
+                            paper_results[q_dir] = self._failure_block("proofread_one 返回了 None")
                             continue
                         if data["success"]:
                             self.proofread_result[q_dir] = data["result"]
@@ -1277,6 +1280,7 @@ class DefaultApp:
                             log(f"   ✅ {q_name} 校对完成")
                         else:
                             session_mgr.mark_failed(q_name, data.get('error', ''))
+                            paper_results[q_dir] = self._failure_block(data.get('error', '未知错误'))
                             log(f"   ❌ {q_name} 校对失败：{data['error']}")
 
                 if not self.task_interrupt and paper_results:
@@ -1311,6 +1315,12 @@ class DefaultApp:
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(report)
         log(f"📄 已导出：{report_path}")
+
+    @staticmethod
+    def _failure_block(error: str) -> str:
+        """失败单元的汇总报告占位块：标注失败原因，避免汇总报告静默缺失单元。"""
+        return (f"> ⚠️ **本单元校对失败，未产出校对结果**：{error}\n\n"
+                "> 该单元未生成 `_校对报告.md`，请单独重跑或人工检查原始文档。\n")
 
     def export_report(self):
         if not self.proofread_result:
