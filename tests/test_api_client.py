@@ -651,3 +651,210 @@ class TestResponsesApiSupport:
         assert result["content"] == "最终结果"
         assert result["usage"]["total_tokens"] == 2
         assert posted_url == "https://api.example.com/v1/responses"
+
+
+class TestAnthropicApiSupport:
+    """验证 Anthropic Messages API（/v1/messages）格式转换与请求发送。"""
+
+    def test_build_api_url_anthropic(self):
+        from core.api_client import API_FORMAT_ANTHROPIC, build_api_url
+
+        assert build_api_url("https://api.example.com/v1", API_FORMAT_ANTHROPIC) == "https://api.example.com/v1/v1/messages"
+        assert build_api_url("https://opencode.ai/zen/go", API_FORMAT_ANTHROPIC) == "https://opencode.ai/zen/go/v1/messages"
+        assert build_api_url("https://api.example.com/v1/messages", API_FORMAT_ANTHROPIC) == "https://api.example.com/v1/messages"
+        assert build_api_url("https://api.example.com/v1/chat/completions", API_FORMAT_ANTHROPIC) == "https://api.example.com/v1/v1/messages"
+        assert build_api_url("https://api.example.com/v1/responses", API_FORMAT_ANTHROPIC) == "https://api.example.com/v1/v1/messages"
+
+    def test_tool_to_anthropic(self):
+        from core.api_client import _tool_to_anthropic
+
+        tool = {"type": "function", "function": {
+            "name": "web_search", "description": "搜索", "parameters": {"type": "object", "properties": {}},
+        }}
+        assert _tool_to_anthropic(tool) == {
+            "name": "web_search", "description": "搜索", "input_schema": {"type": "object", "properties": {}},
+        }
+        # 已转换的（带 input_schema）原样返回
+        converted = {"name": "f", "input_schema": {"type": "object"}}
+        assert _tool_to_anthropic(converted) is converted
+
+    def test_chat_payload_to_anthropic(self):
+        from core.api_client import _chat_payload_to_anthropic
+
+        payload = {
+            "model": "opencode/claude-3.7",
+            "messages": [
+                {"role": "system", "content": "系统提示"},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "题目"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+                ]},
+                {"role": "assistant", "content": "先搜索", "tool_calls": [
+                    {"id": "call_1", "type": "function",
+                     "function": {"name": "web_search", "arguments": '{"q":"x"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "搜索结果"},
+                {"role": "user", "content": "继续"},
+            ],
+            "max_tokens": 1000,
+            "reasoning_effort": "high",
+            "tools": [
+                {"type": "function", "function": {"name": "f", "description": "d", "parameters": {"type": "object"}}}
+            ],
+        }
+
+        body = _chat_payload_to_anthropic(payload)
+        assert body["model"] == "opencode/claude-3.7"
+        assert body["system"] == "系统提示"
+        assert body["max_tokens"] == 1000
+        assert "reasoning_effort" not in body
+        assert "reasoning" not in body
+
+        # messages 结构
+        msgs = body["messages"]
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"][0] == {"type": "text", "text": "题目"}
+        assert msgs[0]["content"][1] == {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "AAA"},
+        }
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["content"][0] == {"type": "text", "text": "先搜索"}
+        assert msgs[1]["content"][1] == {
+            "type": "tool_use", "id": "call_1", "name": "web_search", "input": {"q": "x"},
+        }
+        # role=tool 合并为独立的 user 消息（tool_result 块）
+        assert msgs[2]["role"] == "user"
+        assert msgs[2]["content"] == [
+            {"type": "tool_result", "tool_use_id": "call_1", "content": "搜索结果"},
+        ]
+        assert msgs[3] == {"role": "user", "content": "继续"}
+
+        # tools 键名转换
+        assert body["tools"] == [
+            {"name": "f", "description": "d", "input_schema": {"type": "object"}},
+        ]
+
+    def test_chat_payload_to_anthropic_plain_text(self):
+        """纯文本 user content 保持字符串；reasoning_effort 不映射。"""
+        from core.api_client import _chat_payload_to_anthropic
+
+        body = _chat_payload_to_anthropic({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "high",
+        })
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert "reasoning_effort" not in body
+        assert "reasoning" not in body
+
+    def test_parse_anthropic_choice(self):
+        from core.api_client import _parse_anthropic_choice
+
+        resp_json = {
+            "content": [
+                {"type": "text", "text": "先搜索一下"},
+                {"type": "tool_use", "id": "toolu_1", "name": "web_search", "input": {"q": "x"}},
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        choice = _parse_anthropic_choice(resp_json)
+        assert choice["finish_reason"] == "tool_calls"
+        assert choice["message"]["content"] == "先搜索一下"
+        assert choice["message"]["tool_calls"][0]["id"] == "toolu_1"
+        assert choice["message"]["tool_calls"][0]["function"]["name"] == "web_search"
+        assert choice["message"]["tool_calls"][0]["function"]["arguments"] == '{"q": "x"}'
+
+    def test_parse_anthropic_choice_end_turn(self):
+        from core.api_client import _parse_anthropic_choice
+
+        choice = _parse_anthropic_choice({
+            "content": [{"type": "text", "text": "结论"}],
+            "stop_reason": "end_turn",
+        })
+        assert choice["finish_reason"] == "stop"
+        assert choice["message"]["content"] == "结论"
+        assert "tool_calls" not in choice["message"]
+
+    def test_parse_anthropic_choice_max_tokens(self):
+        from core.api_client import _parse_anthropic_choice
+
+        choice = _parse_anthropic_choice({"content": [], "stop_reason": "max_tokens"})
+        assert choice["finish_reason"] == "length"
+
+    def test_post_chat_anthropic_format(self):
+        from unittest.mock import MagicMock, patch
+
+        from core import api_client
+        from core.api_client import API_FORMAT_ANTHROPIC
+
+        mock_post = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        payload = {"model": "opencode/claude-3.7", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+        with patch.object(api_client.requests, "post", mock_post):
+            choice, usage = api_client._post_chat(
+                "https://opencode.ai/zen/go/v1/messages",
+                payload,
+                {"x-api-key": "k", "anthropic-version": "2023-06-01"},
+                api_format=API_FORMAT_ANTHROPIC,
+            )
+
+        call_kwargs = mock_post.call_args.kwargs
+        assert mock_post.call_args.args[0] == "https://opencode.ai/zen/go/v1/messages"
+        assert call_kwargs["json"]["messages"] == [{"role": "user", "content": "hi"}]
+        assert call_kwargs["json"]["max_tokens"] == 100
+        assert "input" not in call_kwargs["json"]
+        assert choice["message"]["content"] == "ok"
+        assert choice["finish_reason"] == "stop"
+        # Anthropic 响应无 total_tokens 字段，_extract_usage 回落为 0
+        assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 0}
+
+    def test_call_api_anthropic_uses_messages_endpoint(self, tmp_path):
+        """call_api 在 api_format=anthropic 时请求 /v1/messages 并携带 Anthropic 头。"""
+        from unittest.mock import MagicMock, patch
+
+        from core import api_client
+        from core.api_client import StopReason, call_api
+        from core.session_context import SessionContext
+
+        ctx = SessionContext(
+            api_url="https://opencode.ai/zen/go", api_key="k", model="opencode/claude-3.7",
+            api_format="anthropic", max_loops=1, output_dir=str(tmp_path),
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "content": [{"type": "text", "text": "最终结果"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(api_client.requests, "post", return_value=mock_resp) as mock_post, \
+                patch.object(api_client, "_dump_initial_payload", return_value=""), \
+                patch.object(api_client, "_save_conversation_log"):
+            result = call_api(
+                ctx, "文本", [], "第1题", "提示", tools=None,
+            )
+            posted = mock_post.call_args_list[0]
+            posted_url = posted.args[0]
+            posted_headers = posted.kwargs["headers"]
+
+        assert result["stop_reason"] == StopReason.END_TURN
+        assert result["content"] == "最终结果"
+        # Anthropic 响应无 total_tokens；input_tokens/output_tokens 已归一化
+        assert result["usage"]["prompt_tokens"] == 1
+        assert result["usage"]["completion_tokens"] == 1
+        assert posted_url == "https://opencode.ai/zen/go/v1/messages"
+        assert posted_headers["x-api-key"] == "k"
+        assert posted_headers["anthropic-version"] == "2023-06-01"
+        assert "Authorization" not in posted_headers

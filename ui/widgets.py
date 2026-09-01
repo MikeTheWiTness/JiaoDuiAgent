@@ -53,6 +53,10 @@ class ApiDialog:
         ttk.Radiobutton(
             fmt_frame, text="/responses",
             variable=self.format_var, value="responses",
+        ).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Radiobutton(
+            fmt_frame, text="/v1/messages（Anthropic）",
+            variable=self.format_var, value="anthropic",
         ).pack(side=tk.LEFT)
 
         ttk.Button(frame, text="保存", command=self._do_save).grid(row=4, column=0, columnspan=3, pady=12)

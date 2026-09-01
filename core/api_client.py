@@ -23,6 +23,7 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 # API 格式常量
 API_FORMAT_CHAT_COMPLETIONS = "chat/completions"
 API_FORMAT_RESPONSES = "responses"
+API_FORMAT_ANTHROPIC = "anthropic"
 
 # 断点续传快照（ADR-0029）
 CHECKPOINT_FILENAME = "_校对续传.json"
@@ -335,10 +336,19 @@ def build_api_url(base_url: str, api_format: str = API_FORMAT_CHAT_COMPLETIONS) 
 
     - chat/completions → 自动补 /chat/completions
     - responses → 自动补 /responses
+    - anthropic → 自动补 /v1/messages
     已带完整路径时保持原样。
     """
     url = (base_url or "").rstrip("/")
-    if _normalize_api_format(api_format) == API_FORMAT_RESPONSES:
+    fmt = _normalize_api_format(api_format)
+    if fmt == API_FORMAT_ANTHROPIC:
+        if url.endswith("/v1/messages"):
+            return url
+        for suffix in ("/chat/completions", "/responses"):
+            if url.endswith(suffix):
+                url = url[: -len(suffix)].rstrip("/")
+        return url + "/v1/messages"
+    if fmt == API_FORMAT_RESPONSES:
         if url.endswith("/responses"):
             return url
         if url.endswith("/chat/completions"):
@@ -472,6 +482,181 @@ def _chat_payload_to_responses(payload: dict) -> dict:
     if payload.get("tools"):
         body["tools"] = [_tool_to_responses(t) for t in payload["tools"]]
     return body
+
+
+# ---- Anthropic Messages API（/v1/messages）转换 ----
+
+def _tool_to_anthropic(openai_tool: dict) -> dict:
+    """将 Chat Completions 工具定义转换为 Anthropic 工具定义。
+
+    兼容已转换的 Anthropic 工具定义（有 input_schema 的原样返回）。
+    """
+    if "function" in openai_tool:
+        fn = openai_tool["function"]
+        return {
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters", {}),
+        }
+    if "input_schema" in openai_tool:
+        return openai_tool
+    return {"name": openai_tool.get("name", ""), "input_schema": {"type": "object"}}
+
+
+def _anthropic_image_from_data_url(url: str):
+    """将 data: URL 图片转为 Anthropic image source 块；非 data URL 返回 None。"""
+    if not url or not url.startswith("data:"):
+        return None
+    try:
+        header, data = url.split(",", 1)
+        media_type = header[len("data:"):].split(";")[0] or "image/png"
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }
+    except Exception:
+        return None
+
+
+def _message_content_to_anthropic(content):
+    """将 Chat 消息 content（str 或 content part 列表）转为 Anthropic content。
+
+    纯文本内容优先转成字符串；含图片时保留块数组（text + image）。
+    """
+    if isinstance(content, str):
+        return content
+    blocks = []
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                blocks.append({"type": "text", "text": part.get("text", "")})
+            elif part.get("type") == "image_url":
+                img = _anthropic_image_from_data_url(part.get("image_url", {}).get("url", ""))
+                if img:
+                    blocks.append(img)
+    if not blocks:
+        return ""
+    if all(b.get("type") == "text" for b in blocks):
+        return "\n".join(b.get("text", "") for b in blocks)
+    return blocks
+
+
+def _chat_payload_to_anthropic(payload: dict) -> dict:
+    """将 Chat Completions payload 转换为 Anthropic Messages API 请求体。
+
+    转换规则：
+    - system 消息提取到顶层 system 参数（多个 system 以空行拼接）
+    - assistant 消息的 tool_calls 转为 tool_use 块（input 转 JSON 对象）
+    - 连续 role=tool 消息合成为一条 user 消息的 tool_result 块
+      （Anthropic 规范：tool_result 必须紧跟对应 tool_use 之后的 user 消息）
+    - tools 转 {name, description, input_schema}
+    - reasoning_effort 不映射（thinking 与工具调用有配合限制，首版不启用）
+    """
+    body = {"model": payload["model"]}
+    if payload.get("max_tokens"):
+        body["max_tokens"] = payload["max_tokens"]
+
+    system_parts = []
+    messages = []
+    pending_tool_results = []
+
+    def flush_tool_results():
+        if pending_tool_results:
+            messages.append({"role": "user", "content": list(pending_tool_results)})
+            pending_tool_results.clear()
+
+    for msg in payload.get("messages") or []:
+        role = msg.get("role", "")
+        content = msg.get("content")
+        if role == "system":
+            part = _message_content_to_anthropic(content)
+            if part:
+                system_parts.append(str(part))
+        elif role == "user":
+            flush_tool_results()
+            part = _message_content_to_anthropic(content)
+            if part:
+                messages.append({"role": "user", "content": part})
+        elif role == "assistant":
+            flush_tool_results()
+            blocks = []
+            if content:
+                part = _message_content_to_anthropic(content)
+                if isinstance(part, str):
+                    if part:
+                        blocks.append({"type": "text", "text": part})
+                elif isinstance(part, list):
+                    blocks.extend(part)
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                try:
+                    input_ = json.loads(fn.get("arguments", "") or "{}")
+                except Exception:
+                    input_ = {}
+                if not isinstance(input_, dict):
+                    input_ = {}
+                blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id", ""),
+                    "name": fn.get("name", ""),
+                    "input": input_,
+                })
+            if blocks:
+                messages.append({"role": "assistant", "content": blocks})
+        elif role == "tool":
+            pending_tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": msg.get("tool_call_id", ""),
+                "content": str(content) if content is not None else "",
+            })
+    flush_tool_results()
+
+    if system_parts:
+        body["system"] = "\n\n".join(system_parts)
+    if messages:
+        body["messages"] = messages
+    if payload.get("tools"):
+        body["tools"] = [_tool_to_anthropic(t) for t in payload["tools"]]
+    return body
+
+
+def _parse_anthropic_choice(resp_json: dict) -> dict:
+    """将 Anthropic Messages 响应转换为 Chat Completions 风格的 choice dict。
+
+    - content 块：text → message.content；tool_use → tool_calls（arguments 为 JSON 字符串）
+    - stop_reason：end_turn→stop；tool_use→tool_calls；max_tokens→length
+    """
+    message = {"role": "assistant", "content": None}
+    text_parts = []
+    tool_calls = []
+    for block in resp_json.get("content") or []:
+        t = block.get("type")
+        if t == "text":
+            text_parts.append(block.get("text", ""))
+        elif t == "tool_use":
+            tool_calls.append({
+                "id": block.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": block.get("name", ""),
+                    "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
+                },
+            })
+    if text_parts:
+        message["content"] = "".join(text_parts)
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+
+    stop_reason = resp_json.get("stop_reason", "")
+    if tool_calls or stop_reason == "tool_use":
+        finish_reason = "tool_calls"
+    elif stop_reason == "max_tokens":
+        finish_reason = "length"
+    else:
+        finish_reason = "stop"
+    return {"message": message, "finish_reason": finish_reason}
 
 
 def _parse_responses_choice(resp_json: dict) -> dict:
@@ -810,10 +995,24 @@ def _post_chat(chat_url, payload, headers,
                api_format: str = API_FORMAT_CHAT_COMPLETIONS):
     """发送一次 API 请求，返回归一化的 (choice_dict, usage_dict)。
 
-    支持 Chat Completions 与 Responses API 两种格式：
+    支持 Chat Completions、Responses 与 Anthropic Messages 三种格式：
     - Chat Completions 直接发送 chat payload，解析 choices[0]
     - Responses API 自动转换请求体，并把响应解析为 chat 风格 choice
+    - Anthropic Messages 自动转换请求体，并把响应解析为 chat 风格 choice
     """
+    if _normalize_api_format(api_format) == API_FORMAT_ANTHROPIC:
+        resp = requests.post(
+            chat_url,
+            json=_chat_payload_to_anthropic(payload),
+            headers=headers,
+            timeout=TIME_OUT,
+        )
+        resp.raise_for_status()
+        resp_json = resp.json()
+        usage = _extract_usage(resp_json)
+        choice = _parse_anthropic_choice(resp_json)
+        return choice, usage
+
     if _normalize_api_format(api_format) == API_FORMAT_RESPONSES:
         resp = requests.post(
             chat_url,
@@ -1396,7 +1595,15 @@ def call_api(ctx, md_text, images, q_title, system_prompt,
     api_format = _ctx_api_format(ctx)
     chat_url = build_api_url(ctx.api_url, api_format)
 
-    headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
+    if _normalize_api_format(api_format) == API_FORMAT_ANTHROPIC:
+        # Anthropic Messages：x-api-key + anthropic-version，无 Bearer
+        headers = {
+            "x-api-key": ctx.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+    else:
+        headers = {"Authorization": f"Bearer {ctx.api_key}", "Content-Type": "application/json"}
 
     for retry in range(MAX_RETRY + 1):
         try:
