@@ -54,8 +54,6 @@ class DefaultApp:
 
         self.parallel_enabled = tk.BooleanVar(value=True)
         self.parallel_count = tk.StringVar(value="10")
-        self.react_enabled = tk.BooleanVar(value=True)
-
         self.split_mode = tk.StringVar(value="普通规则")
 
         # 分割方式中文 ↔ 英文映射
@@ -81,11 +79,6 @@ class DefaultApp:
         clear_config_cache()
         subject_app.config = load_config(subject_app.subject_dir)
 
-        # ReAct 初始状态（默认开启）
-        self.subject_app.react_mode = True
-        self.subject_app.tools = self.subject_app.build_tools()
-
-        self.system_prompt = subject_app.get_question_prompt()
         self.tools = subject_app.tools
 
         self.setup_ui()
@@ -164,9 +157,6 @@ class DefaultApp:
 
         # ===== 校对选项 =====
         self.frame_proof = ttk.LabelFrame(self.root, text="🔍 校对选项", padding=10)
-        ttk.Checkbutton(self.frame_proof, text="ReAct 模式",
-                        variable=self.react_enabled,
-                        command=self._on_react_toggled).pack(side=tk.LEFT, padx=4)
         if features.get("show_parallel_option", True):
             ttk.Checkbutton(self.frame_proof, text="并行校对",
                             variable=self.parallel_enabled).pack(side=tk.LEFT, padx=4)
@@ -403,13 +393,6 @@ class DefaultApp:
             self.start_conversion()  # 仅拆分
         else:
             self.start_full_pipeline()  # 完整流程或仅转换
-
-    def _on_react_toggled(self):
-        enabled = self.react_enabled.get()
-        self.subject_app.react_mode = enabled
-        self.subject_app.tools = self.subject_app.build_tools()
-        self.system_prompt = self.subject_app.get_question_prompt()
-        log(f"ReAct 模式: {'ON' if enabled else 'OFF'}")
 
     def setup_extra_options(self, frame):
         pass

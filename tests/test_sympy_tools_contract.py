@@ -21,6 +21,7 @@ from shared.sympy_tools.tools import (
 )
 from shared.plan_tools import PlanUpdateTool
 from shared.physics_tools import IndependentSolveTool
+from shared.chemistry_tools import ChemistryIndependentSolveTool
 
 
 # ---- P1：白名单符号防劫持 ----
@@ -180,6 +181,14 @@ def test_execute_tool_bad_argument_shape():
 
 def test_independent_solve_short_question_rejected():
     r = json.loads(IndependentSolveTool()._run(
+        question_without_answer="太短", solve_prompt="请独立求解"))
+    assert r["ok"] is False
+    assert "过短" in r["error"]
+
+
+def test_chemistry_independent_solve_short_question_rejected():
+    """化学独立解题工具同样拒绝空/过短题干（与物理对齐，防白耗 API 产出垃圾答案）。"""
+    r = json.loads(ChemistryIndependentSolveTool()._run(
         question_without_answer="太短", solve_prompt="请独立求解"))
     assert r["ok"] is False
     assert "过短" in r["error"]

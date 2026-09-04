@@ -19,22 +19,15 @@ class SubjectApp(BaseSubjectApp):
 
     def __init__(self, subject_dir):
         super().__init__(subject_dir)
-        self._react_mode = False
 
     def build_tools(self):
         """构建初中英语专用工具集。英语以语法/词汇校对为主，无需计算工具。"""
-        base = []
-        if self.react_mode:
-            from shared.plan_tools import PlanUpdateTool
-            from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            base.append(PlanUpdateTool())
-            base.append(LocateParagraphTool())
-            base.append(ReadSectionTool())
-        return base
+        from shared.plan_tools import PlanUpdateTool
+        return [PlanUpdateTool()]
 
     def get_max_tool_loops(self):
         """工具调用最大循环次数。"""
-        return 15 if self.react_mode else 0
+        return 15
 
     def get_tool_instructions(self):
         """生成工具使用指令。"""
@@ -43,22 +36,20 @@ class SubjectApp(BaseSubjectApp):
         return "\n".join([f"- {t.name}" for t in self.tools])
 
     def get_question_prompt(self):
-        """获取题目校对提示词。ReAct 模式时优先用 agent_prompt。"""
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                return "\n".join(agent_lines)
-        return "\n".join(self.config.get("question_prompt_lines", []))
+        """获取题目校对提示词。agent_prompt.json 为唯一来源，缺失时 fail-fast（ADR-00XX）。"""
+        agent_lines = self.config.get("agent_prompt_lines")
+        if not agent_lines:
+            raise ValueError(
+                "缺少 agent_prompt.json 或 agent_prompt_lines 为空，无法校对——请修复配置后重新发起校对")
+        return "\n".join(agent_lines)
 
     def get_review_prompt(self):
         """获取批注评审提示词。"""
-        from shared.review_mode import build_review_prompt
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                return "\n".join(agent_lines)
-        base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
-        return base_prompt + "\n\n" + build_review_prompt("")
+        agent_lines = self.config.get("agent_prompt_lines")
+        if not agent_lines:
+            raise ValueError(
+                "缺少 agent_prompt.json 或 agent_prompt_lines 为空，无法校对——请修复配置后重新发起校对")
+        return "\n".join(agent_lines)
 
     def split_lecture(self, md_file, output_root, base_name, options):
         if options is None:

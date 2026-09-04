@@ -1,7 +1,7 @@
 # ADR 0005: ReAct 机制核心架构决议
 
 > 日期：2026-06-27
-> 状态：已实现（commit 0241db8；其中 call_api_continue 已于 2026-08-18 删除）
+> 状态：已实现（commit 0241db8；其中 call_api_continue 已于 2026-08-18 删除）；提示词回退机制（react_mode 切换）已被 [[ADR 0031]](0031-remove-prompt-fallback.md) 移除，本 ADR 的 ReAct 工具循环机制仍有效
 > 关联：CONTEXT.md；参考 Claude Code v2.1.88 源码（`src/query.ts`, `src/tools/TodoWriteTool/`, `src/tools/AgentTool/runAgent.ts`）
 
 ## 背景

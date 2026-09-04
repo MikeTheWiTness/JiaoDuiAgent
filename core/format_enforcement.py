@@ -106,7 +106,8 @@ def _enforce_format(res: str):
 
 def _bash_format_fix(file_path: str, issues_desc: str,
                      api_url: str, api_key: str, model: str,
-                     api_format: str = "chat/completions") -> str | None:
+                     api_format: str = "chat/completions",
+                     source_path: str | None = None) -> str | None:
     """让 LLM 通过 bash 直接编辑文件来修正格式问题。
 
     与旧版 _llm_format_fix 的区别：
@@ -117,6 +118,7 @@ def _bash_format_fix(file_path: str, issues_desc: str,
         file_path: 待修正的文件路径（_校对报告.md）
         issues_desc: _enforce_format 返回的问题描述
         api_url / api_key / model: API 配置
+        source_path: 题目原文文件路径（如 单元N.md），提供时告知修正 LLM 可读取核对标记
 
     Returns:
         修正后的文件内容（str），失败时返回 None
@@ -152,6 +154,8 @@ def _bash_format_fix(file_path: str, issues_desc: str,
 - 如果原文有总结行（如"一般问题"），保留它，在其后加入 `### 标记原文` 段落
 - 如果没有 `### 标记原文` 标题，在正文内容前加上它
 - **标记不得插入 `$...$` 公式内部**；若标记位于公式内部，将标记移到公式外，或让标记包裹整个公式
+- **禁止新增标记**：不得创建 `### 标记原文` 中不存在的 `【编号|…|…】` 标记。若 `### 修改原因` 的编号在标记原文中无对应标记（如核验说明被误编号），应移除该编号、把内容改为非编号说明段落，保留文字与校对结论，而不是伪造标记。已有标记的移动、合并不受限。
+- **原文字段逐字一致**：新增或移动标记时，标记的「原文字段」必须与题目原文逐字一致，可用 read_file 读取同目录的题目原文文件核对。
 - **完成后直接停止，不要继续调用工具！** 只需：read → 修改 → write → read 验证 → 停止。总共不超过 4 轮工具调用。
 """
 
@@ -162,6 +166,11 @@ def _bash_format_fix(file_path: str, issues_desc: str,
         "请用 read_file 读取 → 修正格式 → write_file 写回。"
         "保留所有校对结论，只调整格式结构。"
     )
+    if source_path and os.path.exists(source_path):
+        user_message += (
+            f"\n\n题目原文文件位于同目录：`{os.path.basename(source_path)}`。"
+            "需要核对标记的「原文字段」或定位错误位置时，先用 read_file 读取该文件。"
+        )
 
     read_tool = FileReadTool(allowed_dir=file_dir)
     write_tool = FileWriteTool(allowed_dir=file_dir)
@@ -201,13 +210,15 @@ def _bash_format_fix(file_path: str, issues_desc: str,
 
 
 def enforce_and_fix(file_path: str, res: str, api_url: str, api_key: str,
-                    model: str, api_format: str = "chat/completions") -> tuple[str, bool, str]:
+                    model: str, api_format: str = "chat/completions",
+                    source_path: str | None = None) -> tuple[str, bool, str]:
     """格式审查 + bash 修正（新版：LLM 直接编辑文件）。
 
     Args:
         file_path: _校对报告.md 的路径（原始内容已写入）
         res: 原始 LLM 输出的文本内容
         api_url / api_key / model: API 配置
+        source_path: 题目原文文件路径（如 单元N.md），提供时供修正 LLM 核对标记
 
     Returns:
         (final_content, was_fixed, issues_desc)
@@ -219,7 +230,8 @@ def enforce_and_fix(file_path: str, res: str, api_url: str, api_key: str,
     if ok:
         return res, False, ""
 
-    fixed = _bash_format_fix(file_path, issues, api_url, api_key, model, api_format=api_format)
+    fixed = _bash_format_fix(file_path, issues, api_url, api_key, model,
+                             api_format=api_format, source_path=source_path)
     if fixed and _enforce_format(fixed)[0]:
         log("   ✅ bash 格式修正成功")
         return fixed, True, issues

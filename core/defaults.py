@@ -373,6 +373,9 @@ def default_split_lecture(md_file, output_root, base_name, do_clean, config):
     # ── 连续标题合并（ADR-0017 决策10）──
     all_units = _merge_consecutive_headers(all_units, section_pat)
 
+    # ── 丢弃纯标题空壳单元（section_pattern 把例题标题切走后的遗留标题壳）──
+    all_units = _drop_title_only_units(all_units)
+
     if not all_units:
         log("   ⚠️ 未识别到任何单元，跳过分割")
         return False
@@ -526,6 +529,26 @@ def _merge_consecutive_headers(units, section_pat):
             i += 1
 
     return merged
+
+
+def _drop_title_only_units(units):
+    """丢弃只有标题行、无任何正文内容的空壳单元。
+
+    产生背景：section_pattern 同时把 **例N**/**练N** 例题标题切成独立边界，
+    例题标题前的 '#### 基础演练' 等四级阶段标题不匹配边界、孤悬在前一板块，
+    该板块无正文时只剩标题壳。空壳单元无信息量，直接丢弃。
+    判定规则：内容剥掉标题行（# 开头 / 纯 **加粗** 行）与空行后无剩余 → 丢弃。
+    """
+    kept = []
+    for title, content in units:
+        body_exists = any(
+            ln.strip() and not ln.strip().startswith("#")
+            and not re.fullmatch(r"\*\*[^*]+\*\*", ln.strip())
+            for ln in content.splitlines()
+        )
+        if body_exists:
+            kept.append((title, content))
+    return kept
 
 
 def fix_pandoc_comment_anomaly(content):
@@ -788,7 +811,7 @@ def read_md_for_unit(q_dir: str, q_name: str) -> str | None:
 
 
 def default_proofread_one(ctx, q_dir, q_name, prompt, tools,
-                          pre_hook=None, react_mode=False, archive_root=None,
+                          pre_hook=None, archive_root=None,
                           enable_format_fix=None):
     md_content = read_md_for_unit(q_dir, q_name)
     if not md_content:
@@ -809,14 +832,9 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools,
     # 前置搜索成功后，砍掉 prompt 里的联网搜索指令，避免 LLM 重复搜索
     if pre_hook and "## 前置参考" in md_content:
         prompt = _strip_search_from_prompt(prompt)
-        if react_mode:
-            # ReAct 模式：移除联网工具，仅依靠前置搜索结果
-            tools = [t for t in tools if t.name not in ("web_fetch", "web_search")]
-            log("   📖 前置参考已注入（已移除联网工具，仅依靠前置搜索结果）")
-        else:
-            tools = []
-            # max_loops 无需改：tools=[] 时 payload 无 tools 字段，工具循环本就不会启动
-            log("   🔒 前置参考已注入，关闭联网搜索")
+        # 移除联网工具，仅依靠前置搜索结果
+        tools = [t for t in tools if t.name not in ("web_fetch", "web_search")]
+        log("   📖 前置参考已注入（已移除联网工具，仅依靠前置搜索结果）")
 
     images_b64 = []
     image_filenames = []   # 与 images_b64 同序（快照以文件名清单存储，恢复时按名重编码）
@@ -845,26 +863,25 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools,
                 continue
 
     try:
-        # ReAct 模式：注入 API 配置供 IndependentSolveTool 等内部工具使用
-        if react_mode:
-            try:
-                from shared.physics_tools import set_physics_api_config
-                set_physics_api_config(
-                    ctx.api_url, ctx.api_key, ctx.model,
-                    output_dir=q_dir,
-                    api_format=getattr(ctx, "api_format", "chat/completions"),
-                )
-            except ImportError:
-                pass  # 非物理学科无 physics_tools 模块，忽略
-            try:
-                from shared.chemistry_tools import set_chemistry_api_config
-                set_chemistry_api_config(
-                    ctx.api_url, ctx.api_key, ctx.model,
-                    output_dir=q_dir,
-                    api_format=getattr(ctx, "api_format", "chat/completions"),
-                )
-            except ImportError:
-                pass  # 非化学学科无 chemistry_tools 模块，忽略
+        # 注入 API 配置供 IndependentSolveTool 等内部工具使用
+        try:
+            from shared.physics_tools import set_physics_api_config
+            set_physics_api_config(
+                ctx.api_url, ctx.api_key, ctx.model,
+                output_dir=q_dir,
+                api_format=getattr(ctx, "api_format", "chat/completions"),
+            )
+        except ImportError:
+            pass  # 非物理学科无 physics_tools 模块，忽略
+        try:
+            from shared.chemistry_tools import set_chemistry_api_config
+            set_chemistry_api_config(
+                ctx.api_url, ctx.api_key, ctx.model,
+                output_dir=q_dir,
+                api_format=getattr(ctx, "api_format", "chat/completions"),
+            )
+        except ImportError:
+            pass  # 非化学学科无 chemistry_tools 模块，忽略
 
         result = call_api(ctx, md_content, images_b64,
                           q_name, prompt, tools=tools,
@@ -918,6 +935,8 @@ def default_proofread_one(ctx, q_dir, q_name, prompt, tools,
             res, was_fixed, _ = enforce_and_fix(
                     md_path, res, ctx.api_url, ctx.api_key, ctx.model,
                     api_format=getattr(ctx, "api_format", "chat/completions"),
+                    source_path=(os.path.join(q_dir, f"{os.path.basename(q_dir)}.md")
+                                 if os.path.exists(os.path.join(q_dir, f"{os.path.basename(q_dir)}.md")) else None),
                 )
         elif not format_ok:
             log(f"   \u26a0\ufe0f 格式不合规：{format_issues}（无文件路径，跳过修正）")

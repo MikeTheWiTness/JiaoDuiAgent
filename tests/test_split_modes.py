@@ -194,6 +194,48 @@ class TestSplitModesLecture(unittest.TestCase):
         result = self.app.split_lecture(md_path, out_root, "test_lec", options={"split_mode": "none"})
         self.assertTrue(result)
 
+    def test_lecture_split_drops_title_only_units(self):
+        """「### 标题 → #### 阶段标题 → **练N**」结构不再产出纯标题空壳单元。
+
+        section_pattern 把 **练N** 例题标题切成独立边界，例题前的 #### 阶段标题
+        孤悬在前一板块；板块无正文时只剩标题壳，过滤后应被丢弃（回归 Issue：
+        化学单元2/37/46 纯标题单元）。
+        """
+        md_content = (
+            "# 第 1 讲\n\n"
+            "## 知识精讲\n\n"
+            "### 电极反应式的书写\n\n"
+            "#### 基础演练\n\n"
+            "#### 强化训练\n\n"
+            "**练1**\n\n"
+            "题目一内容\n\n"
+            "## 练习册\n\n"
+            "### 原电池\n\n"
+            "#### 基础演练\n\n"
+            "**练2**\n\n"
+            "题目二内容\n"
+        )
+        md_path = self._make_md(md_content)
+        out_root = os.path.join(self.tmpdir, "output")
+        os.makedirs(out_root, exist_ok=True)
+
+        result = self.app.split_lecture(md_path, out_root, "test_lec", options={"do_clean": True})
+        self.assertTrue(result)
+
+        lec_dir = os.path.join(out_root, "test_lec")
+        unit_dirs = sorted(
+            [d for d in os.listdir(lec_dir) if d.startswith("单元")],
+            key=lambda d: int(d.replace("单元", "")),
+        )
+        # 引言、「## 知识精讲 + ### 电极反应式的书写」、「## 练习册 + ### 原电池」
+        # 三个空壳被丢弃，只剩 练1 / 练2 两个例题单元
+        self.assertEqual(len(unit_dirs), 2)
+        for u in unit_dirs:
+            with open(os.path.join(lec_dir, u, f"{u}.md"), encoding="utf-8") as f:
+                md_text = f.read()
+            self.assertIn("题目", md_text)
+            self.assertIn("**练", md_text.splitlines()[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,20 +30,18 @@ class TestQuestionPromptQuality(unittest.TestCase):
     def test_prompt_contains_answer_check_instruction(self):
         prompt = self.app.get_question_prompt()
         self.assertIn("答案", prompt)
-        self.assertTrue(
-            "有答案" in prompt or "参考答案" in prompt,
-            "提示词应包含'有答案校答案'相关说明"
-        )
 
     def test_prompt_clear_answer_first_principle(self):
+        """agent 提示词以第 0 步类型判定 + 答案/解析结构为主"""
         prompt = self.app.get_question_prompt()
-        self.assertIn("有答案先校答案", prompt)
-        self.assertIn("无答案校题干", prompt)
+        self.assertIn("第 0 步", prompt)
+        self.assertIn("题目 / 知识 / 混合", prompt)
 
     def test_prompt_contains_classic_text_validation(self):
+        """文言文比对以前置参考为权威来源"""
         prompt = self.app.get_question_prompt()
-        self.assertIn("古诗文", prompt)
-        self.assertIn("权威", prompt)
+        self.assertIn("文言文", prompt)
+        self.assertIn("前置参考", prompt)
 
     def test_prompt_contains_tool_usage_instructions(self):
         prompt = self.app.get_question_prompt()
@@ -68,6 +66,17 @@ class TestQuestionPromptQuality(unittest.TestCase):
         prompt = self.app.get_question_prompt()
         self.assertIn("无问题", prompt)
         self.assertIn("严重", prompt)
+
+    def test_prompt_reasons_only_for_markers(self):
+        """修改原因编号必须与标记一一对应；核验确认项不得编入编号（ReAct 生效路径）"""
+        prompt = self.app.get_question_prompt()
+        self.assertIn("编号条目必须与", prompt)
+        self.assertIn("核验说明", prompt)
+
+    def test_prompt_mixed_report_single_structure(self):
+        """混合内容仍按单个标记原文+修改原因结构输出（ReAct 生效路径）"""
+        prompt = self.app.get_question_prompt()
+        self.assertIn("混合内容仍按统一格式输出", prompt)
 
 
 class TestSmartSplitPrompt(unittest.TestCase):
@@ -203,22 +212,18 @@ class TestPreProofreadHook(unittest.TestCase):
 
 
 class TestConditionalClassicValidation(unittest.TestCase):
-    """config 的古诗文验证指令必须条件化:已提供前置参考则不搜,未提供则必搜。
-
-    回归用例:config 第9行原为无条件硬指令"必须通过工具检索",与前置参考块
-    "无需再搜"的软建议冲突,LLM 服从更硬的 config 指令,导致前置搜成功了仍反复搜网页。
-    """
+    """前置参考验证指令必须条件化:已提供前置参考则不搜,未提供则必搜。"""
 
     def setUp(self):
         self.app = SubjectApp(SUBJECT_DIR)
 
     def test_question_prompt_has_conditional_validation(self):
         prompt = self.app.get_question_prompt()
-        # 已提供前置参考 → 不搜
+        # 已提供前置参考 → 不搜（agent 第 0 步提示）
         self.assertIn("前置参考", prompt)
-        self.assertIn("不得再检索", prompt)
-        # 未提供前置参考 → 必搜(兜底不削弱验证能力)
-        self.assertIn("未提供前置参考", prompt)
+        self.assertIn("无需自己检索", prompt)
+        # 未提供前置参考 → 必搜（工具指令中的检索触发条件）
+        self.assertIn("无前置参考", prompt)
 
     def test_tool_instructions_has_hard_no_search_rule(self):
         instructions = self.app.get_tool_instructions()
@@ -234,7 +239,6 @@ class TestMaxToolLoops(unittest.TestCase):
         self.app = SubjectApp(SUBJECT_DIR)
 
     def test_max_tool_loops_sufficient(self):
-        # 新指令极度限制搜索，3 轮足以覆盖极端情况
         self.assertGreaterEqual(self.app.get_max_tool_loops(), 3)
 
 

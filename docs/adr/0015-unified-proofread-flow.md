@@ -1,6 +1,6 @@
 # ADR 0015：统一校对流程 —— 预处理 → todolist → 三阶段主校对
 
-**状态**：已实现（全学科 prompt 统一三段式，Issues 026-032 完成）
+**状态**：已实现（全学科 prompt 统一三段式，Issues 026-032 完成）；其中「非 ReAct 保持 question_prompt_lines」条款已被 [[ADR 0031]](0031-remove-prompt-fallback.md) 移除
 **日期**：2026-07-03
 **实现日期**：2026-07-03
 **决策者**：MikeTheWiTness

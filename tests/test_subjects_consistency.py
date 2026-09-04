@@ -128,46 +128,36 @@ class TestSubjectsInterfaceConsistency(unittest.TestCase):
 
 
 class TestQuestionPromptToolInstructions(unittest.TestCase):
-    """回归：非 ReAct 模式下，有工具的学科提示词必须包含工具指令。
+    """回归：有工具的学科提示词必须包含工具指令。
 
-    修复前高中化学非 ReAct 分支直接返回 config 行，7 个工具模型永远不会调用。
+    ADR-00XX 移除回退机制后提示词恒为 agent_prompt_lines，
+    修复前高中化学回退分支直接返回 config 行，7 个工具模型永远不会调用。
     """
 
-    def test_non_react_prompt_contains_tool_instructions_when_tools_exist(self):
+    def test_prompt_contains_tool_instructions_when_tools_exist(self):
         for d in SUBJECT_DIRS:
             subject_dir = os.path.join(SUBJECTS_ROOT, d)
             mod = _load_subject(subject_dir)
             app = mod.SubjectApp(subject_dir)
-            app.react_mode = False  # 强制非 ReAct
             prompt = app.get_question_prompt()
             self.assertIsInstance(prompt, str, f"{d} 提示词非 str")
-            self.assertTrue(prompt.strip(), f"{d} 非 ReAct 提示词为空")
+            self.assertTrue(prompt.strip(), f"{d} 提示词为空")
             if app.tools:
+                # 工具不得静默失效：prompt 中要么含工具指令文本、要么声明了工具名
+                # （如英语 agent 提示词「## 你的能力」段声明 plan_update，不拼指令文本）
                 instructions = app.get_tool_instructions()
-                if instructions:
-                    self.assertIn(instructions[:80], prompt,
-                                  f"{d} 非 ReAct 提示词缺少工具指令（工具静默失效）")
+                tool_names = [t.name for t in app.tools]
+                declared = any(n in prompt for n in tool_names)
+                self.assertTrue(
+                    declared or (instructions and instructions[:80] in prompt),
+                    f"{d} 提示词未声明任何工具（工具静默失效）",
+                )
 
-    def test_react_prompt_different_from_non_react(self):
-        """ReAct 模式（agent_prompt_lines）与 非 ReAct 提示词不同源"""
-        for d in SUBJECT_DIRS:
-            subject_dir = os.path.join(SUBJECTS_ROOT, d)
-            mod = _load_subject(subject_dir)
-            app = mod.SubjectApp(subject_dir)
-            app.react_mode = True
-            react_prompt = app.get_question_prompt()
-            app.react_mode = False
-            plain_prompt = app.get_question_prompt()
-            if app.config.get("agent_prompt_lines"):
-                self.assertNotEqual(react_prompt, plain_prompt,
-                                    f"{d} ReAct/非 ReAct 提示词完全相同，模式切换无效")
-
-    def test_chemistry_has_tools_in_non_react(self):
-        """化学非 ReAct 必须有工具指令（本回归的原始场景）"""
+    def test_chemistry_has_tool_instructions(self):
+        """化学提示词必须含工具指令（本回归的原始场景）"""
         subject_dir = os.path.join(SUBJECTS_ROOT, "高中化学v3.0")
         mod = _load_subject(subject_dir)
         app = mod.SubjectApp(subject_dir)
-        app.react_mode = False
         self.assertTrue(app.tools, "化学学科应构建工具")
         prompt = app.get_question_prompt()
         self.assertIn(app.get_tool_instructions()[:80], prompt)
@@ -189,7 +179,6 @@ class TestAgentPromptToolsSubset(unittest.TestCase):
                 continue
             mod = _load_subject(subject_dir)
             app = mod.SubjectApp(subject_dir)
-            app.react_mode = True
             actual = {t.name for t in app.tools}
             missing = declared - actual
             self.assertFalse(
@@ -207,8 +196,8 @@ class TestRealConfigsValid(unittest.TestCase):
             subject_dir = os.path.join(SUBJECTS_ROOT, d)
             config = validate_config(subject_dir)
             self.assertIsInstance(config, dict, f"{d} config 校验失败")
-            self.assertTrue(config.get("question_prompt_lines"),
-                            f"{d} question_prompt_lines 为空")
+            self.assertTrue(config.get("agent_prompt_lines"),
+                            f"{d} agent_prompt_lines 为空")
 
 
 class TestPackagingResources(unittest.TestCase):

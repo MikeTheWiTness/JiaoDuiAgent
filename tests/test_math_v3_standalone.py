@@ -56,11 +56,11 @@ class TestImportAndInit(unittest.TestCase):
         self.assertEqual(app.SUBJECT, "数学")
         self.assertEqual(app.name, "小学数学")
         self.assertEqual(app.version, "v3.0")
-        self.assertFalse(app.react_mode)
 
     def test_config_loaded(self):
         app = SubjectApp(MATH_DIR)
-        self.assertIn("question_prompt_lines", app.config)
+        # ADR-00XX 移除回退机制：question_prompt_lines 字段已删除
+        self.assertNotIn("question_prompt_lines", app.config)
         self.assertNotIn("knowledge_prompt_lines", app.config)
         # agent_prompt_lines 应该从 agent_prompt.json 加载
         self.assertIn("agent_prompt_lines", app.config)
@@ -77,65 +77,38 @@ class TestImportAndInit(unittest.TestCase):
 # ═══════════════════════════════════════════════════════════════
 
 class TestToolBuilding(unittest.TestCase):
-    """验证非 React / React 两种模式下的工具集"""
+    """验证工具集（ADR-00XX 后恒为 ReAct 工具集）"""
 
     def setUp(self):
         self.app = SubjectApp(MATH_DIR)
 
-    # ── 非 React 模式 ──
-
-    def test_base_tool_count(self):
+    def test_tool_count(self):
         tools = self.app.tools
-        self.assertEqual(len(tools), 5, f"基础工具应为 5 个，实际 {len(tools)}")
+        self.assertEqual(len(tools), 6, f"工具应为 6 个，实际 {len(tools)}")
 
-    def test_base_tool_names(self):
-        names = {t.name for t in self.app.tools}
-        expected = {
-            "evaluate_expression", "solve_equation", "check_equality",
-            "simplify_expression", "geometry",
-        }
-        self.assertEqual(names, expected)
-
-    def test_base_no_react_tools(self):
-        names = {t.name for t in self.app.tools}
-        self.assertNotIn("plan_update", names)
-        self.assertNotIn("independent_solve", names)
-        self.assertNotIn("locate_paragraph", names)
-
-    # ── React 模式 ──
-
-    def test_react_tool_count(self):
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
-        self.assertEqual(len(self.app.tools), 8, f"React 工具应为 8 个，实际 {len(self.app.tools)}")
-
-    def test_react_tool_names(self):
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
+    def test_tool_names(self):
         names = {t.name for t in self.app.tools}
         expected_base = {
             "evaluate_expression", "solve_equation", "check_equality",
             "simplify_expression", "geometry",
         }
         expected_react = {
-            "plan_update", "locate_paragraph", "read_section",
+            "plan_update",
         }
         self.assertTrue(expected_base.issubset(names), f"缺少基础工具: {expected_base - names}")
         self.assertTrue(expected_react.issubset(names), f"缺少 React 工具: {expected_react - names}")
+        self.assertNotIn("locate_paragraph", names, "数学不注册文本导航工具（非语文学科统一移除）")
+        self.assertNotIn("read_section", names, "数学不注册文本导航工具（非语文学科统一移除）")
         self.assertNotIn("independent_solve", names, "数学不应挂载物理独立解题工具（P4 修复）")
 
     def test_plan_update_nudge_empty(self):
         """验证数学 PlanUpdateTool nudge 置空（对齐物理 ADR-0006 决策 2）"""
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
         plan_tool = next(t for t in self.app.tools if t.name == "plan_update")
         self.assertEqual(plan_tool.nudge_template, "",
                          "数学 PlanUpdateTool nudge 应为空字符串（自检靠 prompt 第 8 步）")
 
     def test_plan_update_nudge_suppressed(self):
         """全部 completed 时不输出 nudge（nudge_template=""）"""
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
         plan_tool = next(t for t in self.app.tools if t.name == "plan_update")
         todos = [
             {"content": "第1步：错词错字", "status": "completed", "activeForm": "检查错词错字"},
@@ -158,8 +131,6 @@ class TestToolExecution(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = SubjectApp(MATH_DIR)
-        cls.app.react_mode = True
-        cls.app.tools = cls.app.build_tools()
 
     def _get_tool(self, name):
         return next(t for t in self.app.tools if t.name == name)
@@ -301,17 +272,8 @@ class TestPromptGeneration(unittest.TestCase):
     def setUpClass(cls):
         cls.app = SubjectApp(MATH_DIR)
 
-    def test_question_prompt_non_react(self):
-        """非 React 模式使用 config.json 的 question_prompt_lines"""
-        self.app.react_mode = False
-        prompt = self.app.get_question_prompt()
-        self.assertIn("逐题五核校对", prompt)
-        self.assertIn("evaluate_expression", prompt)
-
     def test_question_prompt_react(self):
         """React 模式使用 agent_prompt.json + 工具指令（三阶段结构）"""
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
         prompt = self.app.get_question_prompt()
         # 核心结构检查（ADR-0017 后改为预处理/主校对/输出三阶段）
         checks = [
@@ -334,8 +296,6 @@ class TestPromptGeneration(unittest.TestCase):
         self.assertNotIn("web_search", prompt, "React prompt 不应再声明 web_search")
 
     def test_tool_instructions_contains_sympy_section(self):
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
         instructions = self.app.get_tool_instructions()
         self.assertIn("符号计算与几何工具", instructions)
         # 联网搜索段随 web_search 停用一并消失
@@ -345,15 +305,10 @@ class TestPromptGeneration(unittest.TestCase):
         self.assertNotIn("locate_paragraph", instructions)
 
     def test_max_tool_loops(self):
-        self.app.react_mode = False
-        self.assertEqual(self.app.get_max_tool_loops(), 20)
-        self.app.react_mode = True
         self.assertEqual(self.app.get_max_tool_loops(), 30)
 
     def test_prompt_no_leftover_physics_content(self):
         """确保数学 prompt 没有残留的物理内容"""
-        self.app.react_mode = True
-        self.app.tools = self.app.build_tools()
         prompt = self.app.get_question_prompt()
         forbidden = [
             "量纲分析", "dimensional_analysis",
@@ -376,8 +331,6 @@ class TestProofreadPipeline(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = SubjectApp(MATH_DIR)
-        cls.app.react_mode = True
-        cls.app.tools = cls.app.build_tools()
 
     def test_proofread_one_prompt_selection(self):
         """验证 proofread_one 在不同模式下选择正确的 prompt"""
@@ -417,8 +370,6 @@ class TestMarkupFormatRules(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = SubjectApp(MATH_DIR)
-        cls.app.react_mode = True
-        cls.app.tools = cls.app.build_tools()
         cls.prompt = cls.app.get_question_prompt()
 
     def test_markup_rules_present(self):
@@ -464,7 +415,8 @@ class TestConfigConsistency(unittest.TestCase):
             cls.agent = json.load(f)
 
     def test_config_has_required_fields(self):
-        self.assertIn("question_prompt_lines", self.config)
+        # ADR-00XX 移除回退机制：question_prompt_lines 字段已删除
+        self.assertNotIn("question_prompt_lines", self.config)
         # knowledge_prompt_lines 已从 schema 移除，不再出现在 config 中
         self.assertNotIn("knowledge_prompt_lines", self.config)
         self.assertIn("lecture_split", self.config)
@@ -478,7 +430,6 @@ class TestConfigConsistency(unittest.TestCase):
     def test_no_broken_references(self):
         """agent_prompt 中引用的工具名都实际存在于工具集中"""
         app = SubjectApp(MATH_DIR)
-        app.react_mode = True
         app.tools = app.build_tools()
         tool_names = {t.name for t in app.tools}
 

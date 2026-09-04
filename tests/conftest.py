@@ -19,10 +19,12 @@ def temp_dir():
 def temp_config_dir(temp_dir):
     """创建含最小 config.json 的临时学科目录。"""
     config = {
-        "question_prompt_lines": ["测试提示词"],
         "lecture_split": {"wrapped_patterns": [], "unwrapped_patterns": [], "section_boundary": ""},
         "exam_split": {"question_pattern": r"^\d+[.)]"},
     }
     with open(temp_dir / "config.json", "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False)
+    # agent_prompt.json 为提示词唯一来源（ADR-00XX 移除回退机制）
+    with open(temp_dir / "agent_prompt.json", "w", encoding="utf-8") as f:
+        json.dump({"agent_prompt_lines": ["测试提示词"]}, f, ensure_ascii=False)
     return temp_dir

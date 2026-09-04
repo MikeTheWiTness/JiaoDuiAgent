@@ -33,18 +33,6 @@ class BaseSubjectApp:
     def __init__(self, subject_dir):
         self.subject_dir = subject_dir
         self.config = load_config(subject_dir)
-        self._react_mode = False
-        self.tools = self.build_tools()
-
-    # ---- react_mode 属性（统一的 property 模式） ----
-
-    @property
-    def react_mode(self):
-        return self._react_mode
-
-    @react_mode.setter
-    def react_mode(self, value):
-        self._react_mode = value
         self.tools = self.build_tools()
 
     # ---- 子类必须实现的方法 ----
@@ -129,8 +117,7 @@ class BaseSubjectApp:
         """校对入口 —— 所有学科共用骨架。高中语文覆盖 _build_pre_hook 注入文言文搜索。
 
         ADR-0017 决策6：移除 is_knowledge 参数。
-        ReAct 模式下 LLM 通过 agent_prompt 第0步自行判定内容类型，
-        程序侧不再按目录名决定校对策略。
+        LLM 通过 agent_prompt 第0步自行判定内容类型，程序侧不再按目录名决定校对策略。
         enable_format_fix 显式控制格式修正（UI 侧传 True），与排版输出解耦。
         """
         if source_mode == "批注评审":
@@ -144,7 +131,6 @@ class BaseSubjectApp:
             ctx, q_dir, q_name,
             prompt, self.tools,
             pre_hook=pre_hook,
-            react_mode=self.react_mode,
             archive_root=archive_root,
             enable_format_fix=enable_format_fix,
         )

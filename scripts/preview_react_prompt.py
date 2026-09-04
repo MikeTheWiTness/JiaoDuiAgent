@@ -31,7 +31,7 @@ Q_MAP = {
 
 
 def _load_subject_app():
-    """加载 SubjectApp，react_mode=True（与真实校对一致）。"""
+    """加载 SubjectApp（agent_prompt.json 提示词，与真实校对一致）。"""
     subject_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "subjects", "高中语文v3.0",
@@ -42,8 +42,6 @@ def _load_subject_app():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     app = mod.SubjectApp(subject_dir)
-    app.react_mode = True
-    app.tools = app.build_tools()
     return app
 
 

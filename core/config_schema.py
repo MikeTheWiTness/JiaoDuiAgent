@@ -25,15 +25,6 @@ def validate_config(subject_dir) -> dict:
 
     errors = []
 
-    # ---- 必填字段 ----
-    for field in ["question_prompt_lines"]:
-        if field not in raw:
-            errors.append(f"缺少必填字段 '{field}'")
-        elif not isinstance(raw[field], list) or len(raw[field]) == 0:
-            errors.append(f"'{field}' 必须是非空字符串数组")
-        elif not all(isinstance(x, str) for x in raw[field]):
-            errors.append(f"'{field}' 的元素必须是字符串")
-
     # ---- 类型检查 ----
     if "knowledge_agent_prompt_lines" in raw:
         value = raw["knowledge_agent_prompt_lines"]
@@ -69,7 +60,6 @@ def validate_config(subject_dir) -> dict:
     exam = raw.get("exam_split", {})
 
     config = {
-        "question_prompt_lines": raw["question_prompt_lines"],
         "lecture_split_mode": lecture.get("split_mode", "section"),
         "lecture_section_pattern": lecture.get("section_pattern", r"^##\s"),
         "lecture_section_extensions": lecture.get("section_pattern_extensions", []),
@@ -83,21 +73,25 @@ def validate_config(subject_dir) -> dict:
     if "knowledge_agent_prompt_lines" in raw:
         config["knowledge_agent_prompt_lines"] = raw["knowledge_agent_prompt_lines"]
 
-    # agent_prompt.json（独立文件，不存在不报错）
+    # agent_prompt.json —— 校对提示词唯一来源（ADR-00XX 移除 question_prompt_lines 回退后必填）。
+    # 缺失/非法即中断加载（fail-fast），避免静默回退到旧提示词造成双源不同步。
     agent_file = os.path.join(subject_dir, "agent_prompt.json")
-    if os.path.exists(agent_file):
+    if not os.path.exists(agent_file):
+        errors.append(f"缺少 提示词文件 '{os.path.basename(agent_file)}'（校对提示词唯一来源，缺失时无法校对，请重新发起校对）")
+    else:
         try:
             with open(agent_file, encoding="utf-8") as f:
                 agent_data = json.load(f)
             agent_lines = agent_data.get("agent_prompt_lines", [])
             if not isinstance(agent_lines, list):
                 errors.append("'agent_prompt_lines' 必须是字符串数组")
+            elif len(agent_lines) == 0:
+                errors.append("'agent_prompt_lines' 不能为空")
             elif not all(isinstance(x, str) for x in agent_lines):
                 errors.append("'agent_prompt_lines' 的元素必须是字符串")
             config["agent_prompt_lines"] = agent_lines
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"加载 agent_prompt.json 失败: {e}")
+            errors.append(f"加载 {os.path.basename(agent_file)} 失败: {e}")
 
     # agent_prompt 校验错误与 config.json 错误同样需要中断加载
     if errors:

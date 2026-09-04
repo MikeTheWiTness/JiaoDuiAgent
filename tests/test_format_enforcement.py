@@ -47,6 +47,22 @@ class TestEnforceFormat(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(issues)
 
+    def test_verification_notes_without_numbers_pass(self):
+        """修改原因含非编号核验说明且编号与标记一一对应 → 通过（新输出形态防回归）"""
+        report = """轻微问题
+
+### 标记原文
+题目【1|错|对】
+
+### 修改原因
+1. 修正错误。
+
+核验说明：其余内容经实算确认正确，未编入编号。
+"""
+        ok, issues = _enforce_format(report)
+        self.assertTrue(ok)
+        self.assertEqual(issues, "")
+
     def test_valid_report_passes(self):
         ok, issues = _enforce_format(OK_REPORT)
         self.assertTrue(ok, f"合格报告不应报问题: {issues}")
@@ -231,6 +247,14 @@ class TestEnforceAndFix(unittest.TestCase):
         self.assertEqual(final, fixed)
         self.assertTrue(was_fixed)
 
+    def test_source_path_forwarded_to_bash_fix(self):
+        """source_path 透传给 _bash_format_fix（修正轮可读取题目原文）"""
+        bad = "只有正文没有结构"
+        with mock.patch("core.format_enforcement._bash_format_fix", return_value=None) as fix:
+            enforce_and_fix(self.file_path, bad, "http://x", "k", "m",
+                            source_path="/tmp/单元3.md")
+        self.assertEqual(fix.call_args.kwargs.get("source_path"), "/tmp/单元3.md")
+
     def test_fix_failure_falls_back_to_original(self):
         """修正失败或重验不过时回退原始内容"""
         bad = "只有正文没有结构"
@@ -367,6 +391,48 @@ class TestBashFormatFixConfig(unittest.TestCase):
             self.assertNotIn("3 轮", prompt)
         finally:
             os.unlink(path)
+
+    def test_system_prompt_forbids_creating_new_markers(self):
+        """修正轮 system_prompt 禁止为对齐编号而伪造标记"""
+        from unittest import mock
+
+        import core.format_enforcement as fe
+
+        fd, path = tempfile.mkstemp(suffix=".md")
+        os.close(fd)
+        try:
+            with mock.patch("core.session_context.SessionContext") as sc_mock, \
+                    mock.patch("core.api_client.call_api") as call_mock:
+                sc_mock.from_credentials.return_value = mock.MagicMock()
+                fe._bash_format_fix(path, "缺少段落", "http://x", "k", "m")
+            prompt = call_mock.call_args.kwargs["system_prompt"]
+            self.assertIn("禁止新增标记", prompt)
+            self.assertIn("不得创建", prompt)
+        finally:
+            os.unlink(path)
+
+    def test_source_path_hints_user_message(self):
+        """提供 source_path 时 user_message 提示题目原文文件位置"""
+        from unittest import mock
+
+        import core.format_enforcement as fe
+
+        fd, path = tempfile.mkstemp(suffix=".md")
+        os.close(fd)
+        src = os.path.join(os.path.dirname(path), "单元3.md")
+        try:
+            with open(src, "w", encoding="utf-8") as f:
+                f.write("题目原文")
+            with mock.patch("core.session_context.SessionContext") as sc_mock, \
+                    mock.patch("core.api_client.call_api") as call_mock:
+                sc_mock.from_credentials.return_value = mock.MagicMock()
+                fe._bash_format_fix(path, "缺少段落", "http://x", "k", "m",
+                                    source_path=src)
+            self.assertIn("单元3.md", call_mock.call_args.kwargs["md_text"])
+        finally:
+            os.unlink(path)
+            if os.path.exists(src):
+                os.unlink(src)
 
 
 if __name__ == "__main__":

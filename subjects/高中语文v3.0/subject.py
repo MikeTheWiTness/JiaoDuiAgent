@@ -22,21 +22,19 @@ class SubjectApp(BaseSubjectApp):
 
     def __init__(self, subject_dir):
         super().__init__(subject_dir)
-        self._react_mode = False
 
     def build_tools(self):
         from shared.web_tools import WebFetchTool
+        from shared.plan_tools import PlanUpdateTool
+        from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
         base = [WebFetchTool()]  # web_fetch 始终可用（前置检索 + 兜底）
-        if self.react_mode:
-            from shared.plan_tools import PlanUpdateTool
-            from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            base.append(PlanUpdateTool(nudge_template=""))
-            base.append(LocateParagraphTool())
-            base.append(ReadSectionTool())
+        base.append(PlanUpdateTool(nudge_template=""))
+        base.append(LocateParagraphTool())
+        base.append(ReadSectionTool())
         return base
 
     def get_max_tool_loops(self):
-        return 15 if self.react_mode else 3
+        return 15
 
     # 可靠原文检索源（通过 web_fetch 直接构造 URL，无需经过搜索引擎）
     _DIRECT_SOURCES = [
@@ -86,15 +84,12 @@ class SubjectApp(BaseSubjectApp):
         return "".join(lines)
 
     def get_question_prompt(self):
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                base_prompt = "\n".join(agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-        base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
+        """获取题目校对提示词。agent_prompt.json 为唯一来源，缺失时 fail-fast（ADR-00XX）。"""
+        agent_lines = self.config.get("agent_prompt_lines")
+        if not agent_lines:
+            raise ValueError(
+                "缺少 agent_prompt.json 或 agent_prompt_lines 为空，无法校对——请修复配置后重新发起校对")
+        base_prompt = "\n".join(agent_lines)
         tool_instructions = self.get_tool_instructions()
         if tool_instructions:
             return base_prompt + "\n\n" + tool_instructions
@@ -137,25 +132,19 @@ class SubjectApp(BaseSubjectApp):
 
 
     def get_review_prompt(self):
-        from shared.review_mode import build_review_prompt
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                base_prompt = "\n".join(agent_lines)
-                # ReAct 代理模式：agent_prompt 已含完整校对流程，
-                # build_review_prompt 的无批注 else 分支是冗余指令，
-                # 会与 agent_prompt 冲突（"用工具" vs "直接输出"）。
-                # 仅在有批注时才追加评审指令。
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-        base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
+        agent_lines = self.config.get("agent_prompt_lines")
+        if not agent_lines:
+            raise ValueError(
+                "缺少 agent_prompt.json 或 agent_prompt_lines 为空，无法校对——请修复配置后重新发起校对")
+        base_prompt = "\n".join(agent_lines)
+        # ReAct 代理模式：agent_prompt 已含完整校对流程，
+        # build_review_prompt 的无批注 else 分支是冗余指令，
+        # 会与 agent_prompt 冲突（"用工具" vs "直接输出"）。
+        # 仅在有批注时才追加评审指令。
         tool_instructions = self.get_tool_instructions()
-        review_specific = build_review_prompt("")
         if tool_instructions:
-            return base_prompt + "\n\n" + tool_instructions + "\n\n" + review_specific
-        return base_prompt + "\n\n" + review_specific
+            return base_prompt + "\n\n" + tool_instructions
+        return base_prompt
 
     def _build_pre_hook(self, api_url, api_key, model, q_dir):
         """构建前置校对钩子：文言文/诗歌的前置搜索 + 自动 diff。"""

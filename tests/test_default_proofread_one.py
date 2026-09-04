@@ -245,6 +245,14 @@ class TestFormatFixControlledByFlag(unittest.TestCase):
         _, fix = self._run(enable_format_fix=False)
         fix.assert_not_called()
 
+    def test_format_fix_passes_source_path(self):
+        """调用 enforce_and_fix 时传入单元原文路径，供修正轮核对标记"""
+        _, fix = self._run(enable_format_fix=True)
+        self.assertEqual(
+            fix.call_args.kwargs.get("source_path"),
+            os.path.join(self.q_dir, "第1题.md"),
+        )
+
 
 class TestEmptyOutputProofread(unittest.TestCase):
     """回归：模型空输出（res=""）时跳过格式修正，报告注入人工检查告警。

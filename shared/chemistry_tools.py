@@ -169,6 +169,16 @@ class ChemistryIndependentSolveTool(BaseTool):
         model = cfg.get("model", "")
         output_dir = cfg.get("output_dir")
 
+        # 入参校验：空/过短题干不发起求解（否则白耗 API 且产出垃圾答案）
+        question_without_answer = (question_without_answer or "").strip()
+        if len(question_without_answer) < 20:
+            return json.dumps({
+                "ok": False,
+                "answer": "",
+                "reasoning": "",
+                "error": "question_without_answer 过短（<20 字符），疑似未传有效题干，已跳过独立解题",
+            }, ensure_ascii=False)
+
         if not api_url or not api_key:
             return json.dumps({
                 "ok": False,

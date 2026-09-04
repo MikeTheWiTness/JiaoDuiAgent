@@ -52,15 +52,17 @@ class _HistorySubject(_MinimalSubject):
 
 @pytest.fixture
 def subject_dir():
-    """创建临时学科目录（含最小 config.json）。"""
+    """创建临时学科目录（含最小 config.json + agent_prompt.json）。"""
     tmp = tempfile.mkdtemp()
     config = {
-        "question_prompt_lines": ["测试提示词"],
         "lecture_split": {"wrapped_patterns": [], "unwrapped_patterns": [], "section_boundary": ""},
         "exam_split": {"question_pattern": r"^\d+[.)]"},
     }
     with open(os.path.join(tmp, "config.json"), "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False)
+    # agent_prompt.json 为提示词唯一来源（ADR-00XX 移除回退机制）
+    with open(os.path.join(tmp, "agent_prompt.json"), "w", encoding="utf-8") as f:
+        json.dump({"agent_prompt_lines": ["测试提示词"]}, f, ensure_ascii=False)
     yield tmp
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)
@@ -122,12 +124,3 @@ class TestBaseSubject:
         assert ".md" in exts
         assert ".docx" in exts
 
-    def test_react_mode_property(self, subject_dir):
-        """react_mode 应为 property，设置时重建 tools。"""
-        app = _MinimalSubject(subject_dir)
-        assert app.react_mode is False
-        # 设置 react_mode 应触发 build_tools
-        with patch.object(app, 'build_tools', wraps=app.build_tools) as mock_build:
-            app.react_mode = True
-            assert app.react_mode is True
-            mock_build.assert_called_once()

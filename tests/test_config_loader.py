@@ -11,7 +11,9 @@ from core.config_loader import clear_config_cache, load_config
 @pytest.fixture
 def subject_dir(tmp_path):
     with open(tmp_path / "config.json", "w", encoding="utf-8") as f:
-        json.dump({"question_prompt_lines": ["题"]}, f, ensure_ascii=False)
+        json.dump({}, f, ensure_ascii=False)
+    with open(tmp_path / "agent_prompt.json", "w", encoding="utf-8") as f:
+        json.dump({"agent_prompt_lines": ["题"]}, f, ensure_ascii=False)
     return str(tmp_path)
 
 

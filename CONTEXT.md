@@ -1,7 +1,7 @@
 # CONTEXT.md — 校对工具 ReAct 机制设计上下文
 
 > 最后更新：2026-08-27
-> 状态：通用 ReAct 机制已上线；物理校对 ReAct 学科化重构设计完成（ADR-0006，待落地）；物理自主解题 agent 另立 ADR-0007（仅设计）；语文题目校对节点图重构已上线（ADR-0008，已实现 commit 待补）；语文知识类校对维度叠加架构设计完成（ADR-0009，待落地）；工具生成校对标记未实现（ADR-0016，待合并）；统一规则拆分 section 模式已落地（ADR-0017，commit `9bf087a`）；智能拆分工具化已落地（ADR-0018，commit `6ddd08b`）；架构审查修复主体已落地（ADR-0019，commit `a0309df`；C1.3 剩余 6 处 except 扫尾延后，部分并入 ADR-0021 承接）；斜体/上下标分离已落地（ADR-0020，commit `3173b29`）；call_api 重构拆分 + 退化测试修复 + 散落超时常量上提设计完成（ADR-0021，已实现 commit faa4d6d；2026-07-24 审查收紧为"纯优化零功能变更"，BashTool 安全加固剥离到独立 ADR）；UI 编排下沉到 core（ADR-0022）已撤销（未实施），生产继续走 UI 线程；物理/化学跨模块凭证设置逻辑去重 + 缓存锁 + env 读改写保键设计完成（ADR-0023，已实现 commit 72ada63；原"删第三轨"方案回退为跨模块去重，不破坏 build_tools 时序）；latex_generator 大函数 pipeline 化 + 内部重复去重设计完成（ADR-0024，已实现 commit 16d7fcf；"C2 补 `$` 兜底"剥离为独立 bug 修复，加"严格保留原差异 / log 逐字不变"原则）；pdf_compiler 拆四函数 + 诊断去重设计完成（ADR-0025，已实现 commit daf84dd；texmf_root 为 None 返回 None 不传 env）；化学式解析双源同步测试锁设计完成（ADR-0026，已实现 commit 7346cf4；原 inspect.getsource runtime 注入方案因 PyInstaller OSError 回退为保留字面量 + CI 同步锁）；工程化基线（ruff+pre-commit+pyproject+锁文件）+ 集成测试复位（markers 取代 --ignore + 双平台 CI）设计完成（ADR-0027，已实现 commit 298498a；pytest 配置收敛到 pyproject.toml，默认 `-m "not e2e and not network and not slow"` 维根本地行为）；清理与流程约束执行清单完成（Issue 048，不立 ADR）；校对断点续传已落地（ADR-0029，已实现 commit 7bbfa7c；快照=`ProofreadState.dump()`，`SessionContext.enable_checkpoint` 门控，四重校验不匹配删快照/损坏保留 `.corrupt`，轮次边界保存，图片路径引用，重试携带状态续跑）；LaTeX/PDF 排版下线、仅保留 Word 排版已落地（ADR-0030，commit 5180242；删 latex_generator/pdf_compiler/便携 texlive，`generate_pdf` 参数全链移除，格式修正改由 `enable_format_fix` 显式控制；ADR-0024/0025 随之废弃）
+> 状态：通用 ReAct 机制已上线；物理校对 ReAct 学科化重构设计完成（ADR-0006，待落地）；物理自主解题 agent 另立 ADR-0007（仅设计）；语文题目校对节点图重构已上线（ADR-0008，已实现 commit 待补）；语文知识类校对维度叠加架构设计完成（ADR-0009，待落地）；工具生成校对标记未实现（ADR-0016，待合并）；统一规则拆分 section 模式已落地（ADR-0017，commit `9bf087a`）；智能拆分工具化已落地（ADR-0018，commit `6ddd08b`）；架构审查修复主体已落地（ADR-0019，commit `a0309df`；C1.3 剩余 6 处 except 扫尾延后，部分并入 ADR-0021 承接）；斜体/上下标分离已落地（ADR-0020，commit `3173b29`）；call_api 重构拆分 + 退化测试修复 + 散落超时常量上提设计完成（ADR-0021，已实现 commit faa4d6d；2026-07-24 审查收紧为"纯优化零功能变更"，BashTool 安全加固剥离到独立 ADR）；UI 编排下沉到 core（ADR-0022）已撤销（未实施），生产继续走 UI 线程；物理/化学跨模块凭证设置逻辑去重 + 缓存锁 + env 读改写保键设计完成（ADR-0023，已实现 commit 72ada63；原"删第三轨"方案回退为跨模块去重，不破坏 build_tools 时序）；latex_generator 大函数 pipeline 化 + 内部重复去重设计完成（ADR-0024，已实现 commit 16d7fcf；"C2 补 `$` 兜底"剥离为独立 bug 修复，加"严格保留原差异 / log 逐字不变"原则）；pdf_compiler 拆四函数 + 诊断去重设计完成（ADR-0025，已实现 commit daf84dd；texmf_root 为 None 返回 None 不传 env）；化学式解析双源同步测试锁设计完成（ADR-0026，已实现 commit 7346cf4；原 inspect.getsource runtime 注入方案因 PyInstaller OSError 回退为保留字面量 + CI 同步锁）；工程化基线（ruff+pre-commit+pyproject+锁文件）+ 集成测试复位（markers 取代 --ignore + 双平台 CI）设计完成（ADR-0027，已实现 commit 298498a；pytest 配置收敛到 pyproject.toml，默认 `-m "not e2e and not network and not slow"` 维根本地行为）；清理与流程约束执行清单完成（Issue 048，不立 ADR）；校对断点续传已落地（ADR-0029，已实现 commit 7bbfa7c；快照=`ProofreadState.dump()`，`SessionContext.enable_checkpoint` 门控，四重校验不匹配删快照/损坏保留 `.corrupt`，轮次边界保存，图片路径引用，重试携带状态续跑）；LaTeX/PDF 排版下线、仅保留 Word 排版已落地（ADR-0030，commit 5180242；删 latex_generator/pdf_compiler/便携 texlive，`generate_pdf` 参数全链移除，格式修正改由 `enable_format_fix` 显式控制；ADR-0024/0025 随之废弃）；提示词回退机制（question_prompt_lines / react_mode 切换）已移除（ADR-0031；agent_prompt.json 成为提示词唯一来源，缺失 fail-fast，config.json 删除 question_prompt_lines 字段）
 
 ## 1. 问题与目标
 
@@ -128,9 +128,9 @@ LLM 首轮调用 `plan_update` 声明计划步骤，后续每完成一步调用�
 
 ### 3.4 agent_prompt_lines
 
-- 新增 `agent_prompt_lines` 配置字段，与 `question_prompt_lines` 完全独立（方案 A）
+- 新增 `agent_prompt_lines` 配置字段（ADR-0031 后为提示词唯一来源，`question_prompt_lines` 已删除）
 - `subject.py` 通过 `self.react_mode` 属性切换（方案 A：属性传递，不污染函数签名）
-- 缺失时 fallback 到 `question_prompt_lines`（不报错）
+- agent_prompt.json 缺失时 fail-fast 报错（ADR-0031：不再 fallback，真触发时重新发起校对）
 - 工具使用指南在 prompt 中详细展开，包含"何时用/何时不用/示例"
 
 ### 3.5 文本导航工具

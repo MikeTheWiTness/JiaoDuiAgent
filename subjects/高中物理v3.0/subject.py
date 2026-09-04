@@ -20,7 +20,6 @@ class SubjectApp(BaseSubjectApp):
 
     def __init__(self, subject_dir):
         super().__init__(subject_dir)
-        self._react_mode = False
 
     def build_tools(self):
         base = [
@@ -31,23 +30,19 @@ class SubjectApp(BaseSubjectApp):
             VectorOperationsTool(),
             CircleFromTwoPointsTool(),
         ]
-        if self.react_mode:
-            from shared.physics_tools import IndependentSolveTool
-            from shared.plan_tools import PlanUpdateTool
-            from shared.text_nav_tools import LocateParagraphTool, ReadSectionTool
-            # 物理 nudge 置空：自检靠 prompt 第 8 步，不依赖工具 nudge（ADR-0006 决策 2）
-            base.append(PlanUpdateTool(nudge_template=""))
-            base.append(LocateParagraphTool())
-            base.append(ReadSectionTool())
-            base.append(IndependentSolveTool())
+        from shared.physics_tools import IndependentSolveTool
+        from shared.plan_tools import PlanUpdateTool
+        # 物理 nudge 置空：自检靠 prompt 第 8 步，不依赖工具 nudge（ADR-0006 决策 2）
+        base.append(PlanUpdateTool(nudge_template=""))
+        base.append(IndependentSolveTool())
         return base
 
     def get_max_tool_loops(self):
-        return 30 if self.react_mode else 20
+        return 30
 
     def get_tool_instructions(self):
         sympy_tools = [t for t in self.tools if t.name not in ("web_search", "web_fetch",
-                         "plan_update", "locate_paragraph", "read_section", "independent_solve")]
+                         "plan_update", "independent_solve")]
         web_tools = [t for t in self.tools if t.name == "web_search" or t.name == "web_fetch"]
 
         lines = []
@@ -68,38 +63,26 @@ class SubjectApp(BaseSubjectApp):
         return "".join(lines)
 
     def get_question_prompt(self):
-        """获取题目校对提示词。ReAct 模式时优先用 agent_prompt。"""
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                base_prompt = "\n".join(agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-        base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
+        """获取题目校对提示词。agent_prompt.json 为唯一来源，缺失时 fail-fast（ADR-00XX）。"""
+        agent_lines = self.config.get("agent_prompt_lines")
+        if not agent_lines:
+            raise ValueError(
+                "缺少 agent_prompt.json 或 agent_prompt_lines 为空，无法校对——请修复配置后重新发起校对")
         tool_instructions = self.get_tool_instructions()
         if tool_instructions:
-            return base_prompt + "\n\n" + tool_instructions
-        return base_prompt
+            return "\n".join(agent_lines) + "\n\n" + tool_instructions
+        return "\n".join(agent_lines)
 
     def get_review_prompt(self):
         """获取批注评审提示词。"""
-        from shared.review_mode import build_review_prompt
-        if self.react_mode:
-            agent_lines = self.config.get("agent_prompt_lines")
-            if agent_lines:
-                base_prompt = "\n".join(agent_lines)
-                tool_instructions = self.get_tool_instructions()
-                if tool_instructions:
-                    return base_prompt + "\n\n" + tool_instructions
-                return base_prompt
-        base_prompt = "\n".join(self.config.get("question_prompt_lines", []))
+        agent_lines = self.config.get("agent_prompt_lines")
+        if not agent_lines:
+            raise ValueError(
+                "缺少 agent_prompt.json 或 agent_prompt_lines 为空，无法校对——请修复配置后重新发起校对")
         tool_instructions = self.get_tool_instructions()
-        review_specific = build_review_prompt("")
         if tool_instructions:
-            return base_prompt + "\n\n" + tool_instructions + "\n\n" + review_specific
-        return base_prompt + "\n\n" + review_specific
+            return "\n".join(agent_lines) + "\n\n" + tool_instructions
+        return "\n".join(agent_lines)
 
     def split_lecture(self, md_file, output_root, base_name, options):
         do_clean = options.get("do_clean", True)
