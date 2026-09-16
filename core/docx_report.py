@@ -9,6 +9,7 @@
 依赖 pandoc（`-f markdown-implicit_figures` 防止图片题注污染）。
 """
 import itertools
+import os
 import re
 import shutil
 import subprocess
@@ -181,11 +182,13 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
         r = subprocess.run(
             [find_pandoc(), "-f", "markdown-implicit_figures+hard_line_breaks+mark",
              str(md_tmp), "-o", str(out_path)],
-            capture_output=True, text=True, cwd=str(work))
+            capture_output=True, text=True, cwd=str(work),
+            **(dict(creationflags=subprocess.CREATE_NO_WINDOW) if os.name == 'nt' else {}))
         if r.returncode != 0:
-            log(f"❌ Word 报告：pandoc 转换失败: {r.stderr[:300]}")
+            log(f"❌ Word 报告：pandoc 转换失败: {(r.stderr or '')[:300]}")
             return None
-        if r.stderr.strip():
+        # stderr 正常必为 str；打包 exe 实测现场出现过 None，判空防崩
+        if r.stderr and r.stderr.strip():
             fetch_warns = [l for l in r.stderr.splitlines() if 'fetch' in l]
             if fetch_warns:
                 log(f"   ⚠️ Word 报告：{len(fetch_warns)} 张图片未找到（将显示替换文字）")

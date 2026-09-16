@@ -159,6 +159,52 @@ class TestGenerateCombinedDocx(unittest.TestCase):
         return [m for m in range(len(text)) if text.startswith(needle, m)]
 
 
+class TestStderrNoneResilience(unittest.TestCase):
+    """回归：pandoc 转换成功但 CompletedProcess.stderr 为 None 时报告仍须生成。
+
+    修复前：成功路径的 fetch 告警检查 r.stderr.strip() 在 None 上抛
+    AttributeError，被外层 except 吞掉返回 None——此时 pandoc 已转换成功、
+    批注注入尚未执行，整份 Word 报告失败（Windows 打包 exe 实测现场，
+    capture_output=True 下 stderr 仍为 None，机制未复现，判空兜底）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not find_pandoc():
+            raise unittest.SkipTest("pandoc 不可用，跳过 docx 报告测试")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="_docx_stderr_none_")
+        self.paper = os.path.join(self.tmp, "测试试卷")
+        q = os.path.join(self.paper, "第1题")
+        os.makedirs(os.path.join(q, "images"))
+        with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(REPORT_WITH_MARKS)
+        with open(os.path.join(q, "images", "img1.png"), "wb") as f:
+            f.write(_1PX_PNG)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_stderr_none_does_not_abort_report(self):
+        from core import docx_report
+        real_run = docx_report.subprocess.run
+
+        def _run_stderr_none(*args, **kwargs):
+            r = real_run(*args, **kwargs)
+            r.stderr = None
+            return r
+
+        with mock.patch.object(docx_report.subprocess, "run",
+                               side_effect=_run_stderr_none):
+            docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        self.assertIsNotNone(docx_path)
+        self.assertTrue(os.path.exists(docx_path))
+        z = zipfile.ZipFile(docx_path)
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        self.assertEqual(cmt.count("<w:comment w:id="), 2)
+
+
 class TestSkippedUnitsDiagnostics(unittest.TestCase):
     """回归：无分段跳过必须区分「无批注（正常）」与「含标记但缺分段（可疑）」。
 
